@@ -9,7 +9,7 @@
 #define BYD_WHEEL_SPEEDS        0x1F0U  // RX from ESP,      vehicle speed
 #define BYD_DRIVE_STATE         0x242U  // RX from VCU,      gear + brake pressed
 #define BYD_PEDAL               0x342U  // RX from VCU,      accelerator pedal
-#define BYD_ACC_HUD_ADAS        0x32DU  // RX from ADAS(b2), cruise state
+#define BYD_ACC_HUD_ADAS        0x32DU  // RX from ADAS(b0), cruise state
 #define BYD_STEERING_MODULE_ADAS 0x1E2U // TX to  EPS,       angle command
 #define BYD_LKAS_HUD_ADAS       0x316U  // TX to  cluster,   LKAS HUD
 #define BYD_ACC_CMD             0x32EU  // TX to  IPB,       accel command
@@ -17,6 +17,17 @@
 
 // WHEEL_SPEEDS scale, kph per LSB. PROVISIONAL - keep in lockstep with byd_sealion_7.dbc.
 #define BYD_WHEEL_SPEED_SCALE 0.0725f
+
+// STEERING_TORQUE.DRIVER_TORQUE counts (0.1 Nm/LSB). MUST equal CarControllerParams
+// .STEER_DRIVER_OVERRIDE * 10 in values.py: carstate.py latches on the same instantaneous
+// sample, and if the two sides disagree openpilot and the panda desync into controlsMismatch.
+#define BYD_DRIVER_TORQUE_OVERRIDE 120
+
+// A steering override disengages and stays disengaged until the driver deliberately re-arms,
+// either by cycling stock cruise or pressing the LKAS/ICC button (0x3B0 bit 6, confirmed
+// on-car). Mirrors the override latch in carstate.py.
+static bool byd_override_latched = false;
+static bool byd_lkas_btn_prev = false;
 
 // ACC_CMD.ACCEL_CMD is an 8-bit field at 0.05 m/s^2 per LSB with a -5 m/s^2 offset, so raw 100
 // is 0.0 m/s^2. Limits below are in offset-corrected LSBs.
@@ -84,14 +95,35 @@ static void byd_rx_hook(const CANPacket_t *msg) {
     if (msg->addr == BYD_PEDAL) {
       gas_pressed = msg->data[0] > 10U;
     }
-  }
 
-  if (msg->bus == 2U) {
-    // Cruise state. ACC_STATE is 3 bits starting at bit 19.
-    // 0=OFF, 2=AVAILABLE, 3=ACTIVE, 5=OVERRIDE, 7=ERROR
+    // Driver torque, and the override latch. DRIVER_TORQUE is 4|12 signed.
+    if (msg->addr == BYD_STEERING_TORQUE) {
+      int torque_driver_new = to_signed(((msg->data[1] & 0xFFU) << 4) | (msg->data[0] >> 4), 12);
+      update_sample(&torque_driver, torque_driver_new);
+      if (SAFETY_ABS(torque_driver_new) > BYD_DRIVER_TORQUE_OVERRIDE) {
+        byd_override_latched = true;
+      }
+    }
+
+    // LKAS/ICC button (0x3B0 bit 6) re-arms after an override
+    if (msg->addr == BYD_PCM_BUTTONS) {
+      bool lkas_btn = ((msg->data[0] >> 6) & 0x1U) != 0U;
+      if (lkas_btn && !byd_lkas_btn_prev) {
+        byd_override_latched = false;
+      }
+      byd_lkas_btn_prev = lkas_btn;
+    }
+
+    // Cruise state. The ADAS/ACC ECU is on the chassis bus, not behind the camera relay.
+    // CRUISE_STATE is the high nibble of byte 5: 0=off, 1=available, 2=engaged,
+    // 3=engaged and commanding accel. PR #3337/#3352 read ACC_STATE from byte 2, which is a
+    // constant 0x3c here and can only ever report 7 (ERROR).
     if (msg->addr == BYD_ACC_HUD_ADAS) {
-      uint8_t acc_state = (msg->data[2] >> 3) & 0x7U;
-      bool acc_on = (acc_state == 3U) || (acc_state == 5U);
+      uint8_t cruise_state = msg->data[5] >> 4;
+      if (cruise_state < 2U) {
+        byd_override_latched = false;
+      }
+      bool acc_on = (cruise_state >= 2U) && !byd_override_latched;
       pcm_cruise_check(acc_on);
     }
   }
@@ -153,6 +185,10 @@ static safety_config byd_init(uint16_t param) {
     {BYD_PCM_BUTTONS, 0, 8, .check_relay = false},
   };
 
+  // Longitudinal is only offered on a gateway harness, where the ACC ECU is behind the relay
+  // and 0x32E is genuinely filterable. On a camera harness the ACC ECU is in front of the
+  // relay, so alphaLongitudinalAvailable is false there and this list is never selected -
+  // check_relay would otherwise fire on every stock ACC frame.
   static const CanMsg BYD_LONG_TX_MSGS[] = {
     {BYD_STEERING_MODULE_ADAS, 0, 8, .check_relay = true},
     {BYD_LKAS_HUD_ADAS, 0, 8, .check_relay = true},
@@ -168,8 +204,11 @@ static safety_config byd_init(uint16_t param) {
     {.msg = {{BYD_WHEEL_SPEEDS, 0, 8, 50U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                              // vehicle speed
     {.msg = {{BYD_DRIVE_STATE, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},  // gear + brake (no counter/checksum)
     {.msg = {{BYD_PEDAL, 0, 8, 50U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                     // accelerator pedal
-    {.msg = {{BYD_ACC_HUD_ADAS, 2, 8, 50U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                              // cruise state
+    {.msg = {{BYD_ACC_HUD_ADAS, 0, 8, 50U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                              // cruise state (chassis bus, not behind the relay)
   };
+
+  byd_override_latched = false;
+  byd_lkas_btn_prev = false;
 
   bool byd_longitudinal = false;
 

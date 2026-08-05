@@ -26,9 +26,31 @@ class CarControllerParams:
     MAX_ANGLE_RATE=3,
   )
 
-  # STEERING_TORQUE.DRIVER_TORQUE units (Nm). PROVISIONAL, re-derive in bring-up B8.
-  STEER_DRIVER_OVERRIDE = 3.0
-  STEER_DRIVER_DISENGAGE = 8.0
+  # Low-speed taper on the angle rate, in deg per STEER_STEP frame.
+  #
+  # The vehicle-model jerk limit scales as 1/v^2, so below a few m/s it stops binding and only
+  # the flat MAX_ANGLE_RATE is left. The lateral planner is ill-conditioned at a standstill and
+  # oscillates, and slewing the command at the full rate while the wheel is not moving walks the
+  # EPS straight from state 9 to a latched 11. Measured 2026-08-05 at 0.29 m/s: the command swung
+  # -5.9 to +2.4 deg in 220 ms against a stationary wheel and the EPS latched, taking LKAS with
+  # it. A healthy engagement at 0.9 m/s held the command within 1.1 deg of measured.
+  ANGLE_RATE_BP = [0.0, 2.0, 5.0]  # m/s
+  ANGLE_RATE_V = [0.3, 1.0, 3.0]   # deg/frame, tops out at MAX_ANGLE_RATE
+
+  # STEERING_TORQUE.DRIVER_TORQUE thresholds, derived from a drive where openpilot actually
+  # steered (route 0000000f, EPS state 10):
+  #   |torque| while openpilot steered:  p50 1.2  p90 2.7  p95 3.3  p99 5.8  max 9.8
+  #   |torque| while the human drove:    p50 0.2  p90 8.1  p95 17.2 p99 24.5 max 35.5
+  # The old 3.0 sat below what openpilot generates while steering, so it tripped its own
+  # override and dropped out within a few frames of every engage.
+  STEER_DRIVER_OVERRIDE = 12.0   # above openpilot's own max, below a deliberate grab
+
+  # Never command further than this from the actual wheel angle. The EPS latches state 11 on
+  # angle divergence, not just on a lost stream: measured 2026-08-05, the driver held the wheel
+  # at -13.4 deg while the controller wound the command out to -48.1 deg and the EPS latched at
+  # 34.7 deg of error. Normal closed-loop steering holds the error inside ~1.1 deg, so this only
+  # bites when the wheel is being physically held.
+  MAX_ANGLE_ERROR = 10.0  # deg
 
   # comfort envelope, inside the safety cap of -3.5..+2.0
   ACCEL_MIN = -3.0
@@ -41,6 +63,16 @@ class CarControllerParams:
 
 class BydSafetyFlags(IntFlag):
   LONG_CONTROL = 1
+
+
+class BydFlags(IntFlag):
+  # The ADAS/ACC ECU is behind the relay, so its 0x32E ACC_CMD can be blocked and replaced.
+  # Set when ACC_CMD is fingerprinted on the camera-side bus.
+  GATEWAY_HARNESS = 1
+
+
+# addresses used to tell the two harness types apart
+ACC_CMD_ADDR = 0x32E
 
 
 class WMI(StrEnum):

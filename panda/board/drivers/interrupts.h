@@ -74,6 +74,10 @@ void init_interrupts(bool check_rate_limit){
 
   for(uint16_t i=0U; i<NUM_INTERRUPTS; i++){
     interrupts[i].handler = unused_interrupt_handler;
+    // Default priority, lowered so the comms link can preempt everything else and
+    // re-arm its DMA (see IRQ_PRIORITY_COMMS). Shared state is guarded by
+    // ENTER_CRITICAL, which masks all interrupts regardless of priority.
+    NVIC_SetPriority((IRQn_Type)i, IRQ_PRIORITY_DEFAULT);
   }
 
   // Init interrupt timer for a 1s interval

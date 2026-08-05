@@ -109,6 +109,7 @@ BO_ 790 LKAS_HUD_ADAS: 8 MPC_CAM
  SG_ LKAS_REQ_PREPARE : 27|1@1+ (1,0) [0|1] "" MCU
  SG_ LKAS_ACTIVE : 28|1@1+ (1,0) [0|1] "" MCU
  SG_ SLA_STATE : 29|3@1+ (1,0) [0|7] "" MCU
+ SG_ SET_ME_3 : 32|2@1+ (1,0) [0|3] "" MCU
  SG_ RIGHT_LANE_STATE : 34|2@1+ (1,0) [0|3] "" MCU
  SG_ LKAS_STATE : 36|4@1+ (1,0) [0|15] "" MCU
  SG_ SPEED_LIMIT_VALUE : 40|8@1+ (5,-5) [-5|1270] "kph" MCU
@@ -122,7 +123,7 @@ BO_ 813 ACC_HUD_ADAS: 8 ADAS_ECU
  SG_ SET_DISTANCE : 12|3@0+ (1,0) [0|7] "" MCU
  SG_ AEB : 16|1@1+ (1,0) [0|1] "" MCU
  SG_ FCW : 17|1@1+ (1,0) [0|1] "" MCU
- SG_ ACC_STATE : 19|3@1+ (1,0) [0|7] "" MCU
+ SG_ CRUISE_STATE : 44|4@1+ (1,0) [0|15] "" MCU
  SG_ ACC_ON2 : 20|1@0+ (1,0) [0|1] "" MCU
  SG_ ACC_ON1 : 22|1@0+ (1,0) [0|1] "" MCU
  SG_ SET_ME_XFF : 47|8@0+ (1,0) [0|255] "" MCU
@@ -203,8 +204,11 @@ EPS state nibble = 8 + LKS_PREPARED + 2*CRUISE_ACTIVATED: 8 off, 9 prepared, 10 
 here - never read state from it.";
 
 CM_ BO_ 813 "SET_SPEED is 9 bits per HotIce0; bit 8 is unallocated in the 8-bit reading, so this
-is a safe superset. ACC_STATE bits are ACC_ON2 / ACC_CONTROLLABLE_AND_ON / OVERRIDE, giving
-2=available, 3=active, 5=override, 7=error.";
+is a safe superset.
+CRUISE_STATE (44|4) is the real cruise state, NOT PR #3337/#3352's ACC_STATE at 19|3 - byte 2 is
+a constant 0x3c on this car, so that field can only ever read 7 (ERROR) and engagement is
+impossible. Measured over a 47 kph drive: 0=off, 1=available (ACC_CMD ACC_CONTROLLABLE_AND_ON
+clear), 2=engaged (ON bit set, 100%), 3=engaged and commanding accel (mean +1.14 m/s^2).";
 
 CM_ BO_ 814 "ACCEL_CMD in physical m/s^2, numerically identical to PR #3352's (1,-100) raw form.
 The SET_ME_25_*/ACCEL_FACTOR/DECEL_FACTOR split is kept because it is the form with real-car TX
@@ -215,6 +219,9 @@ Sealion 7 in bring-up B4.";
 
 
 VAL_ 578 GEAR 1 "PARK" 2 "REVERSE" 3 "NEUTRAL" 4 "DRIVE" ;
-VAL_ 813 ACC_STATE 0 "OFF" 2 "AVAILABLE" 3 "ACTIVE" 5 "OVERRIDE" 7 "ERROR" ;
+VAL_ 813 CRUISE_STATE 0 "OFF" 1 "AVAILABLE" 2 "ENGAGED" 3 "ENGAGED_ACCELERATING" ;
 VAL_ 790 LKAS_STATE 0 "OFF" 1 "PASSIVE" 2 "ACTIVE" 3 "ACTIVE" 4 "FAULT" ;
 VAL_ 508 TORQUE_TEMP_FAILED 0 "OK" 1 "DERATE" 2 "DERATE" 3 "FAILED" ;
+
+CM_ SG_ 790 SET_ME_3 "Bits 32-33. The camera sets these on every frame; they were undefined, so
+the packer zeroed them and our regenerated 0x316 differed from stock. Passthrough only.";

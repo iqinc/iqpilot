@@ -1,5 +1,12 @@
 #pragma once
 
+// The SPI slave must re-arm its RX DMA at every protocol turnaround before the
+// master clocks the next phase. Without preemption that re-arm waits behind any
+// in-flight handler (CAN RX under bus load), the master clocks into an unarmed
+// peripheral, and the transfer fails its checksum -> NACK retry storms.
+#define IRQ_PRIORITY_COMMS 0U
+#define IRQ_PRIORITY_DEFAULT 2U
+
 typedef struct interrupt {
   IRQn_Type irq_type;
   void (*handler)(void);

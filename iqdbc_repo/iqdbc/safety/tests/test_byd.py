@@ -74,9 +74,21 @@ class TestBydSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest):
     return self.packer.make_can_msg_safety("STEER_MODULE_2", self.MAIN_BUS, values)
 
   def _pcm_status_msg(self, enable):
-    # ACC_STATE: 0=OFF, 2=AVAILABLE, 3=ACTIVE, 5=OVERRIDE, 7=ERROR
-    values = {"ACC_STATE": 3 if enable else 0}
-    return self.packer.make_can_msg_safety("ACC_HUD_ADAS", self.CAM_BUS, values)
+    # the ADAS/ACC ECU is on the chassis bus, not behind the camera relay
+    # CRUISE_STATE: 0=off, 1=available, 2=engaged, 3=engaged and commanding accel
+    values = {"CRUISE_STATE": 2 if enable else 1}
+    return self.packer.make_can_msg_safety("ACC_HUD_ADAS", self.MAIN_BUS, values)
+
+  def test_cruise_state_not_read_from_constant_byte(self):
+    # PR #3337/#3352 read ACC_STATE from byte 2, which is constant 0x3c on this car. Setting
+    # only that byte must never enable cruise.
+    self.safety.set_controls_allowed(0)
+    for _ in range(5):
+      self._rx(self.packer.make_can_msg_safety("ACC_HUD_ADAS", self.MAIN_BUS, {"CRUISE_STATE": 0}))
+    self.assertFalse(self.safety.get_controls_allowed())
+    for _ in range(5):
+      self._rx(self.packer.make_can_msg_safety("ACC_HUD_ADAS", self.MAIN_BUS, {"CRUISE_STATE": 3}))
+    self.assertTrue(self.safety.get_controls_allowed())
 
   def _speed_msg(self, speed):
     # all four wheels, matching the rx hook's average
@@ -179,6 +191,7 @@ class TestBydStockSafety(TestBydSafetyBase):
 
 class TestBydLongSafety(TestBydSafetyBase, common.LongitudinalAccelSafetyTest):
   TX_MSGS = [[STEERING_MODULE_ADAS, 0], [LKAS_HUD_ADAS, 0], [ACC_CMD, 0], [PCM_BUTTONS, 0]]
+  # long is only offered on a gateway harness, where 0x32E is behind the relay
   RELAY_MALFUNCTION_ADDRS = {0: (STEERING_MODULE_ADAS, LKAS_HUD_ADAS, ACC_CMD)}
   FWD_BLACKLISTED_ADDRS = {2: [STEERING_MODULE_ADAS, LKAS_HUD_ADAS, ACC_CMD]}
 

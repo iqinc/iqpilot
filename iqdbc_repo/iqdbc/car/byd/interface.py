@@ -2,7 +2,7 @@ from iqdbc.car import get_safety_config, structs
 from iqdbc.car.interfaces import CarInterfaceBase
 from iqdbc.car.byd.carcontroller import CarController
 from iqdbc.car.byd.carstate import CarState
-from iqdbc.car.byd.values import BydSafetyFlags
+from iqdbc.car.byd.values import BydFlags, BydSafetyFlags
 
 
 class CarInterface(CarInterfaceBase):
@@ -23,8 +23,27 @@ class CarInterface(CarInterfaceBase):
     # through, so the panda never sees them
     ret.radarUnavailable = True
 
-    ret.alphaLongitudinalAvailable = True
-    if alpha_long:
+    # Two harness types exist for this car, and they differ in what can be filtered:
+    #
+    #   camera harness  - the relay only intercepts the MPC camera. 0x1E2/0x316 are camera
+    #                     frames so lateral works, but the ADAS/ACC ECU sits on the chassis bus
+    #                     in front of the relay: its 0x32E cannot be blocked and openpilot would
+    #                     contend with the stock ACC on the same address. Stock long only.
+    #   gateway harness - the ACC ECU is behind the relay, so 0x32E is filterable and openpilot
+    #                     longitudinal is possible.
+    #
+    # These CANNOT be told apart from the fingerprint: fingerprinting runs with the relay
+    # closed, which ties bus 2 to bus 0, so bus 2 shows the whole car on either harness. The
+    # difference is only observable once the relay opens, which is after CarParams is fixed.
+    # Measured on a camera harness with the relay open: bus 2 carries 11 camera addresses and
+    # neither 0x32D nor 0x32E is among them.
+    #
+    # So default to the camera harness and keep longitudinal off. Setting GATEWAY_HARNESS is an
+    # explicit opt-in that must not be inferred - see BYD_SEALION7_PORT_PLAN.md.
+    gateway_harness = bool(ret.flags & BydFlags.GATEWAY_HARNESS)
+
+    ret.alphaLongitudinalAvailable = gateway_harness
+    if alpha_long and gateway_harness:
       ret.openpilotLongitudinalControl = True
       ret.safetyConfigs[0].safetyParam |= BydSafetyFlags.LONG_CONTROL.value
 

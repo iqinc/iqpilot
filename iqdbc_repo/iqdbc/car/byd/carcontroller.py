@@ -29,9 +29,26 @@ class CarController(CarControllerBase):
     # 0x1E2/0x316 go out unconditionally, gated only by STEER_REQ: the safety blocks the
     # camera's copies, and the EPS latches a fault if the stream stops while it is actuating.
     if self.frame % CarControllerParams.STEER_STEP == 0:
-      self.apply_angle_last = apply_steer_angle_limits_vm(actuators.steeringAngleDeg, self.apply_angle_last,
-                                                          CS.out.vEgoRaw, CS.out.steeringAngleDeg,
-                                                          CC.latActive, CarControllerParams, self.VM)
+      apply_angle = apply_steer_angle_limits_vm(actuators.steeringAngleDeg, self.apply_angle_last,
+                                                CS.out.vEgoRaw, CS.out.steeringAngleDeg,
+                                                CC.latActive, CarControllerParams, self.VM)
+
+      # The vehicle-model jerk limit stops binding below a few m/s, so cap the slew rate
+      # directly there. Without this the planner's standstill oscillation drives the command
+      # tens of degrees away from a stationary wheel and the EPS latches state 11.
+      if CC.latActive:
+        max_rate = float(np.interp(CS.out.vEgoRaw, CarControllerParams.ANGLE_RATE_BP,
+                                   CarControllerParams.ANGLE_RATE_V))
+        apply_angle = float(np.clip(apply_angle, self.apply_angle_last - max_rate,
+                                    self.apply_angle_last + max_rate))
+
+        # Never wind the command away from the wheel: the EPS latches on angle divergence, and
+        # a driver holding the wheel below the override threshold would otherwise let the
+        # controller run tens of degrees past it.
+        err = CarControllerParams.MAX_ANGLE_ERROR
+        apply_angle = float(np.clip(apply_angle, CS.out.steeringAngleDeg - err,
+                                    CS.out.steeringAngleDeg + err))
+      self.apply_angle_last = apply_angle
 
       can_sends.append(bydcan.create_steering_control(self.packer, self.apply_angle_last, CC.latActive))
       can_sends.append(bydcan.create_lkas_hud(self.packer, CC.latActive, CS.lkas_hud, CC.hudControl))

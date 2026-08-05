@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 import unittest
 
+import numpy as np
+
 from iqdbc.can.packer import CANPacker
 from iqdbc.can.parser import CANParser
 from iqdbc.car.byd import bydcan
@@ -8,7 +10,7 @@ from iqdbc.car.byd.carstate import (EPS_STATE_OFF, EPS_STATE_PREPARED, EPS_STATE
                                     EPS_STATE_LATCHED_FAULT)
 from iqdbc.car.byd.fingerprints import FW_VERSIONS
 from iqdbc.car.byd.interface import CarInterface
-from iqdbc.car.byd.values import CAR, DBC, CarControllerParams
+from iqdbc.car.byd.values import CAR, DBC, BydFlags, BydSafetyFlags, CarControllerParams
 from iqdbc.car.fw_versions import match_fw_to_car_exact, build_fw_dict
 from iqdbc.car import structs
 from iqdbc.car.structs import CarParams
@@ -311,6 +313,99 @@ class TestBydCarController(unittest.TestCase):
     sent = self._run(True, long_active=True)
     self.assertFalse(any(0x32E in addrs for addrs in sent),
                      "0x32E sent while openpilotLongitudinalControl is off")
+
+
+class TestBydLowSpeedAngleRate(unittest.TestCase):
+  """Regression for the 2026-08-05 EPS latch. At 0.29 m/s the planner oscillated and the command
+  swung -5.9 to +2.4 deg against a stationary wheel in 220 ms; the EPS went from state 9 straight
+  to a latched 11 and took LKAS with it. The vehicle-model jerk limit cannot catch this because
+  it scales as 1/v^2."""
+
+  def _slew(self, v_ego, targets):
+    CP = CarInterface.get_non_essential_params("BYD_SEALION_7")
+    CP_IQ = CarInterface.get_non_essential_params_iq(CP, "BYD_SEALION_7")
+    cc = CarInterface.CarController({'pt': DBC_NAME}, CP, CP_IQ)
+    carstate = CarInterface.CarState(CP, CP_IQ)
+    cs_out, _ = carstate.update(CarInterface.CarState.get_can_parsers(CP, CP_IQ))
+    cs_out.vEgoRaw = v_ego
+    cs_out.vEgo = v_ego
+    cs_out.steeringAngleDeg = 0.1
+
+    class _CS:
+      pass
+    cs = _CS()
+    cs.out = cs_out
+    cs.lkas_hud = carstate.lkas_hud
+    cs.acc_cmd = carstate.acc_cmd
+    cs.buttons = carstate.buttons
+
+    CC_obj = structs.CarControl()
+    CC_obj.enabled = True
+    CC_obj.latActive = True
+    CC_IQ = structs.IQCarControl()
+
+    sent = []
+    for i, tgt in enumerate(targets):
+      CC_obj.actuators.steeringAngleDeg = tgt
+      cc.update(CC_obj.as_reader(), CC_IQ, cs, i * 10_000_000)
+      sent.append(cc.apply_angle_last)
+    return sent
+
+  # the actual planner output recorded during the fault
+  OSCILLATION = [-2.9, -5.9, -2.9, 0.1, 1.7, 1.8, 2.4, 2.2] * 3
+
+  def test_standstill_slew_is_bounded(self):
+    v = 0.29  # the speed at which the EPS latched
+    sent = self._slew(v, self.OSCILLATION)
+    cap = float(np.interp(v, CarControllerParams.ANGLE_RATE_BP, CarControllerParams.ANGLE_RATE_V))
+    steps = [abs(b - a) for a, b in zip(sent, sent[1:], strict=False)]
+    self.assertLessEqual(max(steps), cap + 1e-6,
+                         "command slews faster than the standstill rate cap")
+    # the uncapped path stepped a full 3.0 deg/frame here
+    self.assertLess(cap, 1.0)
+    # and it must never wander far from the stationary wheel
+    self.assertLess(max(abs(a - 0.1) for a in sent), 2.0,
+                    "command diverged from the measured angle at a standstill")
+
+  def test_rate_cap_scales_with_speed(self):
+    slow = self._slew(0.0, [30.0] * 10)
+    fast = self._slew(20.0, [30.0] * 10)
+    slow_step = max(abs(b - a) for a, b in zip(slow, slow[1:], strict=False))
+    fast_step = max(abs(b - a) for a, b in zip(fast, fast[1:], strict=False))
+    self.assertLess(slow_step, fast_step, "low-speed cap must be tighter than at speed")
+    self.assertLessEqual(fast_step, CarControllerParams.ANGLE_LIMITS.MAX_ANGLE_RATE + 1e-6)
+
+
+class TestBydHarnessType(unittest.TestCase):
+  """Longitudinal requires the ACC ECU to sit behind the relay so 0x32E is filterable. That is
+  a property of the harness, and it cannot be inferred from the fingerprint: fingerprinting
+  runs with the relay closed, which ties bus 2 to bus 0, so bus 2 shows the whole car either
+  way. Default must therefore be the camera harness (lateral only)."""
+
+  @staticmethod
+  def _params(cam_bus_addrs, alpha_long=True):
+    fp = {0: {0x1FC: 8, 0x1F0: 8}, 1: {}, 2: dict.fromkeys(cam_bus_addrs, 8)}
+    return CarInterface.get_params("BYD_SEALION_7", fp, [], alpha_long, False, False)
+
+  def test_defaults_to_camera_harness_lateral_only(self):
+    CP = self._params([0x1E2, 0x316])
+    self.assertFalse(CP.flags & BydFlags.GATEWAY_HARNESS)
+    self.assertFalse(CP.alphaLongitudinalAvailable)
+    self.assertFalse(CP.openpilotLongitudinalControl)
+    self.assertFalse(CP.safetyConfigs[0].safetyParam & BydSafetyFlags.LONG_CONTROL)
+
+  def test_acc_cmd_on_fingerprint_bus2_does_not_imply_gateway(self):
+    # the relay is closed while fingerprinting, so bus 2 sees the chassis bus too. Seeing
+    # 0x32E there must NOT unlock longitudinal.
+    CP = self._params([0x1E2, 0x316, 0x32E, 0x32D, 0x1FC])
+    self.assertFalse(CP.flags & BydFlags.GATEWAY_HARNESS)
+    self.assertFalse(CP.alphaLongitudinalAvailable)
+    self.assertFalse(CP.openpilotLongitudinalControl)
+
+  def test_lateral_still_available_on_camera_harness(self):
+    CP = self._params([0x1E2, 0x316])
+    self.assertFalse(CP.dashcamOnly)
+    self.assertEqual(CP.steerControlType, CarParams.SteerControlType.angle)
 
 
 class TestBydCarParams(unittest.TestCase):

@@ -21,6 +21,10 @@ EPS_STATE_PREPARED = 9
 EPS_STATE_ACTUATING = 10
 EPS_STATE_LATCHED_FAULT = 11
 
+# ACC_HUD_ADAS.CRUISE_STATE
+CRUISE_STATE_AVAILABLE = 1
+CRUISE_STATE_ENGAGED = 2
+
 
 class CarState(CarStateBase):
   def __init__(self, CP, CP_IQ):
@@ -29,6 +33,8 @@ class CarState(CarStateBase):
     self.acc_cmd = {}
     self.buttons = {}
     self.eps_state = EPS_STATE_OFF
+    self.override_latched = False
+    self.lkas_btn_prev = False
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.IQCarState]:
     cp = can_parsers[Bus.pt]
@@ -55,7 +61,9 @@ class CarState(CarStateBase):
     ret.steeringTorque = cp.vl["STEERING_TORQUE"]["DRIVER_TORQUE"]
     ret.steeringTorqueEps = cp.vl["STEERING_TORQUE"]["MAIN_TORQUE"]
     ret.steeringPressed = self.update_steering_pressed(abs(ret.steeringTorque) > CCP.STEER_DRIVER_OVERRIDE, 5)
-    ret.steeringDisengage = abs(ret.steeringTorque) > CCP.STEER_DRIVER_DISENGAGE
+    # Disengagement on override is handled by the latch below, which also decides when
+    # re-engagement is allowed, so no separate hard-disengage threshold here.
+    ret.steeringDisengage = False
 
     # state 11 is a latched dropout: the command stream stopped while the EPS was actuating.
     # It clears only on a STEER_REQ rising edge over a continuous stream.
@@ -90,15 +98,35 @@ class CarState(CarStateBase):
     ))
     ret.seatbeltUnlatched = not bool(cp.vl["METER_CLUSTER"]["SEATBELT_DRIVER"])
 
-    # ACC_STATE: 0=OFF, 2=AVAILABLE, 3=ACTIVE, 5=OVERRIDE, 7=ERROR
-    ret.cruiseState.speed = cp_cam.vl["ACC_HUD_ADAS"]["SET_SPEED"] * CV.KPH_TO_MS
-    acc_state = int(cp_cam.vl["ACC_HUD_ADAS"]["ACC_STATE"])
-    ret.cruiseState.available = acc_state in (2, 3, 5)
-    ret.cruiseState.enabled = acc_state in (3, 5)
-    ret.cruiseState.standstill = bool(cp_cam.vl["ACC_CMD"]["STANDSTILL_STATE"])
+    # The ADAS/ACC ECU is on the chassis bus, not behind the camera relay, so these come off
+    # bus 0. Bus 2 carries only the camera's own frames (0x1E2, 0x316, ...). This differs from
+    # the Atto 3, where PR #3337 reads both from the camera bus.
+    # CRUISE_STATE: 0=off, 1=available, 2=engaged, 3=engaged and commanding accel.
+    # Do NOT use PR #3337/#3352's ACC_STATE (19|3) - byte 2 is a constant 0x3c on this car, so
+    # it reads 7 (ERROR) forever and engagement can never happen.
+    ret.cruiseState.speed = cp.vl["ACC_HUD_ADAS"]["SET_SPEED"] * CV.KPH_TO_MS
+    cruise_state = int(cp.vl["ACC_HUD_ADAS"]["CRUISE_STATE"])
+    ret.cruiseState.available = cruise_state >= CRUISE_STATE_AVAILABLE
+
+    # A steering override fully disengages and stays disengaged. Re-arming is deliberate:
+    # either cycle stock cruise, or press the LKAS/ICC button. Suppressing cruiseState.enabled
+    # is what holds it off, and clearing the latch gives the rising edge that re-engages.
+    lkas_btn = bool(cp.vl["PCM_BUTTONS"]["LKAS_ON_BTN"])
+    lkas_rising = lkas_btn and not self.lkas_btn_prev
+    self.lkas_btn_prev = lkas_btn
+
+    # NOTE: latch on the instantaneous torque, not the debounced steeringPressed. byd_rx_hook
+    # latches on the same raw sample, and any skew between the two shows up as controlsMismatch.
+    if cruise_state < CRUISE_STATE_ENGAGED or lkas_rising:
+      self.override_latched = False
+    elif abs(ret.steeringTorque) > CCP.STEER_DRIVER_OVERRIDE:
+      self.override_latched = True
+
+    ret.cruiseState.enabled = cruise_state >= CRUISE_STATE_ENGAGED and not self.override_latched
+    ret.cruiseState.standstill = bool(cp.vl["ACC_CMD"]["STANDSTILL_STATE"])
 
     self.lkas_hud = copy.copy(cp_cam.vl["LKAS_HUD_ADAS"])
-    self.acc_cmd = copy.copy(cp_cam.vl["ACC_CMD"])
+    self.acc_cmd = copy.copy(cp.vl["ACC_CMD"])
     self.buttons = copy.copy(cp.vl["PCM_BUTTONS"])
 
     return ret, ret_iq

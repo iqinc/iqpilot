@@ -101,6 +101,12 @@ void llspi_init(void) {
   register_set(&(SPI4->CR1), SPI_CR1_SPE, 0xFFFFU);
   register_set(&(SPI4->CR2), 0, 0xFFFFU);
 
+  // preempt other handlers so the RX DMA is re-armed before the master clocks
+  // the next phase of a transfer
+  NVIC_SetPriority(DMA2_Stream2_IRQn, IRQ_PRIORITY_COMMS);
+  NVIC_SetPriority(DMA2_Stream3_IRQn, IRQ_PRIORITY_COMMS);
+  NVIC_SetPriority(SPI4_IRQn, IRQ_PRIORITY_COMMS);
+
   NVIC_EnableIRQ(DMA2_Stream2_IRQn);
   NVIC_EnableIRQ(DMA2_Stream3_IRQn);
   NVIC_EnableIRQ(SPI4_IRQn);
