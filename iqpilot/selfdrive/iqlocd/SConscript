@@ -1,0 +1,8 @@
+Import('env', 'arch', 'common', 'messaging', 'transformations')
+
+loc_libs = [messaging, common, 'pthread', 'dl']
+
+iqlocd_sources = ["atlas_loc_core.cc", "models/orbit_kf.cc"]
+
+lenv = env.Clone()
+iqlocd = lenv.Program("iqlocd", iqlocd_sources, LIBS=loc_libs + transformations)
