@@ -5,22 +5,21 @@ import time
 import numpy as np
 import pyray as rl
 
-from openpilot.common.params import Params
-from openpilot.selfdrive.ui import UI_BORDER_SIZE
-from openpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer, BTN_SIZE, ARC_LENGTH
-from openpilot.iqpilot.ui.onroad.hud_overlays import IQDevMetricsOverlay
-from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.text_measure import measure_text_cached
+from iqpilot.common.params import Params
+from iqpilot.selfdrive.ui import UI_BORDER_SIZE
+from iqpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer, BTN_SIZE, ARC_LENGTH
+from iqpilot.ui.onroad.hud_overlays import IQDevMetricsOverlay
+from iqpilot.system.ui.lib.application import gui_app, FontWeight
+from iqpilot.system.ui.lib.text_measure import measure_text_cached
 
-# LongitudinalPersonality ordinals (matches cereal enum: relaxed=0, standard=1, aggressive=2)
 _PERSONALITY_RELAXED = 0
 _PERSONALITY_STANDARD = 1
 _PERSONALITY_AGGRESSIVE = 2
 
 PERSONALITY_COLORS = {
-  _PERSONALITY_RELAXED:    rl.Color(0x17, 0xC9, 0x64, 0xFF),  # green
-  _PERSONALITY_STANDARD:   rl.Color(0x0C, 0x94, 0x96, 0xFF),  # teal
-  _PERSONALITY_AGGRESSIVE: rl.Color(0xE8, 0x2C, 0x2C, 0xFF),  # red
+  _PERSONALITY_RELAXED:    rl.Color(0x17, 0xC9, 0x64, 0xFF),
+  _PERSONALITY_STANDARD:   rl.Color(0x0C, 0x94, 0x96, 0xFF),
+  _PERSONALITY_AGGRESSIVE: rl.Color(0xE8, 0x2C, 0x2C, 0xFF),
 }
 
 PERSONALITY_NAMES = {
@@ -29,14 +28,13 @@ PERSONALITY_NAMES = {
   _PERSONALITY_AGGRESSIVE: "Aggressive",
 }
 
-_TOAST_DURATION = 2.0     # seconds
+_TOAST_DURATION = 2.0
 _TOAST_FONT_SIZE = 52
 _TOAST_PAD_X = 52
 _TOAST_PAD_Y = 22
 _TOAST_BOTTOM_MARGIN = UI_BORDER_SIZE + 36
 _TOAST_RADIUS = 0.45
-_TOAST_FADE = 0.25        # fade-in / fade-out window
-
+_TOAST_FADE = 0.25
 
 class DriverStateRendererIQ(DriverStateRenderer):
   def __init__(self):
@@ -135,7 +133,6 @@ class DriverStateRendererIQ(DriverStateRenderer):
     )
 
   def _pre_calculate_drawing_elements(self):
-    """Pre-calculate all drawing elements based on the current rectangle"""
     width, height = self._rect.width, self._rect.height
     offset = UI_BORDER_SIZE + BTN_SIZE // 2
     self.position_x = self._rect.x + (width - offset if self.is_rhd else offset)

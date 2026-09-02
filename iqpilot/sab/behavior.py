@@ -1,34 +1,25 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-Steering Assistance Behavior (SAB): brand preference resolution, the guidance
-state machine and the per-frame event/behaviour engine, together in one module.
 """
 from dataclasses import dataclass
 from typing import Optional
 
-from openpilot.common.params import Params, UnknownKeyName
+from iqpilot.common.params import Params, UnknownKeyName
 from iqdbc.car import structs
-from openpilot.common.realtime import DT_CTRL
+from iqpilot.common.realtime import DT_CTRL
 from iqdbc.safety import ALTERNATIVE_EXPERIENCE
-from openpilot.selfdrive.selfdrived.events import ET
+from iqpilot.selfdrive.selfdrived.events import ET
 from iqdbc.car.hyundai.values import HyundaiFlags, HyundaiFlagsIQ, HyundaiSafetyFlagsIQ
-from openpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME
-from cereal import log, custom
+from iqpilot.selfdrive.selfdrived.state import SOFT_DISABLE_TIME
+from iqpilot.cereal import log, custom
 
 State = custom.AlwaysOnLateral.AlwaysOnLateralState
 
-
-# ===== preferences =====
-
 class DriverInterventionMode:
-  """What a brake press does to steering guidance (AolSteeringMode param values)."""
   CONTINUE = 0
   SUSPEND = 1
   CANCEL = 2
 
-
-# Per-brand quirks. A brand absent from a set behaves normally.
 _FORCED_BRAKE_CANCEL = frozenset({"rivian"})
 BRANDS_WITHOUT_MAIN_CRUISE_TOGGLE = ("rivian", "tesla")
 _HYUNDAI_MAIN_CRUISE_FLAG_BRANDS = frozenset({"hyundai"})
@@ -56,6 +47,10 @@ def read_joint_engagement_pref(params: Params):
   return params.get_bool("AolUnifiedEngagementMode")
 
 
+def read_lateral_override_pause_pref(params: Params):
+  return params.get_bool("AolPauseOnSteeringOverride")
+
+
 def resolve_brake_intervention_mode(CP: structs.CarParams, CP_IQ: structs.IQCarParams, params: Params):
   if uses_forced_brake_cancel(CP, CP_IQ):
     return DriverInterventionMode.CANCEL
@@ -76,14 +71,12 @@ def apply_aol_brand_overrides(CP: structs.CarParams, CP_IQ: structs.IQCarParams,
     CP_IQ.iqSafetyFlags |= HyundaiSafetyFlagsIQ.MAIN_BTN_LONG_TOGGLE
 
   if uses_forced_brake_cancel(CP, CP_IQ):
-    # the brand can only cancel on brake; pin the params so the UI reflects reality
     params.put("AolSteeringMode", DriverInterventionMode.CANCEL)
     params.put_bool("AolUnifiedEngagementMode", True)
 
   if CP.brand in BRANDS_WITHOUT_MAIN_CRUISE_TOGGLE:
     params.remove("AolMainCruiseAllowed")
 
-# ===== state_machine =====
 
 EventName = log.OnroadEvent.EventName
 EventNameIQ = custom.IQOnroadEvent.EventName
@@ -131,11 +124,21 @@ class GuidancePulse:
 
 class GuidanceStateMachine:
   def __init__(self, sab):
+    self.sab = sab
     self.selfdrive = sab.selfdrive
     self._sm_core = sab.selfdrive.state_machine
     self._events = sab.selfdrive.events
     self._events_iq = sab.selfdrive.events_iq
     self.state = State.disabled
+
+  @property
+  def _parks_on_override(self) -> bool:
+    return bool(self.sab.pause_on_lateral_override)
+
+  def _hands_on_landing(self, pulse: GuidancePulse) -> State:
+    if not pulse.hands_on_wheel:
+      return State.enabled
+    return State.paused if self._parks_on_override else State.overriding
 
   def _queue_alert_if_solo(self, alert_type: str):
     if not self.selfdrive.enabled:
@@ -180,7 +183,7 @@ class GuidanceStateMachine:
       self._queue_alert_if_solo(GUIDANCE_GATE_BLOCK_SIGNAL)
       return State.paused if pulse.pit_stop_ready else State.disabled
     self._queue_alert_if_solo(GUIDANCE_AVAILABLE_SIGNAL)
-    return State.overriding if pulse.hands_on_wheel else State.enabled
+    return self._hands_on_landing(pulse)
 
   def _handle_enabled(self, pulse: GuidancePulse) -> State:
     forced_state = self._run_global_cutoffs(pulse)
@@ -190,6 +193,8 @@ class GuidanceStateMachine:
       self._start_grace_period()
       return State.softDisabling
     if pulse.hands_on_wheel:
+      if self._parks_on_override:
+        return State.paused
       self._queue_alert_if_solo(GUIDANCE_DRIVER_OVERRIDE_SIGNAL)
       return State.overriding
     return State.enabled
@@ -215,7 +220,7 @@ class GuidanceStateMachine:
       self._queue_alert_if_solo(GUIDANCE_GATE_BLOCK_SIGNAL)
       return State.paused
     self._queue_alert_if_solo(GUIDANCE_AVAILABLE_SIGNAL)
-    return State.overriding if pulse.hands_on_wheel else State.enabled
+    return self._hands_on_landing(pulse)
 
   def _handle_overriding(self, pulse: GuidancePulse) -> State:
     forced_state = self._run_global_cutoffs(pulse)
@@ -225,6 +230,8 @@ class GuidanceStateMachine:
       self._start_grace_period()
       return State.softDisabling
     if pulse.hands_on_wheel:
+      if self._parks_on_override:
+        return State.paused
       self._sm_core.current_alert_types.append(GUIDANCE_DRIVER_OVERRIDE_SIGNAL)
       return State.overriding
     return State.enabled
@@ -246,8 +253,6 @@ class GuidanceStateMachine:
       self._queue_alert_if_solo(GUIDANCE_ACTIVE_ALERT)
     return enabled, active
 
-# ===== behavior =====
-
 _E = log.OnroadEvent.EventName
 _Q = custom.IQOnroadEvent.EventName
 _BTN = structs.CarState.ButtonEvent.Type
@@ -257,10 +262,6 @@ _CRUISE_SET_TAPS = frozenset((_BTN.accelCruise, _BTN.resumeCruise, _BTN.decelCru
 _LATERAL_TOGGLE_BUTTONS = (_BTN.lkas, _BTN.lfaButton)
 _HYUNDAI_LDA_MASK = HyundaiFlags.CANFD
 
-# While a lateral-only session rides through a pause, these stock blockers are
-# swapped for their silent IQ twins. Order here is not load-bearing (each row
-# guards a distinct event), so it is grouped standstill-first for readability.
-#   (silent replacement, stock trigger, only-when-stopped, extra predicate)
 _QUIET_SWAPS = (
   (_Q.seatbeltUnbuckledSilent, _E.seatbeltNotLatched, True, None),
   (_Q.doorAjarSilent, _E.doorOpen, True, None),
@@ -271,7 +272,6 @@ _QUIET_SWAPS = (
    lambda cs: cs.vEgo < 2.5 or cs.gearShifter == _GEAR.reverse),
 )
 
-# Longitudinal-only chatter that must not gate a lateral-only session.
 _DROP_ON_ENTRY = (_E.speedTooLow, _E.belowEngageSpeed, _E.preEnableStandstill,
                   _E.manualRestart, _E.cruiseDisabled)
 _DROP_ON_EXIT = (_E.wrongCruiseMode, _E.pedalPressed, _E.buttonCancel, _E.pcmDisable)
@@ -285,6 +285,7 @@ class SteeringAssistanceBehavior:
     self.events, self.events_iq = sd.events, sd.events_iq
 
     self.enabled = self.active = self.available = False
+    self.pause_on_lateral_override = False
     sd.enabled_prev = False
     self.state_machine = GuidanceStateMachine(self)
 
@@ -301,6 +302,7 @@ class SteeringAssistanceBehavior:
   def _reload_preferences(self, full: bool = False):
     self.main_enabled_toggle = read_main_cruise_pref(self.params)
     self.unified_engagement_mode = read_joint_engagement_pref(self.params)
+    self.pause_on_lateral_override = read_lateral_override_pause_pref(self.params)
     if full:
       self.enabled_toggle = read_aol_enabled_pref(self.params)
       self.steering_mode_on_brake = resolve_brake_intervention_mode(self.CP, self.CP_IQ, self.params)
@@ -308,7 +310,6 @@ class SteeringAssistanceBehavior:
   def read_params(self):
     self._reload_preferences()
 
-  # -- event plumbing (thin wrappers over the stock/IQ event queues) -----------
   def _has(self, ev):
     return self.events.has(ev)
 
@@ -333,16 +334,20 @@ class SteeringAssistanceBehavior:
   def _iq_has(self, ev):
     return self.events_iq.has(ev)
 
-  # -- predicates --------------------------------------------------------------
   def _brake_without_gas(self, cs):
     prev_gas = self.selfdrive.CS_prev.gasPressed
     gas_rising_edge = cs.gasPressed and not prev_gas
     override_via_gas = gas_rising_edge and self.disengage_on_accelerator
     return self._has(_E.pedalPressed) and not override_via_gas
 
+  def _lateral_overridden(self):
+    return self.events.contains(ET.OVERRIDE_LATERAL) or self.events_iq.contains(ET.OVERRIDE_LATERAL)
+
   def _may_silently_resume(self, cs):
     suspend_on_brake = self.steering_mode_on_brake == DriverInterventionMode.SUSPEND
     if suspend_on_brake and self._brake_without_gas(cs):
+      return False
+    if self.pause_on_lateral_override and self._lateral_overridden():
       return False
     return not self._emitted_any(GEARS_ALLOW_PAUSED_SILENT)
 
@@ -366,7 +371,6 @@ class SteeringAssistanceBehavior:
       return True
     return bool(getattr(cs, 'cruiseFaultLateralMode', False))
 
-  # -- event surgery -----------------------------------------------------------
   def _swap_event(self, stock: int, silent: int):
     self._drop(stock)
     self._emit(silent)
@@ -382,7 +386,6 @@ class SteeringAssistanceBehavior:
     elif self._has(_E.wrongCarMode):
       self._swap_event(_E.wrongCarMode, _Q.carModeMismatchNotice)
 
-  # -- joystick/debug hook -----------------------------------------------------
   def _consume_joystick_aol_request(self, cs) -> str | None:
     if not self.params.get_bool("JoystickDebugMode"):
       return None
@@ -411,7 +414,6 @@ class SteeringAssistanceBehavior:
     parked_or_reverse = getattr(cs, "gearShifter", _GEAR.unknown) in (_GEAR.park, _GEAR.reverse)
     return None if parked_or_reverse else verb
 
-  # -- pipeline stages ---------------------------------------------------------
   def _phase_joystick(self, cs):
     verb = self._consume_joystick_aol_request(cs)
     if verb is not None:

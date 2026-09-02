@@ -6,13 +6,18 @@ import platform
 import shlex
 import numpy as np
 
+import iqdbc
+import msgq as msgq_package
+import panda
+import tinygrad
+
 import SCons.Errors
 
 SCons.Warnings.warningAsException(True)
 
 # scons only auto-loads a site dir named site_scons at the repo root; ours lives under tools/,
 # so replicate what _load_site_scons_dir does (sys.path for site_tools imports + run site_init)
-SITE_DIR = Dir('#tools/scons').abspath
+SITE_DIR = Dir('#iqpilot/tools/scons').abspath
 if SITE_DIR not in sys.path:
   sys.path.insert(0, SITE_DIR)
 import site_init  # noqa: F401
@@ -32,8 +37,18 @@ AddOption('--minimal',
           action='store_false',
           dest='extras',
           default=os.path.exists(File('#.gitattributes').abspath), # minimal by default on release branch (where there's no LFS)
-          help='the minimum build to run openpilot. no tests, tools, etc.')
+          help='the minimum IQ.Pilot build. no tests, tools, etc.')
 AddOption('--verbose', action='store_true', help='show full compiler/linker command lines instead of short build lines')
+
+python_paths = [
+  Dir("#").abspath,
+]
+for p in reversed(python_paths):
+  if p not in sys.path:
+    sys.path.insert(0, p)
+
+if external_pythonpath := os.environ.get("PYTHONPATH"):
+  python_paths += [p for p in external_pythonpath.split(os.pathsep) if p and p not in python_paths]
 
 # Detect platform
 arch = subprocess.check_output(["uname", "-m"], encoding='utf8').rstrip()
@@ -43,7 +58,7 @@ if platform.system() == "Darwin":
 elif arch == "aarch64" and os.path.isfile('/TICI'):
   arch = "larch64"
   try:
-    from openpilot.system.hardware import HARDWARE
+    from iqpilot.system.hardware import HARDWARE
     HARDWARE.set_power_save(False)
     os.sched_setaffinity(0, range(8))
   except Exception:
@@ -56,13 +71,20 @@ assert arch in [
   "Darwin",   # macOS arm64 (x86 not supported)
 ]
 
+# ffmpeg comes from the system (brew on macOS, distro packages elsewhere) rather than
+# a vendored wheel, so it always needs the static-link deps. Exported so tools/ can
+# take upstream's `ffmpeg_libs` form instead of hand-listing codecs per SConscript.
+ffmpeg_libs = ['avformat', 'avcodec', 'avutil', 'x264', 'z']
+if arch != "Darwin":
+  ffmpeg_libs += ['va', 'va-drm', 'drm']
+
 env = Environment(
   ENV={
     "PATH": os.environ['PATH'],
-    "PYTHONPATH": Dir("#").abspath + ':' + Dir(f"#third_party/acados").abspath,
-    "ACADOS_SOURCE_DIR": Dir("#third_party/acados").abspath,
-    "ACADOS_PYTHON_INTERFACE_PATH": Dir("#third_party/acados/acados_template").abspath,
-    "TERA_PATH": Dir("#").abspath + f"/third_party/acados/{arch}/t_renderer"
+    "PYTHONPATH": os.pathsep.join(python_paths + [Dir(f"#iqpilot/third_party/acados").abspath]),
+    "ACADOS_SOURCE_DIR": Dir("#iqpilot/third_party/acados").abspath,
+    "ACADOS_PYTHON_INTERFACE_PATH": Dir("#iqpilot/third_party/acados/acados_template").abspath,
+    "TERA_PATH": Dir("#").abspath + f"/iqpilot/third_party/acados/{arch}/t_renderer"
   },
   CC='clang',
   CXX='clang++',
@@ -83,37 +105,38 @@ env = Environment(
   CXXFLAGS=["-std=c++1z"],
   CPPPATH=[
     "#",
-    "#msgq",
-    "#third_party",
-    "#third_party/json11",
-    "#third_party/linux/include",
-    "#third_party/acados/include",
-    "#third_party/acados/include/blasfeo/include",
-    "#third_party/acados/include/hpipm/include",
-    "#third_party/catch2/include",
-    "#third_party/libyuv/include",
+    "#iqpilot",
+    iqdbc.INCLUDE_PATH,
+    msgq_package.INCLUDE_PATH,
+    panda.INCLUDE_PATH,
+    "#iqpilot/cereal/gen/cpp",
+    "#iqpilot/third_party",
+    "#iqpilot/third_party/json11",
+    "#iqpilot/third_party/linux/include",
+    "#iqpilot/third_party/acados/include",
+    "#iqpilot/third_party/acados/include/blasfeo/include",
+    "#iqpilot/third_party/acados/include/hpipm/include",
+    "#iqpilot/third_party/catch2/include",
+    "#iqpilot/third_party/libyuv/include",
   ],
   LIBPATH=[
-    "#common",
-    "#msgq_repo",
-    "#third_party",
-    "#selfdrive/pandad",
-    "#rednose/helpers",
-    f"#third_party/libyuv/{arch}/lib",
-    f"#third_party/acados/{arch}/lib",
+    "#iqpilot/common",
+    "#iqpilot/third_party",
+    "#iqpilot/selfdrive/pandad",
+    f"#iqpilot/third_party/libyuv/{arch}/lib",
+    f"#iqpilot/third_party/acados/{arch}/lib",
   ],
   RPATH=[],
   CYTHONCFILESUFFIX=".cpp",
   COMPILATIONDB_USE_ABSPATH=True,
-  REDNOSE_ROOT="#",
-  tools=["default", "cython", "compilation_db", "rednose_filter"],
-  toolpath=["#tools/scons/site_tools", "#rednose_repo/site_scons/site_tools"],
+  tools=["default", "cython", "compilation_db"],
+  toolpath=["#iqpilot/tools/scons/site_tools"],
 )
 
 # Arch-specific flags and paths
 if arch == "larch64":
   env.Append(CPPPATH=[
-    "#third_party/opencl/include",
+    "#iqpilot/third_party/opencl/include",
     "/usr/include/aarch64-linux-gnu",
   ])
   env.Append(LIBPATH=[
@@ -194,7 +217,8 @@ else:
 np_version = SCons.Script.Value(np.__version__)
 Export('envCython', 'np_version')
 
-Export('env', 'arch')
+tinygrad_dir = os.path.dirname(tinygrad.__file__)
+Export('env', 'arch', 'ffmpeg_libs', 'tinygrad_dir')
 
 # Setup cache dir
 default_cache_dir = os.environ.get('SCONS_CACHE_DIR') or ('/data/scons_cache' if arch == "larch64" else '/tmp/scons_cache')
@@ -205,53 +229,44 @@ Clean(["."], cache_dir)
 # ********** start building stuff **********
 
 # Build common module
-SConscript(['common/SConscript'])
+SConscript(['iqpilot/common/SConscript'])
 Import('_common')
 common = [_common, 'json11', 'zmq']
 Export('common')
 
-# Build messaging (cereal + msgq + socketmaster + their dependencies)
-# Enable swaglog include in submodules
-env_swaglog = env.Clone()
-env_swaglog['CXXFLAGS'].append('-DSWAGLOG="\\"common/swaglog.h\\""')
-SConscript(['msgq_repo/SConscript'], exports={'env': env_swaglog})
-SConscript(['iqdbc_repo/SConscript'], exports={'env': env_swaglog})
+msgq = File(msgq_package.LIB_PATH)
+visionipc = File(msgq_package.VISIONIPC_LIB_PATH)
+msgq_python = File(msgq_package.PYTHON_LIB_PATH)
+Export('msgq', 'visionipc', 'msgq_python')
 
-SConscript(['cereal/SConscript'])
+SConscript(['iqpilot/cereal/SConscript'])
 
-Import('socketmaster', 'msgq')
+Import('socketmaster')
 messaging = [socketmaster, msgq, 'capnp', 'kj',]
 Export('messaging')
 
-
-# Build other submodules
-SConscript(['panda/SConscript'])
-
-# Build rednose library
-SConscript(['rednose/SConscript'])
-
 # Build system services
 SConscript([
-  'system/loggerd/SConscript',
-  'system/proprietary_runtime/SConscript',
+  'iqpilot/system/loggerd/SConscript',
+  'iqpilot/system/proprietary_runtime/SConscript',
 ])
 
 if arch == "larch64":
-  SConscript(['system/camerad/SConscript'])
+  SConscript(['iqpilot/system/camerad/SConscript'])
 
 # Build openpilot
-SConscript(['third_party/SConscript'])
+SConscript(['iqpilot/third_party/SConscript'])
 
-SConscript(['selfdrive/SConscript'])
+SConscript(['iqpilot/selfdrive/SConscript'])
 
 SConscript(['iqpilot/SConscript'])
 
-if Dir('#tools/cabana/').exists() and GetOption('extras'):
-  SConscript(['tools/replay/SConscript'])
+if Dir('#iqpilot/tools/cabana/').exists() and GetOption('extras'):
+  SConscript(['iqpilot/tools/replay/SConscript'])
   if arch != "larch64":
-    SConscript(['tools/cabana/SConscript'])
-    if Dir('#tools/jotpluggler/').exists():
-      SConscript(['tools/jotpluggler/SConscript'])
+    SConscript(['iqpilot/tools/cabana/SConscript'])
+    if Dir('#iqpilot/tools/jotpluggler/').exists():
+      SConscript(['iqpilot/tools/jotpluggler/SConscript'])
 
 
 env.CompilationDatabase('compile_commands.json')

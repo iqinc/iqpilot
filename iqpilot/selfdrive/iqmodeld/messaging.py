@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 import capnp
 import numpy as np
 
-from cereal import log
-from openpilot.iqpilot.selfdrive.iqmodeld.models.helpers import plan_x_idxs_helper
-from openpilot.iqpilot.selfdrive.iqmodeld.config import ModelConstants, Plan
-from openpilot.selfdrive.controls.lib.drive_helpers import get_curvature_from_plan
+from iqpilot.cereal import log
+from iqpilot.selfdrive.iqmodeld.models.helpers import plan_x_idxs_helper
+from iqpilot.selfdrive.iqmodeld.config import ModelConstants, Plan
+from iqpilot.selfdrive.controls.lib.drive_helpers import get_curvature_from_plan
 
 SEND_RAW_PRED = os.getenv("SEND_RAW_PRED")
 ConfidenceClass = log.ModelDataV2.ConfidenceClass
@@ -67,7 +67,7 @@ def _assign_xyva(builder, t_points, x_track, y_track, v_track, a_track,
     builder.aStd = a_std.tolist()
 
 
-def _fit_path(builder, degree: int, x_track: np.ndarray, y_track: np.ndarray, z_track: np.ndarray) -> None:
+def fill_xyz_poly(builder, degree: int, x_track: np.ndarray, y_track: np.ndarray, z_track: np.ndarray) -> None:
   stacked = np.stack([x_track, y_track, z_track], axis=1)
   coeffs = np.polynomial.polynomial.polyfit(ModelConstants.T_IDXS, stacked, deg=degree)
   builder.xCoefficients = coeffs[:, 0].tolist()
@@ -75,7 +75,7 @@ def _fit_path(builder, degree: int, x_track: np.ndarray, y_track: np.ndarray, z_
   builder.zCoefficients = coeffs[:, 2].tolist()
 
 
-def _lane_snapshot(builder, lane_lines, lane_probs: list[float]) -> None:
+def fill_lane_line_meta(builder, lane_lines, lane_probs: list[float]) -> None:
   builder.leftY = lane_lines[1].y[0]
   builder.leftProb = lane_probs[1]
   builder.rightY = lane_lines[2].y[0]
@@ -123,7 +123,7 @@ def _write_plan_family(model_packet, driving_packet, outputs: dict[str, np.ndarr
   _assign_xyz(model_packet.acceleration, ModelConstants.T_IDXS, *plan_rows[:, Plan.ACCELERATION].T)
   _assign_xyz(model_packet.orientation, ModelConstants.T_IDXS, *plan_rows[:, Plan.T_FROM_CURRENT_EULER].T)
   _assign_xyz(model_packet.orientationRate, ModelConstants.T_IDXS, *plan_rows[:, Plan.ORIENTATION_RATE].T)
-  _fit_path(driving_packet.path, ModelConstants.POLY_PATH_DEGREE, *plan_rows[:, Plan.POSITION].T)
+  fill_xyz_poly(driving_packet.path, ModelConstants.POLY_PATH_DEGREE, *plan_rows[:, Plan.POSITION].T)
 
 
 def _write_temporal_pose(model_packet, outputs: dict[str, np.ndarray]) -> None:
@@ -156,7 +156,7 @@ def _write_lane_family(model_packet, driving_packet, outputs: dict[str, np.ndarr
     )
   model_packet.laneLineStds = outputs["lane_lines_stds"][0, :, 0, 0].tolist()
   model_packet.laneLineProbs = outputs["lane_lines_prob"][0, 1::2].tolist()
-  _lane_snapshot(driving_packet.laneLineMeta, model_packet.laneLines, model_packet.laneLineProbs)
+  fill_lane_line_meta(driving_packet.laneLineMeta, model_packet.laneLines, model_packet.laneLineProbs)
 
   model_packet.init("roadEdges", 2)
   for edge_idx in range(2):
@@ -248,16 +248,19 @@ def populate_drive_messages(primary_msg: capnp._DynamicStructBuilder, extended_m
 def populate_odometry_message(msg: capnp._DynamicStructBuilder, outputs: dict[str, np.ndarray],
                               vipc_frame_id: int, vipc_dropped_frames: int,
                               timestamp_eof: int, live_calib_seen: bool) -> None:
-  msg.valid = live_calib_seen & (vipc_dropped_frames < 1)
+  pose = outputs["pose"][0, :6]
+  pose_stds = outputs["pose_stds"][0, :6]
+  pose_finite = bool(np.isfinite(pose).all() and np.isfinite(pose_stds).all())
+  msg.valid = live_calib_seen & (vipc_dropped_frames < 1) & pose_finite
   odo = msg.cameraOdometry
   odo.frameId = vipc_frame_id
   odo.timestampEof = timestamp_eof
-  odo.trans = outputs["pose"][0, :3].tolist()
-  odo.rot = outputs["pose"][0, 3:].tolist()
+  odo.trans = pose[:3].tolist()
+  odo.rot = pose[3:6].tolist()
   odo.wideFromDeviceEuler = outputs["wide_from_device_euler"][0, :].tolist()
   odo.roadTransformTrans = outputs["road_transform"][0, :3].tolist()
-  odo.transStd = outputs["pose_stds"][0, :3].tolist()
-  odo.rotStd = outputs["pose_stds"][0, 3:].tolist()
+  odo.transStd = pose_stds[:3].tolist()
+  odo.rotStd = pose_stds[3:6].tolist()
   odo.wideFromDeviceEulerStd = outputs["wide_from_device_euler_stds"][0, :].tolist()
   odo.roadTransformTransStd = outputs["road_transform_stds"][0, :3].tolist()
 

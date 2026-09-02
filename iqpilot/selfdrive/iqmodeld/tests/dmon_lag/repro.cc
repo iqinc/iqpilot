@@ -1,5 +1,4 @@
 // Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
-// clang++ -O2 repro.cc && ./a.out
 
 #include <sys/types.h>
 #include <unistd.h>

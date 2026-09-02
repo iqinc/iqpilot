@@ -2,9 +2,9 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
 import pyray as rl
-from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
-from openpilot.system.ui.lib.application import gui_app
+from iqpilot.common.filter_simple import FirstOrderFilter
+from iqpilot.selfdrive.ui.ui_state import ui_state, UIStatus
+from iqpilot.system.ui.lib.application import gui_app
 
 ACTIVE_TOP = rl.Color(0x22, 0xB8, 0xB9, 255)
 ACTIVE_BOTTOM = rl.Color(0x0C, 0x94, 0x96, 255)

@@ -1,20 +1,23 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
 from __future__ import annotations
 
 import copy
 
-import cereal.messaging as messaging
+import iqpilot.cereal.messaging as messaging
 import numpy as np
-from cereal import log
+from iqpilot.cereal import log
 
-from openpilot.iqpilot.selfdrive.iqmodeld.config import Meta, ModelConstants
-from openpilot.iqpilot.selfdrive.iqmodeld.messaging import (
+from iqpilot.selfdrive.iqmodeld.config import Meta, ModelConstants
+from iqpilot.selfdrive.iqmodeld.messaging import (
   DrivePacketMemory,
   pick_curvature,
   populate_drive_messages,
   populate_odometry_message,
 )
-from openpilot.iqpilot.selfdrive.iqmodeld.models.split_model_constants import SplitModelConstants
-from openpilot.iqpilot.selfdrive.iqmodeld.parser import ArchiveParser, PhaseParser
+from iqpilot.selfdrive.iqmodeld.models.split_model_constants import SplitModelConstants
+from iqpilot.selfdrive.iqmodeld.parser import ArchiveParser, PhaseParser
 
 
 def _archive_sample(rng: np.random.Generator) -> dict[str, np.ndarray]:

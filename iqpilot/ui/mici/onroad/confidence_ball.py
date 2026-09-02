@@ -2,7 +2,7 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
 import pyray as rl
-from openpilot.selfdrive.ui.ui_state import ui_state, UIStatus
+from iqpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 
 
 ACTIVE_CONFIDENCE_TOP = rl.Color(0x22, 0xB8, 0xB9, 0xFF)
@@ -19,7 +19,6 @@ class IQConfidenceBall:
     if ui_state.status == UIStatus.LAT_ONLY:
       return ui_state.sm['modelV2'].meta.disengagePredictions.steerOverrideProbs
 
-    # UIStatus.LONG_ONLY
     return ui_state.sm['modelV2'].meta.disengagePredictions.brakeDisengageProbs
 
   @staticmethod

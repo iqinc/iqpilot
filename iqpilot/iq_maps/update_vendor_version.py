@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-Maintainer utility: pin a new pfeiferj/mapd release tag and refresh the checked-in
-binary hash. Not used at runtime.
 """
 import argparse
 import os
 import re
 import sys
 
-from openpilot.common.basedir import BASEDIR
-from openpilot.iqpilot.iq_maps import VENDOR_MAPD_PATH
-from openpilot.iqpilot.iq_maps.vendor_mapd_installer import (
+from iqpilot.common.basedir import BASEDIR
+from iqpilot.iq_maps import VENDOR_MAPD_PATH
+from iqpilot.iq_maps.vendor_mapd_installer import (
   VENDOR_RELEASE_TAG,
   sha256_of_file,
 )
 
 _RELEASE_SYMBOL = "VENDOR_RELEASE_TAG"
 _INSTALLER_SRC = os.path.join(BASEDIR, "iqpilot", "iq_maps", "vendor_mapd_installer.py")
-# public: the checked-in hash the version test compares the installed binary against
 HASH_FILE = os.path.join(BASEDIR, "iqpilot", "iq_maps", "tests", "mapd_hash")
 _HASH_FILE = HASH_FILE
 _TAG_ASSIGN = re.compile(rf'^{_RELEASE_SYMBOL}\s*=\s*["\'][^"\']*["\']', re.MULTILINE)

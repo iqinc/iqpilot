@@ -7,18 +7,17 @@ guidance continuity) and the lateral-engage gate, without touching stock control
 """
 import time
 
-import cereal.messaging as messaging
-from cereal import log, custom
+import iqpilot.cereal.messaging as messaging
+from iqpilot.cereal import log, custom
 
 from iqdbc.car import structs
-from openpilot.common.constants import CV
-from openpilot.common.params import Params
-from openpilot.common.swaglog import cloudlog
-from openpilot.iqpilot.common.steer_delay import resolve_steer_delay
-from openpilot.iqpilot.selfdrive.car.enhanced_stock_longitudinal_control import build_iq_control_params_from_plan
-from openpilot.iqpilot.selfdrive.iqmodeld.models.inference_state import InferenceStateBase
-from openpilot.iqpilot.selfdrive.controls.lib.helpers.blinker_pause import IQSignalPauseController
-from openpilot.iqpilot.selfdrive.controls.lib.iq_dynamic.radar_manager import RadarManager
+from iqpilot.common.constants import CV
+from iqpilot.common.params import Params
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.selfdrive.car.enhanced_stock_longitudinal_control import build_iq_control_params_from_plan
+from iqpilot.selfdrive.iqmodeld.models.inference_state import InferenceStateBase
+from iqpilot.selfdrive.controls.lib.helpers.blinker_pause import IQSignalPauseController
+from iqpilot.selfdrive.controls.lib.iq_dynamic.radar_manager import RadarManager
 
 _PARAM_REFRESH_S = 3.0
 _LEAD_FIELDS = ("dRel", "yRel", "vRel", "aRel", "vLead", "dPath", "vLat", "vLeadK",
@@ -60,7 +59,7 @@ class IQControlsLayer(InferenceStateBase):
       return
     self.blinker_pause_lateral.get_params()
     if self.CP.lateralTuning.which() == 'torque':
-      self.lat_delay = resolve_steer_delay(self.params, sm["liveDelay"].lateralDelay)
+      self.lat_delay = sm["lateralDelay"].lateralDelay
     self._sync_set_speed = self._want_set_speed_to_limit()
     self.radar_manager.read_params()
     self._next_param_refresh = now
@@ -85,7 +84,7 @@ class IQControlsLayer(InferenceStateBase):
   # --- build + publish the IQ car-control message ------------------------------
   def _compose_iq_carcontrol(self, sm: messaging.SubMaster) -> custom.IQCarControl:
     CC_IQ = custom.IQCarControl.new_message()
-    lp = sm['liveParameters']
+    lp = sm['vehicleParameters']
     CC_IQ.angleOffsetDeg = float(getattr(lp, 'angleOffsetDeg', 0.0))
     CC_IQ.aol = sm['iqState'].aol
 

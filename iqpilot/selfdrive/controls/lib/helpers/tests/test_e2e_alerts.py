@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-import cereal.messaging as messaging
-from cereal import custom
-from openpilot.common.realtime import DT_MDL
-from openpilot.iqpilot.selfdrive.controls.lib.helpers.e2e_alerts import (
+import iqpilot.cereal.messaging as messaging
+from iqpilot.cereal import custom
+from iqpilot.common.realtime import DT_MDL
+from iqpilot.selfdrive.controls.lib.helpers.e2e_alerts import (
   EndToEndAlertEngine, CONFIRM_S, SETTLE_S, HORIZON_TAIL, PATH_SPEED_MPS, LEAD_SPEED_MPS, LEAD_GAP_M)
 
 E2E_CHIME = custom.IQOnroadEvent.EventName.e2eChime

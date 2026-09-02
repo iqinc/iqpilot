@@ -7,7 +7,6 @@
 #include <cmath>
 #include <vector>
 
-using namespace EKFS;
 using namespace Eigen;
 
 ExitHandler do_exit;
@@ -47,6 +46,18 @@ static VectorXd floatlist2vector(const capnp::List<float, capnp::Kind::PRIMITIVE
     res[i] = floatlist[i];
   }
   return res;
+}
+
+static bool finite_vector3(const capnp::List<float, capnp::Kind::PRIMITIVE>::Reader& floatlist) {
+  if (floatlist.size() != 3) {
+    return false;
+  }
+  for (int i = 0; i < 3; i++) {
+    if (!std::isfinite(floatlist[i])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 static Vector4d quat2vector(const Quaterniond& quat) {
@@ -258,6 +269,10 @@ void AtlasLocator::consume_sensor_frame(double current_time, const cereal::Senso
   // Gyro Uncalibrated
   if (log.getSensor() == SENSOR_GYRO_UNCALIBRATED && log.getType() == SENSOR_TYPE_GYROSCOPE_UNCALIBRATED) {
     auto v = log.getGyroUncalibrated().getV();
+    if (!finite_vector3(v)) {
+      this->observation_values_invalid["gyroscope"] += 1.0;
+      return;
+    }
     auto meas = Vector3d(-v[2], -v[1], -v[0]);
 
     VectorXd gyro_bias = this->kf->get_x().segment<STATE_GYRO_BIAS_LEN>(STATE_GYRO_BIAS_START);
@@ -276,6 +291,10 @@ void AtlasLocator::consume_sensor_frame(double current_time, const cereal::Senso
   // Accelerometer
   if (log.getSensor() == SENSOR_ACCELEROMETER && log.getType() == SENSOR_TYPE_ACCELEROMETER) {
     auto v = log.getAcceleration().getV();
+    if (!finite_vector3(v)) {
+      this->observation_values_invalid["accelerometer"] += 1.0;
+      return;
+    }
 
     // TODO: reduce false positives and re-enable this check
     // check if device fell, estimate 10 for g
@@ -296,6 +315,10 @@ void AtlasLocator::seed_fake_gps_observations(double current_time) {
   // This is done to make sure that the error estimate of the position does not blow up
   // when the filter is in no-gps mode
   // Steps : first predict -> observe current obs with reasonable STD
+  double filter_time = this->kf->get_filter_time();
+  if (!std::isnan(filter_time) && current_time < filter_time) {
+    return;
+  }
   this->kf->predict(current_time);
 
   VectorXd current_x = this->kf->get_x();
@@ -309,12 +332,16 @@ void AtlasLocator::seed_fake_gps_observations(double current_time) {
 }
 
 void AtlasLocator::consume_gps_frame(double current_time, const cereal::GpsLocationData::Reader& log, const double sensor_time_offset) {
+  bool gps_malformed = !finite_vector3(log.getVNED()) ||
+                       !std::isfinite(log.getLatitude()) || !std::isfinite(log.getLongitude()) || !std::isfinite(log.getAltitude()) ||
+                       !std::isfinite(log.getHorizontalAccuracy()) || !std::isfinite(log.getVerticalAccuracy()) ||
+                       !std::isfinite(log.getSpeedAccuracy()) || !std::isfinite(log.getBearingAccuracyDeg()) || !std::isfinite(log.getBearingDeg());
   bool gps_unreasonable = (Vector2d(log.getHorizontalAccuracy(), log.getVerticalAccuracy()).norm() >= SANE_GPS_UNCERTAINTY);
   bool gps_accuracy_insane = ((log.getVerticalAccuracy() <= 0) || (log.getSpeedAccuracy() <= 0) || (log.getBearingAccuracyDeg() <= 0));
   bool gps_lat_lng_alt_insane = ((std::abs(log.getLatitude()) > 90) || (std::abs(log.getLongitude()) > 180) || (std::abs(log.getAltitude()) > ALTITUDE_SANITY_CHECK));
-  bool gps_vel_insane = (floatlist2vector(log.getVNED()).norm() > TRANS_SANITY_CHECK);
+  bool gps_vel_insane = gps_malformed || (floatlist2vector(log.getVNED()).norm() > TRANS_SANITY_CHECK);
 
-  if (!log.getHasFix() || gps_unreasonable || gps_accuracy_insane || gps_lat_lng_alt_insane || gps_vel_insane) {
+  if (!log.getHasFix() || gps_malformed || gps_unreasonable || gps_accuracy_insane || gps_lat_lng_alt_insane || gps_vel_insane) {
     //this->gps_valid = false;
     this->refresh_gps_mode(current_time);
     return;
@@ -451,6 +478,12 @@ void AtlasLocator::consume_car_state_frame(double current_time, const cereal::Ca
 }
 
 void AtlasLocator::consume_camera_odometry(double current_time, const cereal::CameraOdometry::Reader& log) {
+  if (!finite_vector3(log.getRot()) || !finite_vector3(log.getTrans()) ||
+      !finite_vector3(log.getRotStd()) || !finite_vector3(log.getTransStd())) {
+    this->observation_values_invalid["cameraOdometry"] += 1.0;
+    return;
+  }
+
   VectorXd rot_device = this->device_from_calib * floatlist2vector(log.getRot());
   VectorXd trans_device = this->device_from_calib * floatlist2vector(log.getTrans());
 
@@ -493,24 +526,28 @@ void AtlasLocator::consume_camera_odometry(double current_time, const cereal::Ca
   this->camodo_yawrate_distribution = Vector2d(rot_device[2], rotate_std(this->device_from_calib, rot_calib_std)[2]);
 }
 
-void AtlasLocator::consume_live_calibration(double current_time, const cereal::LiveCalibrationData::Reader& log) {
+void AtlasLocator::consume_live_calibration(double current_time, const cereal::ExtrinsicsCalibration::Reader& log) {
   if (!this->timestamp_ok(current_time)) {
     this->observation_timings_invalid = true;
     return;
   }
 
   if (log.getRpyCalib().size() > 0) {
+    if (!finite_vector3(log.getRpyCalib())) {
+      this->observation_values_invalid["extrinsicsCalibration"] += 1.0;
+      return;
+    }
     auto live_calib = floatlist2vector(log.getRpyCalib());
     if ((live_calib.minCoeff() < -CALIB_RPY_SANITY_CHECK) || (live_calib.maxCoeff() > CALIB_RPY_SANITY_CHECK)) {
-      this->observation_values_invalid["liveCalibration"] += 1.0;
+      this->observation_values_invalid["extrinsicsCalibration"] += 1.0;
       return;
     }
 
     this->calib = live_calib;
     this->device_from_calib = euler2rot(this->calib);
     this->calib_from_device = this->device_from_calib.transpose();
-    this->calibrated = log.getCalStatus() == cereal::LiveCalibrationData::Status::CALIBRATED;
-    this->observation_values_invalid["liveCalibration"] *= DECAY;
+    this->calibrated = log.getCalStatus() == cereal::ExtrinsicsCalibration::Status::CALIBRATED;
+    this->observation_values_invalid["extrinsicsCalibration"] *= DECAY;
   }
 }
 
@@ -521,7 +558,7 @@ void AtlasLocator::reset_kalman(double current_time) {
 }
 
 void AtlasLocator::run_finite_guard(double current_time) {
-  bool all_finite = this->kf->get_x().array().isFinite().all() or this->kf->get_P().array().isFinite().all();
+  bool all_finite = this->kf->get_x().array().isFinite().all() && this->kf->get_P().array().isFinite().all();
   if (!all_finite) {
     LOGE("Non-finite values detected, kalman reset");
     this->reset_kalman(current_time);
@@ -591,24 +628,29 @@ void AtlasLocator::consume_bytes(const char *data, const size_t size) {
 void AtlasLocator::consume_event(const cereal::Event::Reader& log) {
   double t = log.getLogMonoTime() * 1e-9;
   this->run_time_guard(t);
-  if (log.isAccelerometer()) {
-    this->consume_sensor_frame(t, log.getAccelerometer());
-  } else if (log.isGyroscope()) {
-    this->consume_sensor_frame(t, log.getGyroscope());
-  } else if (log.isGpsLocation()) {
-    this->consume_gps_frame(t, log.getGpsLocation(), GPS_QUECTEL_SENSOR_TIME_OFFSET);
-  } else if (log.isGpsLocationExternal()) {
-    this->consume_gps_frame(t, log.getGpsLocationExternal(), GPS_UBLOX_SENSOR_TIME_OFFSET);
-  //} else if (log.isGnssMeasurements()) {
-  //  this->consume_gnss_frame(t, log.getGnssMeasurements());
-  } else if (log.isCarState()) {
-    this->consume_car_state_frame(t, log.getCarState());
-  } else if (log.isCameraOdometry()) {
-    this->consume_camera_odometry(t, log.getCameraOdometry());
-  } else if (log.isLiveCalibration()) {
-    this->consume_live_calibration(t, log.getLiveCalibration());
+  try {
+    if (log.isAccelerometer()) {
+      this->consume_sensor_frame(t, log.getAccelerometer());
+    } else if (log.isGyroscope()) {
+      this->consume_sensor_frame(t, log.getGyroscope());
+    } else if (log.isGpsLocation()) {
+      this->consume_gps_frame(t, log.getGpsLocation(), GPS_QUECTEL_SENSOR_TIME_OFFSET);
+    } else if (log.isGpsLocationExternal()) {
+      this->consume_gps_frame(t, log.getGpsLocationExternal(), GPS_UBLOX_SENSOR_TIME_OFFSET);
+    //} else if (log.isGnssMeasurements()) {
+    //  this->consume_gnss_frame(t, log.getGnssMeasurements());
+    } else if (log.isCarState()) {
+      this->consume_car_state_frame(t, log.getCarState());
+    } else if (log.isCameraOdometry()) {
+      this->consume_camera_odometry(t, log.getCameraOdometry());
+    } else if (log.isExtrinsicsCalibration()) {
+      this->consume_live_calibration(t, log.getExtrinsicsCalibration());
+    }
+  } catch (const std::exception &e) {
+    LOGE("Estimator rejected an observation (%s), kalman reset", e.what());
+    this->reset_kalman(t);
   }
-  this->run_finite_guard();
+  this->run_finite_guard(t);
   this->cool_reset_tracker();
 }
 
@@ -625,7 +667,7 @@ kj::ArrayPtr<capnp::byte> AtlasLocator::pack_state_message(MessageBuilder& msg_b
 }
 
 bool AtlasLocator::gps_ready() {
-  return (this->kf->get_filter_time() - this->last_gps_msg) < 2.0;
+  return this->last_gps_msg > 0.0 && (this->kf->get_filter_time() - this->last_gps_msg) < 2.0;
 }
 
 bool AtlasLocator::critical_services_ok(const std::map<std::string, double> &critical_services) {
@@ -689,15 +731,14 @@ int AtlasLocator::run() {
   }
 
   this->tune_gnss_source(source);
-  const std::initializer_list<const char *> service_list = {gps_location_socket, "cameraOdometry", "liveCalibration",
+  const std::initializer_list<const char *> service_list = {gps_location_socket, "cameraOdometry", "extrinsicsCalibration",
                                                           "carState", "accelerometer", "gyroscope"};
 
   SubMaster sm(service_list, {}, nullptr, {gps_location_socket});
   PubMaster pm({"iqLiveLocation"});
 
-  uint64_t cnt = 0;
   bool filterInitialized = false;
-  const std::vector<std::string> critical_input_services = {"cameraOdometry", "liveCalibration", "accelerometer", "gyroscope"};
+  const std::vector<std::string> critical_input_services = {"cameraOdometry", "extrinsicsCalibration", "accelerometer", "gyroscope"};
   for (std::string service : critical_input_services) {
     this->observation_values_invalid.insert({service, 0.0});
   }
@@ -731,13 +772,17 @@ int AtlasLocator::run() {
       kj::ArrayPtr<capnp::byte> bytes = this->pack_state_message(msg_builder, inputsOK, sensorsOK, gpsOK, filterInitialized);
       pm.send("iqLiveLocation", bytes.begin(), bytes.size());
 
-      if (cnt % 1200 == 0 && gpsOK) {  // once a minute
+      double current_time = sm[trigger_msg].getLogMonoTime() * 1e-9;
+      if (gpsOK && (std::isnan(this->last_gps_param_time) || current_time - this->last_gps_param_time >= 60.0)) {
         VectorXd posGeo = this->current_geodetic();
         std::string lastGPSPosJSON = util::string_format(
           "{\"latitude\": %.15f, \"longitude\": %.15f, \"altitude\": %.15f}", posGeo(0), posGeo(1), posGeo(2));
-        params.putNonBlocking("LastGPSPositionIQLoc", lastGPSPosJSON);
+        int result = params.put("LastGPSPositionIQLoc", lastGPSPosJSON);
+        if (result != 0) {
+          LOGE("Failed to persist LastGPSPositionIQLoc: %d", result);
+        }
+        this->last_gps_param_time = current_time;
       }
-      cnt++;
     }
   }
   return 0;

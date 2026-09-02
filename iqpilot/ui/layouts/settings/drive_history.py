@@ -6,27 +6,23 @@ import threading
 import time
 import pyray as rl
 
-from openpilot.common.api import api_get
-from openpilot.common.constants import CV
-from openpilot.common.params import Params
-from openpilot.common.swaglog import cloudlog
-from openpilot.common.time_helpers import system_time_valid
-from openpilot.selfdrive.ui.lib.api_helpers import get_token
-from openpilot.selfdrive.ui.ui_state import ui_state, device
-from openpilot.iqpilot.konn3kt.registration import UNREGISTERED_DONGLE_ID
-from openpilot.system.ui.lib.application import gui_app, FontWeight, FONT_SCALE
-from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.widgets import Widget
+from iqpilot.common.api import api_get
+from iqpilot.common.constants import CV
+from iqpilot.common.params import Params
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.common.time_helpers import system_time_valid
+from iqpilot.selfdrive.ui.lib.api_helpers import get_token
+from iqpilot.selfdrive.ui.ui_state import ui_state, device
+from iqpilot.konn3kt.registration import UNREGISTERED_DONGLE_ID
+from iqpilot.system.ui.lib.application import gui_app, FontWeight, FONT_SCALE
+from iqpilot.system.ui.lib.multilang import tr
+from iqpilot.system.ui.lib.text_measure import measure_text_cached
+from iqpilot.system.ui.widgets import Widget
 
 _STATS_PARAM = "ApiCache_DriveStats"
 _POLL_SECONDS = 30
 
-
 class _DriveStatsSource:
-  """Owns the konn3kt drive-stats fetch. Seeds from the cached param, then keeps it fresh on a
-  background poll while the device is offroad and awake. Read `snapshot` for the latest data."""
-
   def __init__(self):
     self._params = Params()
     self._http = requests.Session()
@@ -54,7 +50,6 @@ class _DriveStatsSource:
       dongle_id = self._params.get("DongleId")
       if not dongle_id or dongle_id == UNREGISTERED_DONGLE_ID:
         return
-      # at boot the clock isn't NTP-synced, so the token can't be minted yet — skip quietly
       if not system_time_valid():
         return
       resp = api_get(f"v1.1/devices/{dongle_id}/stats", access_token=get_token(dongle_id), session=self._http)
@@ -67,7 +62,7 @@ class _DriveStatsSource:
 
 
 class TripsLayout(Widget):
-  PARAM_KEY = _STATS_PARAM        # retained for external references
+  PARAM_KEY = _STATS_PARAM
   UPDATE_INTERVAL = _POLL_SECONDS
 
   _CARD_FILL = rl.Color(38, 40, 46, 255)
@@ -81,10 +76,9 @@ class TripsLayout(Widget):
     super().__init__()
     self._params = Params()
     self._source = _DriveStatsSource()
-    # one shared height so the three columns line up; tinted teal at draw time
     self._ic_drives = gui_app.texture("icons_mici/wheel.png", 64, 64, keep_aspect_ratio=True)
     self._ic_distance = gui_app.texture("icons/road.png", 88, 64, keep_aspect_ratio=True)
-    self._ic_hours = gui_app.texture("../../iqpilot/selfdrive/assets/icons/clock.png", 64, 64, keep_aspect_ratio=True)
+    self._ic_hours = gui_app.texture("icons/clock.png", 64, 64, keep_aspect_ratio=True)
 
   def __del__(self):
     self._source.close()
@@ -105,8 +99,6 @@ class TripsLayout(Widget):
     card = rl.Rectangle(x, y, width, height)
     rl.draw_rectangle_rounded(card, 0.10, 20, self._CARD_FILL)
     rl.draw_rectangle_rounded_lines_ex(card, 0.10, 20, 2, self._CARD_EDGE)
-
-    # heading: teal tick + muted-teal caption
     pad = 44
     label_y = y + 36
     tick_h = 30
@@ -114,11 +106,9 @@ class TripsLayout(Widget):
     rl.draw_rectangle_rounded(rl.Rectangle(x + pad, label_y, 6, tick_h), 0.5, 6, self._ACCENT)
     rl.draw_text_ex(gui_app.font(FontWeight.BOLD), title,
                     rl.Vector2(x + pad + 22, label_y + (tick_h - title_size) / 2), title_size, 4, self._ACCENT_DIM)
-
     col_width = width / 3
     content_top = label_y + tick_h + 20
     content_bottom = y + height - 30
-
     number_font = gui_app.font(FontWeight.BOLD)
     unit_font = gui_app.font(FontWeight.MEDIUM)
     number_size = 84 * FONT_SCALE
@@ -126,8 +116,6 @@ class TripsLayout(Widget):
     unit_spacing = 2.0
     icon_gap = 16
     num_gap = 14
-
-    # vertical rules between the three columns
     for i in (1, 2):
       dx = x + col_width * i
       rl.draw_line_ex(rl.Vector2(dx, content_top + 4), rl.Vector2(dx, content_bottom - 4), 1, self._RULE)

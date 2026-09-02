@@ -2,7 +2,10 @@
 
 DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null && pwd )"
 
+export HOME="${HOME:-/home/comma}"
+export IQPILOT_PROPRIETARY_ROOT="$DIR/artifacts"
 source "$DIR/launch_env.sh"
+export PATH="/usr/local/venv/bin:$PATH"
 
 function agnos_version_allowed {
   local current_version="$1"
@@ -25,7 +28,6 @@ function agnos_version_allowed {
 }
 
 function set_lite_hw() {
-  # Detect mr.one C3 Lite: tici platform without a cellular modem at i2c 0x10
   if grep -q "tici" /sys/firmware/devicetree/base/model 2>/dev/null; then
     output=$(i2cget -y 0 0x10 0x00 2>/dev/null)
     if [ -z "$output" ]; then
@@ -34,6 +36,38 @@ function set_lite_hw() {
       echo "1" > /tmp/lite_hw
     fi
   fi
+}
+
+function install_iq_command() {
+  local rc_file="$HOME/.bashrc"
+
+  [ -w "$HOME" ] || return 0
+  touch "$rc_file" 2>/dev/null || return 0
+  local rc_temp="${rc_file}.iq-tmp.$$"
+  awk '/^# >>> iq command/{skip=1} /^# <<< iq command/{skip=0; next} skip{next}
+       !/^alias op=.*tools\/op\.sh/ && !/^alias iq=.*tools\/iq\.sh/' "$rc_file" > "$rc_temp" || return 0
+  mv "$rc_temp" "$rc_file" || return 0
+  cat >> "$rc_file" <<'IQFN'
+# >>> iq command (auto-managed, do not edit) >>>
+unalias iq op 2>/dev/null
+iq() {
+  local d="$PWD"
+  while [ "$d" != "/" ]; do
+    if [ -x "$d/iqpilot/tools/iq.sh" ] && { [ -f "$d/launch_iqpilot.sh" ] || [ -f "$d/launch_openpilot.sh" ]; }; then
+      "$d/iqpilot/tools/iq.sh" "$@"; return
+    fi
+    d="$(dirname "$d")"
+  done
+  for d in /data/iqpilot /data/openpilot; do
+    if [ -x "$d/iqpilot/tools/iq.sh" ] && { [ -f "$d/launch_iqpilot.sh" ] || [ -f "$d/launch_openpilot.sh" ]; }; then
+      "$d/iqpilot/tools/iq.sh" "$@"; return
+    fi
+  done
+  echo "iq: no IQ.Pilot checkout found (searched up from $PWD, then /data/iqpilot, /data/openpilot)" >&2
+  return 1
+}
+# <<< iq command (auto-managed) <<<
+IQFN
 }
 
 function agnos_init {
@@ -60,8 +94,8 @@ function agnos_init {
   # Check if AGNOS update is required
   CURRENT_AGNOS_VERSION=$(< /VERSION)
   if ! agnos_version_allowed "$CURRENT_AGNOS_VERSION" "$AGNOS_VERSION"; then
-    AGNOS_PY="$DIR/system/hardware/tici/agnos.py"
-    MANIFEST="$DIR/system/hardware/tici/agnos.json"
+    AGNOS_PY="$DIR/iqpilot/system/hardware/tici/agnos.py"
+    MANIFEST="$DIR/iqpilot/system/hardware/tici/agnos.json"
     if [ -f /sys/firmware/devicetree/base/model ]; then
       DEVICE_MODEL="$(tr -d '\0' </sys/firmware/devicetree/base/model)"
       case "$DEVICE_MODEL" in
@@ -69,7 +103,7 @@ function agnos_init {
           # comma 3 keeps its stock 15.1 bootloaders: comma's 16 abl has a board-id
           # check that rejects comma 3 ("Unsupported firmware detected"). It still gets
           # the IQ boot (comma_tici.dtb) + IQ.OS 3.4 system via this hybrid manifest.
-          MANIFEST="$DIR/system/hardware/tici/agnos_tici_15_1.json"
+          MANIFEST="$DIR/iqpilot/system/hardware/tici/agnos_tici_15_1.json"
           ;;
       esac
     fi
@@ -86,13 +120,18 @@ function agnos_init {
         sudo reboot
       fi
     fi
-    $DIR/system/hardware/tici/updater $AGNOS_PY $MANIFEST
+    $DIR/iqpilot/system/hardware/tici/updater $AGNOS_PY $MANIFEST
   fi
 }
 
 function launch {
   # Remove orphaned git lock if it exists on boot
   [ -f "$DIR/.git/index.lock" ] && rm -f $DIR/.git/index.lock
+  for server_dir in "$HOME/.cursor-server" "$HOME/.windsurf-server" "$HOME/.vscode-server"; do
+    [ -L "$server_dir" ] && unlink "$server_dir"
+  done
+
+  install_iq_command
 
   # Check to see if there's a valid overlay-based update available. Conditions
   # are as follows:
@@ -128,31 +167,49 @@ function launch {
     fi
   fi
 
-  # Install/update proprietary runtime bundles.
-  if [ -f "$DIR/artifacts/runtime/ensure_private_installed.sh" ]; then
-    bash "$DIR/artifacts/runtime/ensure_private_installed.sh" || true
-  elif [ -x "$DIR/scripts/iqpilot/ensure_navd_private_installed.sh" ]; then
-    # Backward-compat fallback for older trees.
-    "$DIR/scripts/iqpilot/ensure_navd_private_installed.sh" || true
+  # Python env + proprietary runtime sync. Lives in artifacts/runtime/env_sync.sh so updated.py
+  # can run the identical steps at update-apply time (offroad, stack idle); by the
+  # time this runs at boot it is normally a warm no-op. Real work still lands here
+  # for local dev edits or a failed apply-time prep, under the boot spinner as before.
+  source "$DIR/artifacts/runtime/env_sync.sh"
+  sync_python_env || return 1
+  if [ ! -f "$DIR/prebuilt" ] && [ ! -x "$DIR/.venv/bin/python3" ]; then
+    return 1
   fi
+  export PATH="$DIR/.venv/bin:$PATH"
+
+  RUNTIME_COMPAT_ROOT="$DIR/.iqpilot/runtime_root"
+  mkdir -p "$RUNTIME_COMPAT_ROOT"
+  ln -sfn "$DIR/iqpilot" "$RUNTIME_COMPAT_ROOT/iqpilot"
+  ln -sfn iqpilot "$RUNTIME_COMPAT_ROOT/openpilot"
+  ln -sfn "$DIR/iqpilot/system" "$RUNTIME_COMPAT_ROOT/system"
 
   ln -sfn $(pwd) /data/pythonpath
-  export IQPILOT_SOURCE_ROOT="${IQPILOT_SOURCE_ROOT:-$PWD/openpilot}"
+  export IQPILOT_SOURCE_ROOT="${IQPILOT_SOURCE_ROOT:-$DIR/iqpilot}"
   export PYTHONSAFEPATH=1
   VERIFIED_PYTHON_ROOT="/usr/libexec/iqpilot/python"
+  IQPILOT_PYTHONPATH="$VENV_SITE_PACKAGES:$PWD"
+  if [ -d "$PWD/artifacts/package_runtime" ]; then
+    IQPILOT_PYTHONPATH="$PWD/artifacts/package_runtime:$IQPILOT_PYTHONPATH"
+  fi
   if [ -d "$VERIFIED_PYTHON_ROOT" ]; then
-    export PYTHONPATH="$VERIFIED_PYTHON_ROOT:$PWD"
+    export PYTHONPATH="$VERIFIED_PYTHON_ROOT:$IQPILOT_PYTHONPATH"
   else
-    export PYTHONPATH="$PWD"
+    export PYTHONPATH="$IQPILOT_PYTHONPATH"
   fi
 
   # Install independent systemd services BEFORE build so they run even
   # when openpilot fails to compile — SSH/BLE/hephaestusd must always
   # be reachable for device recovery.
-  for service_name in hephaestusd ble-transportd; do
-    service_src="$DIR/system/${service_name}.service"
+  for service_name in hephaestusd ble-transportd flockd; do
+    service_src="$DIR/iqpilot/system/${service_name}.service"
     service_dst="/etc/systemd/system/${service_name}.service"
     service_lib="/lib/systemd/system/${service_name}.service"
+    service_dropin="/run/systemd/system/${service_name}.service.d"
+    service_exec="$(grep '^ExecStart=' "$service_src")"
+    sudo mkdir -p "$service_dropin"
+    printf '[Service]\nWorkingDirectory=%s\nEnvironment="IQPILOT_SOURCE_ROOT=%s/iqpilot"\nEnvironment="IQPILOT_PROPRIETARY_ROOT=%s/artifacts"\nEnvironment="PYTHONPATH=%s"\nExecStart=\n%s\n' "$RUNTIME_COMPAT_ROOT" "$DIR" "$DIR" "$PYTHONPATH" "$service_exec" | sudo tee "$service_dropin/iqpilot-packages.conf" >/dev/null
+    sudo systemctl daemon-reload
     if [ -f "$service_lib" ] && grep -q "/usr/libexec/iqpilot/iqpilot_bundle_runner" "$service_lib"; then
       if [ -f "$service_dst" ]; then
         sudo mount -o remount,rw /
@@ -161,10 +218,12 @@ function launch {
         sudo mount -o remount,ro /
       fi
       sudo systemctl enable "${service_name}.service"
+      # --no-block: these units ExecStartPre-wait for the verified runtime. Blocking here
+      # made a missing runner stall the whole install for the unit's 600s timeout (x3 units).
       if systemctl is-active --quiet "${service_name}.service"; then
-        sudo systemctl restart "${service_name}.service"
+        sudo systemctl restart --no-block "${service_name}.service"
       else
-        sudo systemctl start "${service_name}.service"
+        sudo systemctl start --no-block "${service_name}.service"
       fi
     elif [ -f "$service_src" ]; then
       if [ ! -f "$service_dst" ] || ! cmp -s "$service_src" "$service_dst"; then
@@ -173,9 +232,9 @@ function launch {
         sudo systemctl daemon-reload
         sudo systemctl enable "${service_name}.service"
         sudo mount -o remount,ro /
-        sudo systemctl restart "${service_name}.service"
+        sudo systemctl restart --no-block "${service_name}.service"
       elif ! systemctl is-active --quiet "${service_name}.service"; then
-        sudo systemctl start "${service_name}.service"
+        sudo systemctl start --no-block "${service_name}.service"
       fi
     fi
   done
@@ -187,7 +246,7 @@ function launch {
   if [ -f /AGNOS ]; then
     agnos_init
 
-    sudo "$DIR/system/hardware/tici/zram_setup.sh" || true
+    sudo "$DIR/iqpilot/system/hardware/tici/zram_setup.sh" || true
   fi
 
   if [ -f "$DIR/artifacts/runtime/apply_boot_branding.py" ]; then
@@ -195,22 +254,29 @@ function launch {
   fi
 
   # /home is an ephemeral overlay (resets each boot); re-inject the source line. best-effort
-  if [ -f "$DIR/tools/iqpilot/git-pretty.sh" ] && [ -w "$HOME/.bashrc" ]; then
+  if [ -f "$DIR/iqpilot/tools/iqpilot/git-pretty.sh" ] && [ -w "$HOME/.bashrc" ]; then
     grep -q 'iqpilot/git-pretty.sh' "$HOME/.bashrc" 2>/dev/null || \
-      echo "[ -f $DIR/tools/iqpilot/git-pretty.sh ] && source $DIR/tools/iqpilot/git-pretty.sh" >> "$HOME/.bashrc" || true
+      echo "[ -f $DIR/iqpilot/tools/iqpilot/git-pretty.sh ] && source $DIR/iqpilot/tools/iqpilot/git-pretty.sh" >> "$HOME/.bashrc" || true
   fi
 
   # write tmux scrollback to a file
   tmux capture-pane -pq -S-1000 > /tmp/launch_log
 
   # start manager
-  cd system/manager
+  cd "$DIR/iqpilot/system/manager"
+  export PWD="$(pwd)"
+  MANAGER_PYTHON="$DIR/.venv/bin/python3"
   if [ ! -f $DIR/prebuilt ]; then
     if pkill -f /tmp/installer 2>/dev/null; then sleep 1; fi
-    /usr/local/venv/bin/python3 ./build.py
+    "$MANAGER_PYTHON" ./build.py
+    for service_name in hephaestusd ble-transportd flockd; do
+      sudo systemctl restart --no-block "${service_name}.service"
+    done
+  else
+    MANAGER_PYTHON="/usr/local/venv/bin/python3"
   fi
 
-  /usr/local/venv/bin/python3 ./manager.py
+  "$MANAGER_PYTHON" ./manager.py
 
   # if broken, keep on screen error
   while true; do sleep 1; done

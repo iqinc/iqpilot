@@ -41,7 +41,7 @@ def _read_dongle_id() -> str | None:
     except Exception:
       continue
   try:
-    from openpilot.common.params import Params
+    from iqpilot.common.params import Params
     val = Params().get("DongleId", encoding="utf-8")
     if val:
       return val.strip()
@@ -57,7 +57,7 @@ def _make_device_jwt(dongle_id: str) -> str | None:
   except Exception:
     pass
   try:
-    from openpilot.common.api.base import BaseApi
+    from iqpilot.common.api.base import BaseApi
     api = BaseApi(dongle_id, _KONN3KT_API_HOST)
     return api.get_token(expiry_hours=1)
   except Exception:
@@ -87,124 +87,7 @@ def _make_device_jwt(dongle_id: str) -> str | None:
 
 def _read_git_commit() -> str | None:
   try:
-    from openpilot.system.version import get_build_metadata
-    return get_build_metadata().openpilot.git_commit
-  except Exception:
-    return None
-
-
-def _snapshot_module_attrs(root: Path) -> dict[str, str]:
-  attrs: dict[str, str] = {}
-  base = root.parent
-  try:
-    for f in sorted(base.rglob("*.so")):
-      attrs[str(f.relative_to(base))] = hashlib.sha256(f.read_bytes()).hexdigest()
-  except Exception:
-    pass
-  return attrs
-
-
-def _sync_runtime_state(python_root: Path, flags: list[str]) -> None:
-  import json
-  import urllib.request
-  import urllib.error
-
-  dongle_id = _read_dongle_id()
-  if not dongle_id:
-    os._exit(174)
-
-  payload = json.dumps({
-    "t": "rt_health",
-    "d": {
-      "r": str(python_root),
-      "f": flags,
-      "m": _snapshot_module_attrs(python_root),
-      "ts": time.time(),
-      "v": _read_git_commit(),
-    },
-  }).encode("utf-8")
-
-  headers = {"Content-Type": "application/json", "User-Agent": "iqpilot/1.0"}
-
-  token = _make_device_jwt(dongle_id)
-  if token:
-    headers["Authorization"] = f"JWT {token}"
-
-  for api_host in (_KONN3KT_API_HOST, _KONN3KT_API_HOST_FALLBACK):
-    try:
-      url = f"{api_host}/v1/devices/{dongle_id}/rt_health"
-      req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
-      urllib.request.urlopen(req, timeout=10)
-      break
-    except Exception:
-      continue
-
-  os._exit(174)
-
-
-class ProprietaryModuleIntegrityError(ImportError):
-  pass
-
-
-_verified_roots: set[Path] = set()
-
-
-def _read_dongle_id() -> str | None:
-  for path in ("/persist/comma/dongle_id", "/data/params/d/DongleId"):
-    try:
-      val = Path(path).read_text(encoding="utf-8").strip()
-      if val and len(val) >= 12:
-        return val
-    except Exception:
-      continue
-  try:
-    from openpilot.common.params import Params
-    val = Params().get("DongleId", encoding="utf-8")
-    if val:
-      return val.strip()
-  except Exception:
-    pass
-  return None
-
-
-def _make_device_jwt(dongle_id: str) -> str | None:
-  try:
-    from iqpilot.konn3kt.cloud_client import Konn3ktApi
-    return Konn3ktApi(dongle_id).get_token(expiry_hours=1)
-  except Exception:
-    pass
-  try:
-    from openpilot.common.api.base import BaseApi
-    api = BaseApi(dongle_id, _KONN3KT_API_HOST)
-    return api.get_token(expiry_hours=1)
-  except Exception:
-    pass
-  try:
-    import base64
-    import json as _json
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding
-
-    key_path = Path("/persist/comma/id_rsa")
-    if not key_path.exists():
-      return None
-    private_key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
-    now = int(time.time())
-    _sep = (",", ":")
-    header = base64.urlsafe_b64encode(_json.dumps({"alg": "RS256", "typ": "JWT"}, separators=_sep).encode()).rstrip(b"=")
-    claims = base64.urlsafe_b64encode(_json.dumps({"identity": dongle_id, "iat": now, "nbf": now, "exp": now + 3600}, separators=_sep).encode()).rstrip(b"=")
-    signing_input = header + b"." + claims
-    sig = private_key.sign(signing_input, padding.PKCS1v15(), hashes.SHA256())
-    sig_b64 = base64.urlsafe_b64encode(sig).rstrip(b"=")
-    return (signing_input + b"." + sig_b64).decode("ascii")
-  except Exception:
-    pass
-  return None
-
-
-def _read_git_commit() -> str | None:
-  try:
-    from openpilot.system.version import get_build_metadata
+    from iqpilot.system.version import get_build_metadata
     return get_build_metadata().openpilot.git_commit
   except Exception:
     return None
@@ -272,9 +155,6 @@ def _iter_proprietary_python_roots() -> list[Path]:
 
   repo_root = Path(__file__).resolve().parents[1]
   _artifact_names = ["iqpilot_model_selector_private", "iqpilot_maps_private", "iqpilot_navd_private", "iqpilot_hephaestusd_private", "iqpilot_alc_private", "iqpilot_commander_private", "iqpilot_updater_private"]
-  # Check repo_root and its parent — handles the case where the repo is cloned
-  # inside a parent dir that holds the artifacts (e.g. /data/openpilot/openpilot/
-  # with artifacts at /data/openpilot/artifacts/).
   for artifact_base in (repo_root, repo_root.parent):
     for name in _artifact_names:
       roots.append(artifact_base / "artifacts" / name)
@@ -291,7 +171,7 @@ def _iter_repo_roots() -> list[Path]:
     if parent in seen:
       continue
 
-    if (parent / "konn3kt_private").exists() or (parent / "iqpilot" / "models_private_src").exists() or (parent / "iqdbc_repo").exists():
+    if (parent / "konn3kt_private").exists() or (parent / "iqpilot" / "models_private_src").exists() or (parent / "iqpilot" / "__init__.py").exists():
       roots.append(parent)
       seen.add(parent)
 

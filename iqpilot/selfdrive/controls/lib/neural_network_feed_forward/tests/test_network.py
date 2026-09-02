@@ -9,24 +9,24 @@ import os
 import numpy as np
 import pytest
 
-from openpilot.selfdrive.controls.lib.latcontrol_torque import NNTorqueModel
-from openpilot.selfdrive.controls.lib.latcontrol_torque import TORQUE_NN_MODEL_PATH
+from iqpilot.selfdrive.controls.lib.latcontrol_torque import NNTorqueModel
+from iqpilot.selfdrive.controls.lib.latcontrol_torque import TORQUE_NN_MODEL_PATH
 
 # A minimal valid NNFF model (Twilsonco format: column-vector mean/std, dense_N_W/b
 # layers). Used as a fallback so the loader logic is still exercised when no trained
 # models are shipped (they are removed pending retraining and re-added over time).
 _SYNTHETIC_MODEL = {
-  "input_size": 4,
+  "input_size": 18,
   "output_size": 1,
-  "input_mean": [[0.0], [0.0], [0.0], [0.0]],
-  "input_std": [[1.0], [1.0], [1.0], [1.0]],
+  "input_mean": [[0.0]] * 18,
+  "input_std": [[1.0]] * 18,
   "layers": [
-    {"dense_1_W": [[0.5, 0.5, 0.5, 0.5], [0.5, 0.5, 0.5, 0.5]], "dense_1_b": [[0.0], [0.0]], "activation": "sigmoid"},
+    {"dense_1_W": [[0.5] * 18, [0.5] * 18], "dense_1_b": [[0.0], [0.0]], "activation": "sigmoid"},
     {"dense_2_W": [[2.0, 2.0]], "dense_2_b": [[-1.0]], "activation": "identity"},
   ],
 }
 
-MODEL_FILES = sorted(f for f in os.listdir(TORQUE_NN_MODEL_PATH) if f.endswith(".json"))
+MODEL_FILES = sorted(f for f in os.listdir(TORQUE_NN_MODEL_PATH) if f.endswith(".json")) if os.path.isdir(TORQUE_NN_MODEL_PATH) else []
 if MODEL_FILES:
   _MODEL_DIR = TORQUE_NN_MODEL_PATH
   _NAMES = MODEL_FILES
@@ -83,7 +83,8 @@ class TestModelBehavior:
 
 
 def test_activation_registry_rejects_unknown(tmp_path):
-  base = json.load(open(_path(SAMPLE[0])))
+  with open(_path(SAMPLE[0])) as model_file:
+    base = json.load(model_file)
   base["layers"][-1]["activation"] = "not_a_real_activation"
   bad = tmp_path / "bad.json"
   bad.write_text(json.dumps(base))

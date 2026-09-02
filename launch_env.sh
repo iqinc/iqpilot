@@ -23,7 +23,7 @@ if [ -z "$AGNOS_VERSION" ]; then
 
   case "$DEVICE_MODEL" in
     *)
-      export AGNOS_VERSION="IQ.OS 4.9.1"
+      export AGNOS_VERSION="IQ.OS 4.9.7"
       ;;
   esac
 fi

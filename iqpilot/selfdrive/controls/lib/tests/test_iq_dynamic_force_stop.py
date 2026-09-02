@@ -4,8 +4,8 @@ Copyright Â© IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, license
 
 from types import SimpleNamespace
 
-from openpilot.common.realtime import DT_MDL
-from openpilot.iqpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlannerIQ
+from iqpilot.common.realtime import DT_MDL
+from iqpilot.selfdrive.controls.lib.iq_longitudinal_planner import LongitudinalPlannerIQ
 
 
 class _FakeIQDynamic:

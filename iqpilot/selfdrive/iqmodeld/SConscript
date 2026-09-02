@@ -4,7 +4,7 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 import glob
 import os
 
-Import("env", "envCython", "arch", "cereal", "messaging", "common", "visionipc")
+Import("env", "envCython", "arch", "cereal", "messaging", "common", "visionipc", "tinygrad_dir")
 lenv = env.Clone()
 lenvCython = envCython.Clone()
 
@@ -23,9 +23,7 @@ def _inject_path_define(symbol, filename):
 
 
 def _tinygrad_sources():
-  root = env.Dir("#tinygrad_repo").relpath
-  workspace = env.Dir("#").abspath
-  return ["#" + path for path in glob.glob(root + "/**", recursive=True, root_dir=workspace) if "pycache" not in path]
+  return [path for path in glob.glob(tinygrad_dir + "/**", recursive=True) if "pycache" not in path]
 
 
 def _present_models():
@@ -84,13 +82,12 @@ _queue_metadata_generation(present_models, tinygrad_files)
 
 
 def tg_compile(flags, model_name):
-  pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
   fn = File(f"models/{model_name}").abspath
   return lenv.Command(
     fn + "_tinygrad.pkl",
     [fn + ".onnx"] + tinygrad_files,
     lenv.PrettyAction(
-      f'${{PYWARN}} {pythonpath_string} {flags} python3 {Dir("#tinygrad_repo").abspath}/examples/openpilot/compile3.py {fn}.onnx {fn}_tinygrad.pkl',
+      f'${{PYWARN}} {flags} python3 {Dir("#iqpilot/selfdrive/iqmodeld/tools").abspath}/compile_model.py {fn}.onnx {fn}_tinygrad.pkl',
       'MODEL', logfile='${TARGET}.log')
   )
 
@@ -98,22 +95,21 @@ def tg_compile(flags, model_name):
 for model_name in present_models:
   tg_compile(_tinygrad_flags(), model_name)
 
-from openpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
-from openpilot.common.transformations.model import MEDMODEL_INPUT_SIZE
+from iqpilot.common.transformations.camera import _ar_ox_fisheye, _os_fisheye
+from iqpilot.common.transformations.model import MEDMODEL_INPUT_SIZE
 
 FUSED_CAMERA_CONFIGS = [(_ar_ox_fisheye.width, _ar_ox_fisheye.height), (_os_fisheye.width, _os_fisheye.height)]
 FUSED_FRAME_SKIP = 4
 
 
 def tg_compile_fused(file_prefix, flags):
-  pythonpath_string = 'PYTHONPATH="${PYTHONPATH}:' + env.Dir("#tinygrad_repo").abspath + '"'
   model_dir = Dir("models").abspath
   model_w, model_h = MEDMODEL_INPUT_SIZE
   camera_args = " ".join(f"{cw}x{ch}" for cw, ch in FUSED_CAMERA_CONFIGS)
   out_pkl = File(f"models/{file_prefix}driving_fused_tinygrad.pkl").abspath
   onnx_deps = [File(f"models/{file_prefix}{model_name}.onnx") for model_name in FUSED_TRIPLET]
   cmd = (
-    f'${{PYWARN}} {pythonpath_string} {flags} python3 {Dir("#iqpilot/selfdrive/iqmodeld/tools").abspath}/compile_daemon.py '
+    f'${{PYWARN}} {flags} python3 {Dir("#iqpilot/selfdrive/iqmodeld/tools").abspath}/compile_daemon.py '
     f'--model-size {model_w}x{model_h} --camera-resolutions {camera_args} '
     f'--vision-onnx {model_dir}/{file_prefix}driving_vision.onnx '
     f'--off-policy-onnx {model_dir}/{file_prefix}driving_off_policy.onnx '

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from cereal import custom
-import openpilot.iqpilot.selfdrive.controls.lib.helpers.nav_torque_pulse as nav_pulse
-from openpilot.iqpilot.selfdrive.controls.lib.helpers.nav_torque_pulse import (
+from iqpilot.cereal import custom
+import iqpilot.selfdrive.controls.lib.helpers.nav_torque_pulse as nav_pulse
+from iqpilot.selfdrive.controls.lib.helpers.nav_torque_pulse import (
   NavTorquePulseBrain, TURN_PULSE_FRAMES, EXIT_PULSE_FRAMES)
 
 

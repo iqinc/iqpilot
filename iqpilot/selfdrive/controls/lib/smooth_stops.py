@@ -4,8 +4,8 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 Original concept and implementation by SpysyWeeb (github.com/SpysyWeeb)
 """
 from iqdbc.car.interfaces import ACCEL_MIN
-from openpilot.common.params import Params
-from openpilot.common.realtime import DT_CTRL
+from iqpilot.common.params import Params
+from iqpilot.common.realtime import DT_CTRL
 
 STANDSTILL_SPEED = 0.05
 STANDSTILL_HOLD_SPEED = 0.15

@@ -25,9 +25,9 @@ Two mechanisms share the param:
 import numpy as np
 
 from iqdbc.car.interfaces import ACCEL_MIN
-from openpilot.common.params import Params
-from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.modeld.constants import ModelConstants
+from iqpilot.common.params import Params
+from iqpilot.common.realtime import DT_MDL
+from iqpilot.selfdrive.iqmodeld.config import ModelConstants
 
 CUSTOM_STOP_DISTANCE_PARAM = "IQCustomStopDistance"
 MIN_DISTANCE_M = -2

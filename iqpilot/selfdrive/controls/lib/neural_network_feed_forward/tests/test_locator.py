@@ -10,7 +10,13 @@ import os
 import pytest
 
 from iqdbc.car import structs
-import openpilot.selfdrive.controls.lib.latcontrol_torque as locator
+import iqpilot.selfdrive.controls.lib.latcontrol_torque as locator
+
+
+def test_packaged_substitute_table():
+  assert locator.TORQUE_NN_MODEL_SUBSTITUTE_PATH.is_file()
+  assert locator._substitute_for("MAZDA_3") == "MAZDA_CX9_2021"
+  assert locator._substitute_for("UNKNOWN") == "UNKNOWN"
 
 
 @pytest.fixture
@@ -83,3 +89,13 @@ def test_short_eps_fw_ignored(model_dir):
   # a 3-char-or-less fw string is not used to build the candidate
   path, name, _ = locator.get_nn_model_path(make_cp("HONDA_CIVIC", eps_fw=b"ab"))
   assert name == "HONDA_CIVIC"
+
+
+def test_missing_model_directory_falls_back(model_dir, tmp_path, monkeypatch):
+  missing = tmp_path / "missing"
+  monkeypatch.setattr(locator, "TORQUE_NN_MODEL_PATH", str(missing))
+  monkeypatch.setattr(locator, "MOCK_MODEL_PATH", str(missing / "MOCK.json"))
+  path, name, exact = locator.get_nn_model_path(make_cp("HONDA_CIVIC"))
+  assert path == locator.MOCK_MODEL_PATH
+  assert name == "MOCK"
+  assert exact is False

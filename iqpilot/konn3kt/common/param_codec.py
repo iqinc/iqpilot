@@ -1,15 +1,11 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-Serialises openpilot params to/from their on-wire byte form for backup transport.
-The byte encoding is unchanged so archives round-trip: BYTES pass through, JSON is
-json-encoded, everything else is str()'d; decoding is typed per the param's key.
 """
 import base64
 import gzip
 import json
 
-from openpilot.common.params import Params, ParamKeyType
+from iqpilot.common.params import Params, ParamKeyType
 
 
 def encode_param(name: str, params=None, use_default: bool = False) -> bytes | None:
@@ -26,7 +22,6 @@ def encode_param(name: str, params=None, use_default: bool = False) -> bytes | N
   return str(raw).encode("utf-8")
 
 
-# text-form decoders keyed by param type; anything unlisted is left as the raw string
 _FROM_TEXT = {
   ParamKeyType.STRING: lambda s: s,
   ParamKeyType.BOOL: lambda s: s.lower() in ("true", "1", "yes"),

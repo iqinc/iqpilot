@@ -1,10 +1,10 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
-from cereal import car
+from iqpilot.cereal import car
 
-from openpilot.common.constants import CV
-from openpilot.common.params import Params
+from iqpilot.common.constants import CV
+from iqpilot.common.params import Params
 
 
 class SignalPauseEngine:

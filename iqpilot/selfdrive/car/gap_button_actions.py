@@ -1,13 +1,9 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-Maps the distance/gap steering-wheel button to an IQ.Pilot action: holding it for
-long enough toggles Experimental mode exactly once per hold. Only active when
-IQ.Pilot owns longitudinal control and cruise is available.
 """
-from cereal import car, custom
+from iqpilot.cereal import car, custom
 from iqdbc.car import structs
-from openpilot.common.params import Params
+from iqpilot.common.params import Params
 
 _Button = car.CarState.ButtonEvent.Type
 _IQEvent = custom.IQOnroadEvent.EventName

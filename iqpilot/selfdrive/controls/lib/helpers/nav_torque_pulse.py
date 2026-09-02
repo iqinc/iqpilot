@@ -6,8 +6,8 @@ turns and highway exits. This is a lateral-control add-on driven by iqNavState;
 it is independent of the feed-forward model and is off by default.
 """
 import numpy as np
-import cereal.messaging as messaging
-from cereal import custom
+import iqpilot.cereal.messaging as messaging
+from iqpilot.cereal import custom
 
 TURN_NUDGE_TORQUE = 0.8
 EXIT_NUDGE_TORQUE = 0.6

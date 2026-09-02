@@ -17,7 +17,7 @@ Intent produced:
   radarSetSpeedKph  OP set speed to sync the radar's ACA_V_Wunsch toward
   radarGapBars      OP follow-distance bars to mirror to the radar
 """
-from openpilot.common.constants import CV
+from iqpilot.common.constants import CV
 
 CANCEL_CEIL_MS = 1.0 * CV.KPH_TO_MS  # cancel the radar at/below 1 kph (it can still see speed -> would fault)
 

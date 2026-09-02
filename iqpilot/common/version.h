@@ -1,1 +1,1 @@
-#define IQPILOT_VERSION "IQ.Pilot 1.0c"
+#define COMMA_VERSION "IQ.Pilot 1.0c"

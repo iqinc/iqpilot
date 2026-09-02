@@ -9,8 +9,8 @@ import time
 
 import numpy as np
 
-import cereal.messaging as messaging
-from openpilot.system.manager.process_config import managed_processes
+import iqpilot.cereal.messaging as messaging
+from iqpilot.system.manager.process_config import managed_processes
 
 RUN_COUNT = int(os.getenv("N", "5"))
 WINDOW_SECONDS = int(os.getenv("TIME", "30"))

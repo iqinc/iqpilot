@@ -1,5 +1,8 @@
-from openpilot.iqpilot.selfdrive.iqmodeld import metadata, messaging, parser
-from openpilot.iqpilot.selfdrive.iqmodeld.daemon import CaptureStamp, NeuralEngineState
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
+from iqpilot.selfdrive.iqmodeld import metadata, messaging, parser
+from iqpilot.selfdrive.iqmodeld.daemon import CaptureStamp, NeuralEngineState
 
 
 def test_public_module_surface():

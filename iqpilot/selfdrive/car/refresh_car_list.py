@@ -2,9 +2,9 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
-from openpilot.common.params import Params
-from openpilot.common.swaglog import cloudlog
-from openpilot.iqpilot.selfdrive.car.vehicle_catalog import load_catalog
+from iqpilot.common.params import Params
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.selfdrive.car.vehicle_catalog import load_catalog
 
 
 def refresh_car_list_param() -> None:

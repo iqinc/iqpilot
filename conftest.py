@@ -3,21 +3,17 @@ import gc
 import os
 import pytest
 
-from openpilot.common.prefix import OpenpilotPrefix
-from openpilot.system.manager import manager
-from openpilot.system.hardware import TICI, HARDWARE
+from iqpilot.common.prefix import OpenpilotPrefix
+from iqpilot.system.manager import manager
+from iqpilot.system.hardware import TICI, HARDWARE
 
-# TODO: pytest-cpp doesn't support FAIL, and we need to create test translations in sessionstart
-# pending https://github.com/pytest-dev/pytest-cpp/pull/147
 collect_ignore = [
-  "selfdrive/ui/tests/test_translations",
-  "selfdrive/test/process_replay/test_processes.py",
-  "selfdrive/test/process_replay/test_regen.py",
+  "iqpilot/selfdrive/test/process_replay/test_processes.py",
+  "iqpilot/selfdrive/test/process_replay/test_regen.py",
 ]
 collect_ignore_glob = [
-  "selfdrive/debug/*.py",
-  "selfdrive/modeld/*.py",
-  "iqpilot/modeld*/*.py",
+  "iqpilot/selfdrive/debug/*.py",
+  "iqpilot/selfdrive/dmonitoringmodeld/*.py",
 ]
 
 
@@ -49,6 +45,10 @@ def clean_env():
 @pytest.fixture(scope="function", autouse=True)
 def openpilot_function_fixture(request):
   with clean_env():
+    log_root = os.environ.get("LOG_ROOT")
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if log_root is not None and worker is not None:
+      os.environ["LOG_ROOT"] = os.path.join(log_root, worker)
     # setup a clean environment for each test
     with OpenpilotPrefix(shared_download_cache=request.node.get_closest_marker("shared_download_cache") is not None) as prefix:
       prefix = os.environ["OPENPILOT_PREFIX"]
@@ -86,22 +86,34 @@ def tici_setup_fixture(request, openpilot_function_fixture):
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-  skipper = pytest.mark.skip(reason="Skipping tici test on PC")
+  inventory_tici = config.option.collectonly and os.environ.get("IQPILOT_TEST_INVENTORY") == "1"
+  deselected = []
+  selected = []
   for item in items:
-    if "tici" in item.keywords:
-      if not TICI:
-        item.add_marker(skipper)
-      else:
-        item.fixturenames.append('tici_setup_fixture')
+    if item.get_closest_marker("tici") is not None and not TICI and not inventory_tici:
+      deselected.append(item)
+      continue
+    selected.append(item)
+
+    if item.get_closest_marker("tici") is not None and not inventory_tici:
+      item.fixturenames.append('tici_setup_fixture')
 
     if "xdist_group_class_property" in item.keywords:
       class_property_name = item.get_closest_marker('xdist_group_class_property').args[0]
       class_property_value = getattr(item.cls, class_property_name)
       item.add_marker(pytest.mark.xdist_group(class_property_value))
 
+  if deselected:
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):
+  if os.environ.get("COVERAGE_PROCESS_START"):
+    import coverage
+    coverage.process_startup()
+
   config_line = "xdist_group_class_property: group tests by a property of the class that contains them"
   config.addinivalue_line("markers", config_line)
 

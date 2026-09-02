@@ -93,7 +93,7 @@ def deviceStage(String stageName, String deviceType, List extra_env, def steps) 
           retry (3) {
             def date = sh(script: 'date', returnStdout: true).trim();
             device(device_ip, "set time", "date -s '" + date + "'")
-            device(device_ip, "git checkout", extra + "\n" + readFile("selfdrive/test/setup_device_ci.sh"))
+            device(device_ip, "git checkout", extra + "\n" + readFile("iqpilot/selfdrive/test/setup_device_ci.sh"))
           }
           steps.each { item ->
             def name = item[0]
@@ -202,61 +202,63 @@ node {
     parallel (
       'onroad tests': {
         deviceStage("onroad", "tizi-needs-can", ["UNSAFE=1"], [
-          step("build openpilot", "cd system/manager && ./build.py"),
+          step("build openpilot", "cd iqpilot/system/manager && ./build.py"),
           step("check dirty", "release/check-dirty.sh"),
-          step("onroad tests", "pytest selfdrive/test/test_onroad.py -s", [timeout: 60]),
+          step("onroad tests", "pytest iqpilot/selfdrive/test/test_onroad.py -s", [timeout: 60]),
         ])
       },
       'HW + Unit Tests': {
         deviceStage("tizi-hardware", "tizi-common", ["UNSAFE=1"], [
-          step("build", "cd system/manager && ./build.py"),
-          step("test pandad", "pytest selfdrive/pandad/tests/test_pandad.py", [diffPaths: ["panda", "selfdrive/pandad/"]]),
-          step("test power draw", "pytest -s system/hardware/tici/tests/test_power_draw.py"),
-          step("test encoder", "LD_LIBRARY_PATH=/usr/local/lib pytest system/loggerd/tests/test_encoder.py", [diffPaths: ["system/loggerd/"]]),
-          step("test manager", "pytest system/manager/test/test_manager.py"),
+          step("audit proprietary entrypoints", "python3 scripts/iqpilot/audit_proprietary_entrypoints.py --check"),
+          step("audit proprietary runtime", "python3 scripts/iqpilot/audit_proprietary_runtime.py"),
+          step("build", "cd iqpilot/system/manager && ./build.py"),
+          step("test pandad", "pytest iqpilot/selfdrive/pandad/tests/test_pandad.py", [diffPaths: ["panda", "iqpilot/selfdrive/pandad/"]]),
+          step("test power draw", "pytest -s iqpilot/system/hardware/tici/tests/test_power_draw.py"),
+          step("test encoder", "LD_LIBRARY_PATH=/usr/local/lib pytest iqpilot/system/loggerd/tests/test_encoder.py", [diffPaths: ["iqpilot/system/loggerd/"]]),
+          step("test manager", "pytest iqpilot/system/manager/test/test_manager.py"),
         ])
       },
       'loopback': {
         deviceStage("loopback", "tizi-loopback", ["UNSAFE=1"], [
-          step("build openpilot", "cd system/manager && ./build.py"),
-          step("test pandad loopback", "pytest selfdrive/pandad/tests/test_pandad_loopback.py"),
+          step("build openpilot", "cd iqpilot/system/manager && ./build.py"),
+          step("test pandad loopback", "pytest iqpilot/selfdrive/pandad/tests/test_pandad_loopback.py"),
         ])
       },
       'camerad OX03C10': {
         deviceStage("OX03C10", "tizi-ox03c10", ["UNSAFE=1"], [
-          step("build", "cd system/manager && ./build.py"),
-          step("test camerad", "pytest system/camerad/test/test_camerad.py", [timeout: 60]),
-          step("test exposure", "pytest system/camerad/test/test_exposure.py"),
+          step("build", "cd iqpilot/system/manager && ./build.py"),
+          step("test camerad", "pytest iqpilot/system/camerad/test/test_camerad.py", [timeout: 60]),
+          step("test exposure", "pytest iqpilot/system/camerad/test/test_exposure.py"),
         ])
       },
       'camerad OS04C10': {
         deviceStage("OS04C10", "tici-os04c10", ["UNSAFE=1"], [
-          step("build", "cd system/manager && ./build.py"),
-          step("test camerad", "pytest system/camerad/test/test_camerad.py", [timeout: 60]),
-          step("test exposure", "pytest system/camerad/test/test_exposure.py"),
+          step("build", "cd iqpilot/system/manager && ./build.py"),
+          step("test camerad", "pytest iqpilot/system/camerad/test/test_camerad.py", [timeout: 60]),
+          step("test exposure", "pytest iqpilot/system/camerad/test/test_exposure.py"),
         ])
       },
       'sensord': {
         deviceStage("LSM + MMC", "tizi-lsmc", ["UNSAFE=1"], [
-          step("build", "cd system/manager && ./build.py"),
-          step("test sensord", "pytest system/sensord/tests/test_sensord.py"),
+          step("build", "cd iqpilot/system/manager && ./build.py"),
+          step("test sensord", "pytest iqpilot/system/sensord/tests/test_sensord.py"),
         ])
       },
       'replay': {
         deviceStage("model-replay", "tizi-replay", ["UNSAFE=1"], [
-          step("build", "cd system/manager && ./build.py", [diffPaths: ["selfdrive/modeld/", "tinygrad_repo", "selfdrive/test/process_replay/model_replay.py"]]),
-          step("model replay", "selfdrive/test/process_replay/model_replay.py", [diffPaths: ["selfdrive/modeld/", "tinygrad_repo", "selfdrive/test/process_replay/model_replay.py"]]),
+          step("build", "cd iqpilot/system/manager && ./build.py", [diffPaths: ["iqpilot/selfdrive/dmonitoringmodeld/", "iqpilot/selfdrive/iqmodeld/", "pyproject.toml", "iqpilot/selfdrive/test/process_replay/model_replay.py"]]),
+          step("model replay", "iqpilot/selfdrive/test/process_replay/model_replay.py", [diffPaths: ["iqpilot/selfdrive/dmonitoringmodeld/", "iqpilot/selfdrive/iqmodeld/", "pyproject.toml", "iqpilot/selfdrive/test/process_replay/model_replay.py"]]),
         ])
       },
       'tizi': {
         deviceStage("tizi", "tizi", ["UNSAFE=1"], [
-          step("build openpilot", "cd system/manager && ./build.py"),
-          step("test pandad loopback", "SINGLE_PANDA=1 pytest selfdrive/pandad/tests/test_pandad_loopback.py"),
-          step("test pandad spi", "pytest selfdrive/pandad/tests/test_pandad_spi.py"),
-          step("test amp", "pytest system/hardware/tici/tests/test_amplifier.py"),
+          step("build openpilot", "cd iqpilot/system/manager && ./build.py"),
+          step("test pandad loopback", "SINGLE_PANDA=1 pytest iqpilot/selfdrive/pandad/tests/test_pandad_loopback.py"),
+          step("test pandad spi", "pytest iqpilot/selfdrive/pandad/tests/test_pandad_spi.py"),
+          step("test amp", "pytest iqpilot/system/hardware/tici/tests/test_amplifier.py"),
           // TODO: enable once new AGNOS is available
-          // step("test esim", "pytest system/hardware/tici/tests/test_esim.py"),
-          step("test qcomgpsd", "pytest system/qcomgpsd/tests/test_qcomgpsd.py", [diffPaths: ["system/qcomgpsd/"]]),
+          // step("test esim", "pytest iqpilot/system/hardware/tici/tests/test_esim.py"),
+          step("test qcomgpsd", "pytest iqpilot/system/qcomgpsd/tests/test_qcomgpsd.py", [diffPaths: ["iqpilot/system/qcomgpsd/"]]),
         ])
       },
 

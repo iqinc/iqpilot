@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from openpilot.common.swaglog import cloudlog
+from iqpilot.common.swaglog import cloudlog
 
 K3_SLC_LOG_FILE = "/data/openpilot/k3_slc.txt"
 

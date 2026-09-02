@@ -3,8 +3,8 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 """
 from __future__ import annotations
 
-from openpilot.common.constants import CV
-from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
+from iqpilot.common.constants import CV
+from iqpilot.selfdrive.car.cruise import V_CRUISE_MAX
 
 from iqdbc.car import structs
 

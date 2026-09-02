@@ -13,12 +13,12 @@ except Exception:
 import pyray as rl
 import requests
 
-from openpilot.common.basedir import BASEDIR
-from openpilot.common.iq_perf import PerfSample, PerfTraceEmitter
-from openpilot.common.params import Params, UnknownKeyName
-from openpilot.selfdrive.ui.lib.nav_helpers import current_or_last_gps_position, resolve_mapbox_token
-from openpilot.selfdrive.ui.lib.local_routes import utc_offset_hours
-from openpilot.iqpilot.ui.onroad.offline_tiles import (
+from iqpilot.common.basedir import BASEDIR
+from iqpilot.common.iq_perf import PerfSample, PerfTraceEmitter
+from iqpilot.common.params import Params, UnknownKeyName
+from iqpilot.selfdrive.ui.lib.nav_helpers import current_or_last_gps_position, resolve_mapbox_token
+from iqpilot.selfdrive.ui.lib.local_routes import utc_offset_hours
+from iqpilot.ui.onroad.offline_tiles import (
   find_offline_mbtiles_path,
   find_offline_xyz_root,
   load_raster_tile_blob,
@@ -28,7 +28,7 @@ from openpilot.iqpilot.ui.onroad.offline_tiles import (
   open_mbtiles,
   xyz_zoom_bounds,
 )
-from openpilot.iqpilot.ui.onroad.nav_map_utils import (
+from iqpilot.ui.onroad.nav_map_utils import (
   build_mapbox_tile_url,
   choose_nav_camera,
   mercator_world_px_at_zoom,
@@ -36,11 +36,11 @@ from openpilot.iqpilot.ui.onroad.nav_map_utils import (
   project_nav_polyline,
   solar_elevation_deg,
 )
-from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.lib.wrap_text import wrap_text
-from openpilot.system.ui.widgets import Widget
+from iqpilot.selfdrive.ui.ui_state import ui_state
+from iqpilot.system.ui.lib.application import gui_app, FontWeight
+from iqpilot.system.ui.lib.text_measure import measure_text_cached
+from iqpilot.system.ui.lib.wrap_text import wrap_text
+from iqpilot.system.ui.widgets import Widget
 
 PANEL_WIDTH = 560
 PANEL_HEIGHT = 600
@@ -52,7 +52,7 @@ SPLIT_HEADER_HEIGHT = 160
 SPLIT_FOOTER_HEIGHT = 112
 # parents[4] pointed one level above the repo (stock selfdrive/assets has no nav icons),
 # so the maneuver arrow never loaded anywhere — anchor to BASEDIR instead
-ICON_ASSET_DIR = Path(BASEDIR) / "iqpilot" / "selfdrive" / "assets" / "navigation"
+ICON_ASSET_DIR = Path(BASEDIR) / "iqpilot" / "iqpilot" / "selfdrive" / "assets" / "navigation"
 STAT_GAP = 10
 TILE_SIZE = 256
 # env-overridable GPU-texture footprint levers; CACHE_LIMIT must stay >= the keep-set (~(visible + 2*margin)^2)

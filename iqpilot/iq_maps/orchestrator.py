@@ -12,39 +12,23 @@ import threading
 import time
 from datetime import datetime
 
-import cereal.messaging as messaging
-from cereal import custom
-from openpilot.common.params import Params
-from openpilot.common.realtime import Ratekeeper, config_realtime_process
-from openpilot.common.swaglog import cloudlog
-from openpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
-from openpilot.system.hardware.hw import Paths
-from openpilot.iqpilot.iq_maps import VENDOR_MAPD_BIN_DIR, VENDOR_MAPD_PATH
-from openpilot.iqpilot.iq_maps.tile_bundle_downloader import TileBundleDownloader, region_bundle_installed
-from openpilot.iqpilot.iq_maps.vendor_mapd_installer import VendorMapdInstaller
+import iqpilot.cereal.messaging as messaging
+from iqpilot.cereal import custom
+from iqpilot.common.params import Params
+from iqpilot.common.realtime import Ratekeeper, config_realtime_process
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
+from iqpilot.system.hardware.hw import Paths
+from iqpilot.iq_maps import VENDOR_MAPD_BIN_DIR, VENDOR_MAPD_PATH
+from iqpilot.iq_maps.tile_bundle_downloader import TileBundleDownloader, region_bundle_installed
+from iqpilot.iq_maps.vendor_mapd_installer import VendorMapdInstaller
 
 OfflineMapAction = custom.MapdInputType
 _region_sync_worker: threading.Thread | None = None
 
-# mapd_manager only runs offroad (process_config.only_offroad) and the onroad
-# NativeProcess("mapd", ...) is started the instant `started` flips True. If a
-# vendor-map download is in flight at that exact moment, the two `mapd`
-# binaries end up pointed at the same Paths.mapd_root() tile directory at the
-# same time: this one still downloading/writing, the onroad one already
-# mmap-reading. Manager only sends SIGINT/SIGTERM to stop mapd_manager, which
-# by default only interrupts the main thread — the background download thread
-# and the vendor `mapd` subprocess it spawned are otherwise orphaned and keep
-# writing into the tile directory the onroad reader just opened, which is what
-# was segfaulting (-12) the onroad process in a tight restart loop. The lock +
-# pidfile below make sure that subprocess is always killed (on clean shutdown
-# via the signal handlers, and on the next boot if this process itself got
-# SIGKILLed) before anything else is allowed to read the tile directory.
 _active_proc_lock = threading.Lock()
 _active_proc: subprocess.Popen | None = None
 _shutdown = threading.Event()
-# Display-tile bundles for the offline on-screen map (separate asset from mapd's routing
-# data). Downloaded after the mapd fetch in the same worker so a region selection installs
-# both, and independently restorable when only the tile bundle is missing.
 _tile_downloader: TileBundleDownloader | None = None
 
 
@@ -62,7 +46,6 @@ def _pid_is_vendor_fetch(pid: int) -> bool:
 
 
 def _reap_orphaned_vendor_fetch() -> None:
-  """Kill any vendor-fetch mapd subprocess left running from a prior, uncleanly-terminated run."""
   pidfile = _vendor_fetch_pidfile()
   try:
     with open(pidfile) as f:
@@ -121,19 +104,11 @@ def _install_signal_handlers() -> None:
   signal.signal(signal.SIGTERM, _handle_shutdown_signal)
 
 
-class _QuietSpinner:
-  def update(self, *args, **kwargs) -> None:
-    pass
-
-  def close(self, *args, **kwargs) -> None:
-    pass
-
-
 def ensure_vendor_runtime() -> None:
   try:
-    VendorMapdInstaller(_QuietSpinner()).check_and_download()
+    VendorMapdInstaller().verify()
   except Exception:
-    cloudlog.exception("iq_maps: vendor runtime install/download failed")
+    cloudlog.exception("iq_maps: vendor runtime verification failed")
 
 params = Params()
 mem_params = Params("/dev/shm/params") if platform.system() != "Darwin" else params
@@ -179,10 +154,6 @@ def _compose_region_selector(nations: list[str], states: list[str] | None = None
 
 
 def _fetch_tile_bundles(region_selector: str, abort_check=None) -> None:
-  """Download the offline on-screen map display tiles for the selected regions.
-
-  Separate asset from mapd's routing data: the on-screen map's OsmOfflineProvider reads
-  raster .mbtiles bundles, so a region selection installs both when OfflineOSMaps is on."""
   global _tile_downloader
   if not params.get_bool("OfflineOSMaps"):
     return
@@ -245,8 +216,6 @@ def _drive_vendor_fetch(region_selector: str, requested_regions: dict) -> None:
         break
     cloudlog.info(f"iq_maps: vendor map download finished for {region_selector}")
     if not cancelled and not _shutdown.is_set():
-      # OSMDownloadLocations stays set until the finally below, so the konn3kt cancel RPC
-      # (which removes it) aborts the tile phase exactly like it cancels the mapd phase.
       _fetch_tile_bundles(region_selector, abort_check=lambda: _shutdown.is_set() or not mem_params.get("OSMDownloadLocations"))
   except Exception:
     cloudlog.exception("iq_maps: vendor map download failed")
@@ -310,17 +279,12 @@ _last_auto_restore_t = 0.0
 
 
 def region_data_missing() -> bool:
-  # a media wipe (reflash/format) can delete the downloaded region while the params
-  # that configure offline maps survive; mapd then retries the missing files forever
-  # and nothing re-downloads (stale_region_artifacts only sees leftover files)
   if not params.get_bool("OsmLocal"):
     return False
   if not params.get("OsmDownloadedDate"):
     return False
   if glob.glob(f"{Paths.mapd_root()}/db") or glob.glob(f"{Paths.mapd_root()}/v*"):
     return False
-  # mapd v2 stores region tiles under offline/<evenLat>/<evenLon>.tar.gz — without this
-  # check a v2 install looks perpetually wiped and re-downloads every backoff interval
   if glob.glob(f"{Paths.mapd_root()}/offline/*/*"):
     return False
   country = params.get("OsmLocationName", return_default=True)
@@ -328,8 +292,6 @@ def region_data_missing() -> bool:
 
 
 def configured_states() -> list[str]:
-  """Selected US states: OsmStateNames (JSON list, multi-state) wins; the legacy
-  single OsmStateName remains the fallback for pre-list configs."""
   try:
     states = params.get("OsmStateNames")
     if isinstance(states, bytes):
@@ -376,8 +338,6 @@ def _configured_region_selector() -> str:
 
 
 def tile_bundles_missing() -> bool:
-  # covers a media wipe AND the user enabling OfflineOSMaps after the region download
-  # already ran (the vendor fetch only pulls tile bundles when the toggle is on)
   if not params.get_bool("OfflineOSMaps"):
     return False
   selector = _configured_region_selector()
@@ -387,8 +347,6 @@ def tile_bundles_missing() -> bool:
 
 
 def maybe_restore_tile_bundles() -> None:
-  """Tile-only download: don't re-run the whole mapd vendor fetch when only the display
-  tiles are missing."""
   global _last_tile_restore_t, _tile_only_worker
   if not tile_bundles_missing():
     return
@@ -416,9 +374,6 @@ def sync_osm_request_flags() -> None:
   maybe_restore_tile_bundles()
   if params.get_bool("OsmDbUpdatesCheck"):
     if _region_sync_worker is not None and _region_sync_worker.is_alive():
-      # A download is already writing into Paths.mapd_root() - deleting/rewriting
-      # files under it right now would race the writer (and any onroad mapd
-      # reader) the same way the orphaned-subprocess bug did. Wait for it to finish.
       return
     purge_stale_region_artifacts(stale_region_artifacts())
     country = params.get("OsmLocationName", return_default=True)
@@ -445,11 +400,6 @@ def run_loop():
     pass
   except PermissionError:
     cloudlog.exception(f"iq_maps: failed to make {Paths.mapd_root()}")
-
-  # A prior run that got SIGKILLed (or crashed) may have left its vendor-fetch
-  # mapd subprocess running and still writing into Paths.mapd_root(); clear it
-  # before anything (including the onroad mapd, once `started` flips) reads
-  # from that directory. Signal handlers cover the graceful-shutdown path.
   _reap_orphaned_vendor_fetch()
   _install_signal_handlers()
 

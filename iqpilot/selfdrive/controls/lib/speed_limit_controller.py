@@ -11,13 +11,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-from cereal import car, custom
-from openpilot.common.constants import CV
-from openpilot.common.realtime import DT_MDL
-from openpilot.common.swaglog import cloudlog
-from openpilot.iqpilot.common.k3_slc_log import k3_slc_log
-from openpilot.iqpilot.common.slc_utilities import calculate_bearing_offset, is_url_pingable
-from openpilot.iqpilot.common.slc_variables import FREE_MAPBOX_REQUESTS, OFFSET_MAP_IMPERIAL, OFFSET_MAP_METRIC, OFFSET_PERCENT_MAX
+from iqpilot.cereal import car, custom
+from iqpilot.common.constants import CV
+from iqpilot.common.realtime import DT_MDL
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.common.k3_slc_log import k3_slc_log
+from iqpilot.common.slc_utilities import calculate_bearing_offset, is_url_pingable
+from iqpilot.common.slc_variables import FREE_MAPBOX_REQUESTS, OFFSET_MAP_IMPERIAL, OFFSET_MAP_METRIC, OFFSET_PERCENT_MAX
 
 try:
   import requests
@@ -261,10 +261,11 @@ class IQSpeedLimitAssist:
       for btn in sm["carState"].buttonEvents:
         if btn.pressed:
           continue
-        if is_lower and btn.type in CONFIRM_LOWER_BUTTONS:
+        button_type = getattr(btn.type, "raw", btn.type)
+        if is_lower and button_type in CONFIRM_LOWER_BUTTONS:
           confirmed = True
           break
-        elif not is_lower and btn.type in CONFIRM_HIGHER_BUTTONS:
+        elif not is_lower and button_type in CONFIRM_HIGHER_BUTTONS:
           confirmed = True
           break
     except (AttributeError, TypeError):
@@ -314,6 +315,10 @@ class SpeedLimitController:
 
     self.override_slc = False
     self.overridden_speed = 0.0
+    self._last_override_request_id = 0
+    self._blocked_override_gesture = 0
+    self._override_limit = None
+    self._override_set_speed = False
 
     self._resolved_limit = 0.0
     self._resolved_source = "None"
@@ -375,8 +380,9 @@ class SpeedLimitController:
 
   def _resolve_tomtom_token(self) -> str:
     try:
-      from openpilot.iqpilot.navd.runtime_common import resolve_tomtom_token
-      return resolve_tomtom_token(self.params) or ""
+      from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
+      runtime_common = import_verified_module("iqpilot_navd_private", "iqpilot_private.navd.runtime_common")
+      return runtime_common.resolve_tomtom_token(self.params) or ""
     except Exception:
       tok = self.params.get("TomTomToken")
       return (tok.decode("utf-8") if isinstance(tok, bytes) else (tok or "")).strip()
@@ -505,7 +511,7 @@ class SpeedLimitController:
       self.segment_distance = 0.0
       return
 
-    steer_angle = sm["carState"].steeringAngleDeg - sm["liveParameters"].angleOffsetDeg
+    steer_angle = sm["carState"].steeringAngleDeg - sm["vehicleParameters"].angleOffsetDeg
     if not self.gps_valid or not self.mapbox_token or steer_angle >= 45:
       self._log_mapbox_diag(f"SLC Mapbox skipped: gps_valid={self.gps_valid} token={bool(self.mapbox_token)} steer_angle={round(float(steer_angle), 2)}")
       self.mapbox_limit = 0.0
@@ -642,7 +648,7 @@ class SpeedLimitController:
       self.tomtom_limit = 0.0
       return
 
-    steer_angle = sm["carState"].steeringAngleDeg - sm["liveParameters"].angleOffsetDeg
+    steer_angle = sm["carState"].steeringAngleDeg - sm["vehicleParameters"].angleOffsetDeg
     if not self.gps_valid or steer_angle >= 45 or v_ego < 1:
       self.tomtom_limit = 0.0
       return
@@ -771,7 +777,15 @@ class SpeedLimitController:
       self.segment_distance = 0.0
       self.tomtom_segment_distance = 0.0
 
-    online_limit = self.tomtom_limit if self.tomtom_limit > 0 else self.mapbox_limit
+    nav_mapbox_limit = 0.0
+    if getattr(sm, "alive", {}).get("iqNavState", False) and getattr(sm, "valid", {}).get("iqNavState", False):
+      nav_state = sm["iqNavState"]
+      if getattr(nav_state, "mapboxSpeedLimitValid", False):
+        candidate = float(getattr(nav_state, "mapboxSpeedLimit", 0.0))
+        if math.isfinite(candidate) and candidate >= LIMIT_MIN_SPEED:
+          nav_mapbox_limit = candidate
+    mapbox_limit = nav_mapbox_limit if nav_mapbox_limit > 0 else self.mapbox_limit
+    online_limit = self.tomtom_limit if self.tomtom_limit > 0 else mapbox_limit
 
     dashboard_limit = float(dashboard_speed_limit) if dashboard_speed_limit else 0.0
     resolved_limit, resolved_source = self._resolver.resolve(dashboard_limit, online_limit, slc_params)
@@ -806,9 +820,44 @@ class SpeedLimitController:
       self.pending_events.append(EventNameIQ.constructionZoneDetected)
     self._czone_was_limiting = czone_limiting
 
+  def reset_override(self, sm):
+    self.override_slc = False
+    self.overridden_speed = 0.0
+    self._last_override_request_id = int(getattr(sm["iqCarState"], "slcSetSpeedRequestId", 0))
+    self._blocked_override_gesture = int(getattr(sm["iqCarState"], "slcSetSpeedGestureId", 0))
+    self._override_limit = None
+
   def update_override(self, v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm, slc_params, is_metric):
     offset = self.get_offset(is_metric)
     target = self._assist.target
+    set_speed_override = slc_params.get("speed_limit_controller_override_set_speed", False)
+    mode_changed = set_speed_override != self._override_set_speed
+    self._override_set_speed = set_speed_override
+
+    if set_speed_override:
+      request_id = int(getattr(sm["iqCarState"], "slcSetSpeedRequestId", 0))
+      gesture_id = int(getattr(sm["iqCarState"], "slcSetSpeedGestureId", 0))
+      request_speed = float(getattr(sm["iqCarState"], "slcSetSpeedRequestKph", 0.0)) * CV.KPH_TO_MS
+      new_request = request_id != self._last_override_request_id
+      limit = (target, self._assist.source)
+      reset = (mode_changed or limit != self._override_limit or self._assist.just_confirmed or
+               self._assist.state == SpeedLimitAssistState.preActive or
+               not bool(getattr(sm["selfdriveState"], "enabled", False)) or target <= 0 or self._resolved_source == "Construction")
+      cruise_speed = v_cruise + v_cruise_diff
+      above_limit = cruise_speed > target + offset + 1e-3
+      if reset or (self.override_slc and not above_limit):
+        self.reset_override(sm)
+      elif above_limit:
+        driver_increase = new_request and gesture_id != self._blocked_override_gesture and request_speed > target + offset + 1e-3
+        gas_override = sm["carState"].gasPressed and v_ego > target + offset
+        self.override_slc = self.override_slc or driver_increase or gas_override
+        self.overridden_speed = cruise_speed if self.override_slc else 0.0
+      self._last_override_request_id = request_id
+      self._override_limit = limit
+      return
+
+    if mode_changed:
+      self.reset_override(sm)
 
     self.override_slc = self.overridden_speed > target + offset > 0
     self.override_slc |= sm["carState"].gasPressed and v_ego > target + offset > 0
@@ -819,7 +868,5 @@ class SpeedLimitController:
         if sm["carState"].gasPressed:
           self.overridden_speed = max(v_ego + v_ego_diff, self.overridden_speed)
         self.overridden_speed = float(np.clip(self.overridden_speed, target + offset, v_cruise + v_cruise_diff))
-      elif slc_params.get("speed_limit_controller_override_set_speed", False):
-        self.overridden_speed = v_cruise + v_cruise_diff
     else:
       self.overridden_speed = 0.0

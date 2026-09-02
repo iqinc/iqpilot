@@ -3,8 +3,8 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 
 Original concept and implementation by SpysyWeeb (github.com/SpysyWeeb)
 """
-from openpilot.common.realtime import DT_CTRL
-from openpilot.iqpilot.selfdrive.controls.lib.smooth_stops import (
+from iqpilot.common.realtime import DT_CTRL
+from iqpilot.selfdrive.controls.lib.smooth_stops import (
   SmoothStopController,
   read_smooth_stops_enabled,
   STANDSTILL_SPEED,

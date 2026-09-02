@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from openpilot.iqpilot.selfdrive.constructiond import (
+from iqpilot.selfdrive.constructiond import (
   ANALYSIS_PERIOD,
   ENTER_HITS,
   HIT_FRAC,
@@ -108,7 +108,7 @@ def test_detector_night_luma_gates_hits():
 
 
 def test_detector_low_speed_gates_entry_but_not_hold():
-  from openpilot.iqpilot.selfdrive.constructiond import MIN_ENTER_SPEED
+  from iqpilot.selfdrive.constructiond import MIN_ENTER_SPEED
   det = ConstructionZoneDetector()
   # parked/lot speeds: orange never enters
   for i in range(20):

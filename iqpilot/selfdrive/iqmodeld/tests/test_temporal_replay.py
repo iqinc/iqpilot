@@ -1,3 +1,6 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,9 +9,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-import openpilot.iqpilot.selfdrive.iqmodeld.models.helpers as bundle_helpers
-import openpilot.iqpilot.selfdrive.iqmodeld.models.runners.model_runner as runner_helpers
-import openpilot.iqpilot.selfdrive.iqmodeld.daemon as iqmodeld_daemon
+import iqpilot.selfdrive.iqmodeld.models.helpers as bundle_helpers
+import iqpilot.selfdrive.iqmodeld.models.runners.model_runner as runner_helpers
+import iqpilot.selfdrive.iqmodeld.daemon as iqmodeld_daemon
 
 
 @dataclass

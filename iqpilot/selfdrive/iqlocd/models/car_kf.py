@@ -1,75 +1,63 @@
-#!/usr/bin/env python3
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
+"""
+
 import math
-import sys
 from typing import Any
 
 import numpy as np
 
-from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
-from openpilot.iqpilot.selfdrive.iqlocd.models.constants import ObservationKind
-from openpilot.common.swaglog import cloudlog
-
-from rednose.helpers.kalmanfilter import KalmanFilter
-
-if __name__ == '__main__':  # Generating sympy
-  import sympy as sp
-  from rednose.helpers.ekf_sym import gen_code
-else:
-  from rednose.helpers.ekf_sym_pyx import EKF_sym_pyx
-
-
-i = 0
-
-def _slice(n):
-  global i
-  s = slice(i, i + n)
-  i += n
-
-  return s
+from iqpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
+from iqpilot.selfdrive.iqlocd.models.constants import ObservationKind
+from iqpilot.selfdrive.state_estimation import EstimatorModel, ModelDefinition, StateEstimator
+try:
+  from iqpilot.selfdrive.state_estimation.native_binding_pyx import car_predict, car_update
+except ModuleNotFoundError:
+  car_predict = None
+  car_update = None
 
 
 class States:
-  # Vehicle model params
-  STIFFNESS = _slice(1)  # [-]
-  STEER_RATIO = _slice(1)  # [-]
-  ANGLE_OFFSET = _slice(1)  # [rad]
-  ANGLE_OFFSET_FAST = _slice(1)  # [rad]
-
-  VELOCITY = _slice(2)  # (x, y) [m/s]
-  YAW_RATE = _slice(1)  # [rad/s]
-  STEER_ANGLE = _slice(1)  # [rad]
-  ROAD_ROLL = _slice(1)  # [rad]
+  STIFFNESS = slice(0, 1)
+  STEER_RATIO = slice(1, 2)
+  ANGLE_OFFSET = slice(2, 3)
+  ANGLE_OFFSET_FAST = slice(3, 4)
+  VELOCITY = slice(4, 6)
+  YAW_RATE = slice(6, 7)
+  STEER_ANGLE = slice(7, 8)
+  ROAD_ROLL = slice(8, 9)
 
 
-class CarKalman(KalmanFilter):
-  name = 'car'
+def _transition(state: np.ndarray, dt: float, values: dict[str, float]) -> np.ndarray:
+  result = state.copy()
+  stiffness = state[0]
+  steer_ratio = state[1]
+  angle = state[7] - state[2] - state[3]
+  speed, lateral_speed = state[4:6]
+  yaw_rate = state[6]
+  mass = values["mass"]
+  inertia = values["rotational_inertia"]
+  front = values["center_to_front"]
+  rear = values["center_to_rear"]
+  front_stiffness = stiffness * values["stiffness_front"]
+  rear_stiffness = stiffness * values["stiffness_rear"]
+  lateral_dot = -(front_stiffness + rear_stiffness) * lateral_speed / (mass * speed)
+  lateral_dot += (-(front_stiffness * front - rear_stiffness * rear) / (mass * speed) - speed) * yaw_rate
+  lateral_dot += front_stiffness * angle / (mass * steer_ratio) - ACCELERATION_DUE_TO_GRAVITY * state[8]
+  yaw_dot = -(front_stiffness * front - rear_stiffness * rear) * lateral_speed / (inertia * speed)
+  yaw_dot -= (front_stiffness * front**2 + rear_stiffness * rear**2) * yaw_rate / (inertia * speed)
+  yaw_dot += front_stiffness * front * angle / (inertia * steer_ratio)
+  result[5] += dt * lateral_dot
+  result[6] += dt * yaw_dot
+  return result
 
-  initial_x = np.array([
-    1.0,
-    15.0,
-    0.0,
-    0.0,
 
-    10.0, 0.0,
-    0.0,
-    0.0,
-    0.0
-  ])
-
-  # process noise
-  Q = np.diag([
-    (.05 / 100)**2,
-    .01**2,
-    math.radians(0.02)**2,
-    math.radians(0.25)**2,
-
-    .1**2, .01**2,
-    math.radians(0.1)**2,
-    math.radians(0.1)**2,
-    math.radians(1)**2,
-  ])
+class CarKalman(EstimatorModel):
+  name = "car"
+  initial_x = np.array([1.0, 15.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
+  Q = np.diag([(.05 / 100)**2, .01**2, math.radians(0.02)**2, math.radians(0.25)**2,
+               .1**2, .01**2, math.radians(0.1)**2, math.radians(0.1)**2, math.radians(1)**2])
   P_initial = Q.copy()
-
   obs_noise: dict[int, Any] = {
     ObservationKind.STEER_ANGLE: np.atleast_2d(math.radians(0.05)**2),
     ObservationKind.ANGLE_OFFSET_FAST: np.atleast_2d(math.radians(10.0)**2),
@@ -79,102 +67,28 @@ class CarKalman(KalmanFilter):
     ObservationKind.ROAD_FRAME_X_SPEED: np.atleast_2d(0.1**2),
   }
 
-  global_vars = [
-    'mass',
-    'rotational_inertia',
-    'center_to_front',
-    'center_to_rear',
-    'stiffness_front',
-    'stiffness_rear',
-  ]
+  def __init__(self):
+    self.native_parameters = np.zeros(6)
+    measurements = {
+      ObservationKind.ROAD_FRAME_YAW_RATE: lambda state, _: state[6:7],
+      ObservationKind.ROAD_FRAME_XY_SPEED: lambda state, _: state[4:6],
+      ObservationKind.ROAD_FRAME_X_SPEED: lambda state, _: state[4:5],
+      ObservationKind.STEER_ANGLE: lambda state, _: state[7:8],
+      ObservationKind.ANGLE_OFFSET_FAST: lambda state, _: state[3:4],
+      ObservationKind.STEER_RATIO: lambda state, _: state[1:2],
+      ObservationKind.STIFFNESS: lambda state, _: state[0:1],
+      ObservationKind.ROAD_ROLL: lambda state, _: state[8:9],
+    }
+    def native_predict(state, covariance, dt, process_noise, _):
+      car_predict(state, covariance, process_noise, dt, self.native_parameters)
 
-  @staticmethod
-  def generate_code(generated_dir):
-    dim_state = CarKalman.initial_x.shape[0]
-    name = CarKalman.name
+    model = ModelDefinition(9, 9, _transition, measurements, self.Q, self.obs_noise,
+                            native_predict=native_predict if car_predict is not None else None, native_update=car_update)
+    super().__init__(StateEstimator(model, self.initial_x, self.P_initial, max_rewind_age=0.8))
 
-    # Linearized single-track lateral dynamics, equations 7.211-7.213
-    # Massimo Guiggiani, The Science of Vehicle Dynamics: Handling, Braking, and Ride of Road and Race Cars
-    # Springer Cham, 2023. doi: https://doi.org/10.1007/978-3-031-06461-6
-
-    # globals
-    global_vars = [sp.Symbol(name) for name in CarKalman.global_vars]
-    m, j, aF, aR, cF_orig, cR_orig = global_vars
-
-    # make functions and jacobians with sympy
-    # state variables
-    state_sym = sp.MatrixSymbol('state', dim_state, 1)
-    state = sp.Matrix(state_sym)
-
-    # Vehicle model constants
-    sf = state[States.STIFFNESS, :][0, 0]
-
-    cF, cR = sf * cF_orig, sf * cR_orig
-    angle_offset = state[States.ANGLE_OFFSET, :][0, 0]
-    angle_offset_fast = state[States.ANGLE_OFFSET_FAST, :][0, 0]
-    theta = state[States.ROAD_ROLL, :][0, 0]
-    sa = state[States.STEER_ANGLE, :][0, 0]
-
-    sR = state[States.STEER_RATIO, :][0, 0]
-    u, v = state[States.VELOCITY, :]
-    r = state[States.YAW_RATE, :][0, 0]
-
-    A = sp.Matrix(np.zeros((2, 2)))
-    A[0, 0] = -(cF + cR) / (m * u)
-    A[0, 1] = -(cF * aF - cR * aR) / (m * u) - u
-    A[1, 0] = -(cF * aF - cR * aR) / (j * u)
-    A[1, 1] = -(cF * aF**2 + cR * aR**2) / (j * u)
-
-    B = sp.Matrix(np.zeros((2, 1)))
-    B[0, 0] = cF / m / sR
-    B[1, 0] = (cF * aF) / j / sR
-
-    C = sp.Matrix(np.zeros((2, 1)))
-    C[0, 0] = ACCELERATION_DUE_TO_GRAVITY
-    C[1, 0] = 0
-
-    x = sp.Matrix([v, r])  # lateral velocity, yaw rate
-    x_dot = A * x + B * (sa - angle_offset - angle_offset_fast) - C * theta
-
-    dt = sp.Symbol('dt')
-    state_dot = sp.Matrix(np.zeros((dim_state, 1)))
-    state_dot[States.VELOCITY.start + 1, 0] = x_dot[0]
-    state_dot[States.YAW_RATE.start, 0] = x_dot[1]
-
-    # Basic descretization, 1st order integrator
-    # Can be pretty bad if dt is big
-    f_sym = state + dt * state_dot
-
-    #
-    # Observation functions
-    #
-    obs_eqs = [
-      [sp.Matrix([r]), ObservationKind.ROAD_FRAME_YAW_RATE, None],
-      [sp.Matrix([u, v]), ObservationKind.ROAD_FRAME_XY_SPEED, None],
-      [sp.Matrix([u]), ObservationKind.ROAD_FRAME_X_SPEED, None],
-      [sp.Matrix([sa]), ObservationKind.STEER_ANGLE, None],
-      [sp.Matrix([angle_offset_fast]), ObservationKind.ANGLE_OFFSET_FAST, None],
-      [sp.Matrix([sR]), ObservationKind.STEER_RATIO, None],
-      [sp.Matrix([sf]), ObservationKind.STIFFNESS, None],
-      [sp.Matrix([theta]), ObservationKind.ROAD_ROLL, None],
-    ]
-
-    gen_code(generated_dir, name, f_sym, dt, state_sym, obs_eqs, dim_state, dim_state, global_vars=global_vars)
-
-  def __init__(self, generated_dir):
-    dim_state, dim_state_err = CarKalman.initial_x.shape[0], CarKalman.P_initial.shape[0]
-    self.filter = EKF_sym_pyx(generated_dir, CarKalman.name, CarKalman.Q, CarKalman.initial_x, CarKalman.P_initial,
-                              dim_state, dim_state_err, global_vars=CarKalman.global_vars, logger=cloudlog)
-
-  def set_globals(self, mass, rotational_inertia, center_to_front, center_to_rear, stiffness_front, stiffness_rear):
-    self.filter.set_global("mass", mass)
-    self.filter.set_global("rotational_inertia", rotational_inertia)
-    self.filter.set_global("center_to_front", center_to_front)
-    self.filter.set_global("center_to_rear", center_to_rear)
-    self.filter.set_global("stiffness_front", stiffness_front)
-    self.filter.set_global("stiffness_rear", stiffness_rear)
-
-
-if __name__ == "__main__":
-  generated_dir = sys.argv[2]
-  CarKalman.generate_code(generated_dir)
+  def set_globals(self, mass: float, rotational_inertia: float, center_to_front: float, center_to_rear: float,
+                  stiffness_front: float, stiffness_rear: float) -> None:
+    self.native_parameters[:] = mass, rotational_inertia, center_to_front, center_to_rear, stiffness_front, stiffness_rear
+    for name, value in locals().copy().items():
+      if name != "self":
+        self.filter.set_global(name, value)

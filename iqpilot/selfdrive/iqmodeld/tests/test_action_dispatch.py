@@ -1,3 +1,6 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -5,12 +8,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from cereal import log
+from iqpilot.cereal import log
 
-from openpilot.iqpilot.selfdrive.iqmodeld.config import Plan
-from openpilot.iqpilot.selfdrive.iqmodeld.daemon import NeuralEngineState, _merged_plan
-import openpilot.iqpilot.selfdrive.iqmodeld.daemon as iqmodeld_daemon
-from openpilot.selfdrive.controls.lib.drive_helpers import smooth_value
+from iqpilot.selfdrive.iqmodeld.config import Plan
+from iqpilot.selfdrive.iqmodeld.daemon import NeuralEngineState, _merged_plan
+import iqpilot.selfdrive.iqmodeld.daemon as iqmodeld_daemon
+from iqpilot.selfdrive.controls.lib.drive_helpers import smooth_value
 
 
 def _fake_state(**overrides):

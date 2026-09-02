@@ -3,12 +3,7 @@ from urllib.parse import quote
 
 EARTH_RADIUS_M = 6378137.0
 TILE_SIZE = 256.0
-
-# Shift the whole driving zoom window closer in. The route-ahead fit (fit_zoom_for_points)
-# still zooms out for distant turns and in for straight roads; this just biases the baseline
-# so the route line + ego marker are easier to read while driving.
 NAV_DRIVE_ZOOM_BOOST = 1.0
-
 
 def _mercator_normalized(latitude: float, longitude: float) -> tuple[float, float]:
   x = (longitude + 180.0) / 360.0
@@ -16,14 +11,12 @@ def _mercator_normalized(latitude: float, longitude: float) -> tuple[float, floa
   y = 0.5 - math.log((1.0 + siny) / (1.0 - siny)) / (4.0 * math.pi)
   return x, y
 
-
 def mercator_world_px(latitude: float, longitude: float, zoom: float) -> tuple[float, float]:
   world_size = TILE_SIZE * (2.0 ** zoom)
   nx, ny = _mercator_normalized(latitude, longitude)
   x = nx * world_size
   y = ny * world_size
   return x, y
-
 
 def destination_point(latitude: float, longitude: float, bearing_deg: float, distance_m: float) -> tuple[float, float]:
   if abs(distance_m) < 1e-3:
@@ -46,7 +39,6 @@ def destination_point(latitude: float, longitude: float, bearing_deg: float, dis
   )
   return math.degrees(lat2), math.degrees(lon2)
 
-
 def fit_zoom_for_points(points, width: float, height: float, max_zoom: float = 17.6,
                         min_zoom: float = 12.8, padding: float = 56.0) -> float:
   coords = [(float(point.latitude), float(point.longitude)) for point in points if point is not None]
@@ -63,7 +55,6 @@ def fit_zoom_for_points(points, width: float, height: float, max_zoom: float = 1
   zoom_y = math.log2(usable_height / (TILE_SIZE * span_y))
   return max(min(min(zoom_x, zoom_y), max_zoom), min_zoom)
 
-
 def choose_nav_camera(current_latitude: float, current_longitude: float, bearing_deg: float, points,
                       width: float, height: float, preferred_zoom: float) -> tuple[float, float, float]:
   preferred_zoom += NAV_DRIVE_ZOOM_BOOST
@@ -78,18 +69,15 @@ def choose_nav_camera(current_latitude: float, current_longitude: float, bearing
   center_latitude, center_longitude = destination_point(current_latitude, current_longitude, bearing_deg, lookahead_m)
   return center_latitude, center_longitude, zoom
 
-
 def build_mapbox_static_url(latitude: float, longitude: float, zoom: float, bearing: float,
                             width: int, height: int, points=None) -> str:
   overlay = ""
   if points:
     overlay = f"path-7+34d17a-0.85({encode_polyline(points)})/"
-
   return (
     f"https://api.mapbox.com/styles/v1/mapbox/navigation-night-v1/static/"
     f"{overlay}{longitude:.6f},{latitude:.6f},{zoom:.2f},{bearing:.1f},0/{width}x{height}@2x"
   )
-
 
 def build_mapbox_tile_url(z: int, x: int, y: int, tile_size: int = 256, scale: int = 2,
                           style: str = "navigation-night-v1") -> str:
@@ -99,16 +87,13 @@ def build_mapbox_tile_url(z: int, x: int, y: int, tile_size: int = 256, scale: i
     f"{tile_size}/{z}/{x}/{y}{suffix}"
   )
 
-
 def tile_world_size(z: int, tile_size: int = 256) -> int:
   return tile_size * (2 ** z)
-
 
 def mercator_world_px_at_zoom(latitude: float, longitude: float, z: int, tile_size: int = 256) -> tuple[float, float]:
   world_size = tile_world_size(z, tile_size)
   nx, ny = _mercator_normalized(latitude, longitude)
   return nx * world_size, ny * world_size
-
 
 def encode_polyline(points) -> str:
   result = []
@@ -131,7 +116,6 @@ def encode_polyline(points) -> str:
 
   return quote("".join(result), safe="")
 
-
 def project_nav_point(latitude: float, longitude: float, center_latitude: float, center_longitude: float,
                       zoom: float, bearing_deg: float, width: float, height: float,
                       anchor_x: float = 0.5, anchor_y: float = 0.5) -> tuple[float, float]:
@@ -146,7 +130,6 @@ def project_nav_point(latitude: float, longitude: float, center_latitude: float,
   rx = dx * cos_theta + dy * sin_theta
   ry = -dx * sin_theta + dy * cos_theta
   return width * anchor_x + rx, height * anchor_y + ry
-
 
 def project_nav_polyline(points, center_latitude: float, center_longitude: float, zoom: float, bearing_deg: float,
                          width: float, height: float, anchor_x: float = 0.5, anchor_y: float = 0.5) -> list[tuple[float, float]]:
@@ -168,10 +151,8 @@ def project_nav_polyline(points, center_latitude: float, center_longitude: float
     )
   return projected
 
-
 def solar_elevation_deg(latitude: float, longitude: float, unix_time: float) -> float:
-  """Approximate solar elevation (NOAA-style, good to ~0.5 deg) for day/night map styling."""
-  days = unix_time / 86400.0 - 10957.5  # days since J2000 epoch
+  days = unix_time / 86400.0 - 10957.5
   mean_longitude = math.radians((280.460 + 0.9856474 * days) % 360.0)
   mean_anomaly = math.radians((357.528 + 0.9856003 * days) % 360.0)
   ecliptic_longitude = mean_longitude + math.radians(1.915) * math.sin(mean_anomaly) \

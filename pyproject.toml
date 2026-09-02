@@ -1,9 +1,9 @@
 [project]
-name = "openpilot"
+name = "iqpilot"
 requires-python = ">= 3.12.3, < 3.13"
 license = {text = "Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos"}
 version = "0.1.0"
-description = "an open source driver assistance system"
+description = "an advanced driver assistance system"
 authors = [
   {name = "Vehicle Researcher", email="user@comma.ai"}
 ]
@@ -13,7 +13,7 @@ dependencies = [
   "sounddevice",  # micd + soundd
   "pyserial",     # pigeond + qcomgpsd
   "requests",     # many one-off uses
-  "sympy",        # rednose + friends
+  "sympy",
   "crcmod-plus",  # cars + qcomgpsd
   "tqdm",         # cars (fw_versions.py) on start + many one-off uses
 
@@ -24,15 +24,15 @@ dependencies = [
   "Cython",
   "setuptools",
   "numpy >=2.0",
+  "msgq",
+  "iqdbc",
+  "panda",
+  "tinygrad",
 
   # body / webrtcd
   "aiohttp",
-  "aiortc",
+  "av",
   "libdatachannel-py>=2026.1.0.dev2",
-  # aiortc does not put an upper bound on pyopenssl and is now incompatible
-  # with the latest release
-  "pyopenssl < 24.3.0",
-  "pyaudio",
 
   # panda
   "libusb1",
@@ -75,14 +75,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-docs = [
-  "Jinja2",
-  "mkdocs",
-]
-
 testing = [
   "coverage",
   "hypothesis ==6.47.*",
+  "jinja2",
   "ty",
   "pytest",
   "pytest-cpp",
@@ -99,7 +95,6 @@ testing = [
 ]
 
 dev = [
-  "av",
   "azure-identity",
   "azure-storage-blob",
   "dictdiffer",
@@ -112,43 +107,53 @@ dev = [
 ]
 
 tools = [
-  "metadrive-simulator @ https://github.com/commaai/metadrive/releases/download/MetaDrive-minimal-0.4.2.4/metadrive_simulator-0.4.2.4-py3-none-any.whl ; (platform_machine != 'aarch64')",
   "imgui @ git+https://git.konn3kt.com/IQ.Lvbs/dependencies.git@release-imgui#subdirectory=imgui",
   "libusb @ git+https://git.konn3kt.com/IQ.Lvbs/dependencies.git@release-libusb#subdirectory=libusb",
 ]
 
 [project.urls]
-Homepage = "https://github.com/commaai/openpilot"
+Homepage = "https://konn3kt.com"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = [ "." ]
+packages = [
+  ".",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true
 
+[tool.uv.extra-build-dependencies]
+panda = ["iqdbc"]
+
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "--ignore=openpilot/ --ignore=iqdbc/ --ignore=panda/ --ignore=rednose_repo/ --ignore=tinygrad_repo/ --ignore=teleoprtc_repo/ --ignore=msgq/  -Werror --strict-config --strict-markers --durations=10 -n auto --dist=loadgroup"
+addopts = "--ignore=iqpilot/third_party -Werror --strict-config --strict-markers --durations=10"
+pythonpath = ["."]
 cpp_files = "test_*"
-cpp_harness = "selfdrive/test/cpp_harness.py"
+cpp_harness = ".venv/bin/python3 iqpilot/selfdrive/test/cpp_harness.py"
 python_files = "test_*.py"
 asyncio_default_fixture_loop_scope = "function"
+xfail_strict = true
 #timeout = "30"  # you get this long by default
 markers = [
-  "slow: tests that take awhile to run and can be skipped with -m 'not slow'",
+  "car_ports: public car-port integration tests run in the dedicated parallel lane",
+  "linux: tests that require Linux services or IPC",
+  "model_validation: model compilation or inference validation excluded from the current matrix",
+  "release: tests that run against a release checkout",
+  "slow: tests that run in the dedicated ARM64 slow lane",
   "tici: tests that are only meant to run on the C3/C3X",
   "skip_tici_setup: mark test to skip tici setup fixture"
 ]
 testpaths = [
-  "common",
-  "selfdrive",
-  "system",
-  "tools",
-  "cereal",
+  "iqpilot/common",
+  "iqpilot/selfdrive",
+  "iqpilot/system",
+  "iqpilot/tools",
+  "iqpilot/cereal",
   "iqpilot",
 ]
 
@@ -157,7 +162,7 @@ quiet-level = 3
 # if you've got a short variable name that's getting flagged, add it here
 ignore-words-list = "bu,ro,te,ue,alo,hda,ois,nam,nams,ned,som,parm,setts,inout,warmup,bumb,nd,sie,preints,whit,indexIn,ws,uint,grey,deque,stdio,amin,BA,LITE,atEnd,UIs,errorString,arange,FocusIn,od,tim,relA,hist,copyable,jupyter,thead,TGE,abl,lite"
 builtin = "clear,rare,informal,code,names,en-GB_to_en-US"
-skip = "./third_party/*, ./tinygrad/*, ./tinygrad_repo/*, ./msgq/*, ./panda/*, ./iqdbc/*, ./iqdbc_repo/*, ./rednose/*, ./rednose_repo/*, ./teleoprtc/*, ./teleoprtc_repo/*, *.po, uv.lock, *.onnx, ./cereal/gen/*, */c_generated_code/*, docs/assets/*, tools/plotjuggler/layouts/*, selfdrive/assets/offroad/mici_fcc.html"
+skip = "./iqpilot/third_party/*, *.po, uv.lock, *.onnx, ./iqpilot/cereal/gen/*, */c_generated_code/*, iqpilot/selfdrive/assets/offroad/mici_fcc.html, iqpilot/selfdrive/assets/*"
 
 # https://docs.astral.sh/ruff/configuration/#using-pyprojecttoml
 [tool.ruff]
@@ -186,13 +191,6 @@ target-version ="py311"
 exclude = [
   "body",
   "cereal",
-  "panda",
-  "iqdbc",
-  "iqdbc_repo",
-  "rednose_repo",
-  "tinygrad_repo",
-  "teleoprtc",
-  "teleoprtc_repo",
   "third_party",
   "*.ipynb",
   "generated",
@@ -200,17 +198,17 @@ exclude = [
 lint.flake8-implicit-str-concat.allow-multiline = false
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"selfdrive".msg = "Use openpilot.selfdrive"
-"common".msg = "Use openpilot.common"
-"system".msg = "Use openpilot.system"
-"third_party".msg = "Use openpilot.third_party"
-"tools".msg = "Use openpilot.tools"
+"selfdrive".msg = "Use iqpilot.selfdrive"
+"common".msg = "Use iqpilot.common"
+"system".msg = "Use iqpilot.system"
+"third_party".msg = "Use iqpilot.third_party"
+"tools".msg = "Use iqpilot.tools"
 "pytest.main".msg = "pytest.main requires special handling that is easy to mess up!"
 "unittest".msg = "Use pytest"
 "time.time".msg = "Use time.monotonic"
 
 # raylib banned APIs
-"pyray.measure_text_ex".msg = "Use openpilot.system.ui.lib.text_measure"
+"pyray.measure_text_ex".msg = "Use iqpilot.system.ui.lib.text_measure"
 "pyray.is_mouse_button_pressed".msg = "This can miss events. Use Widget._handle_mouse_press"
 "pyray.is_mouse_button_released".msg = "This can miss events. Use Widget._handle_mouse_release"
 "pyray.draw_text".msg = "Use a function (such as rl.draw_font_ex) that takes font as an argument"
@@ -220,19 +218,8 @@ quote-style = "preserve"
 
 [tool.ty.src]
 exclude = [
-  "cereal/",
-  "msgq/",
-  "msgq_repo/",
-  "iqdbc/",
-  "iqdbc_repo/",
-  "panda/",
-  "rednose/",
-  "rednose_repo/",
-  "tinygrad/",
-  "tinygrad_repo/",
-  "teleoprtc/",
-  "teleoprtc_repo/",
-  "third_party/",
+  "iqpilot/cereal/",
+  "iqpilot/third_party/",
 ]
 
 [tool.ty.rules]
@@ -257,3 +244,9 @@ unsupported-operator = "ignore"
 # Ignore not-subscriptable - false positives from dynamic types
 not-subscriptable = "ignore"
 # not-iterable errors are now fixed
+
+[tool.uv.sources]
+msgq = { path = "artifacts/package_sources/msgq" }
+iqdbc = { path = "artifacts/package_sources/iqdbc" }
+panda = { path = "artifacts/package_sources/panda" }
+tinygrad = { path = "artifacts/package_sources/tinygrad" }

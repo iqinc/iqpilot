@@ -1,11 +1,5 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-Consolidated IQ.Pilot onroad overlays. Every HUD widget that decorates the
-driving view — the accel strip, blind-spot flags, speed readout, road-name
-capsule, turn indicators, nav-provider badge and lead chevron labels — lives
-here and paints through the shared canvas facade. Grouping them keeps one
-import surface and one drawing vocabulary for the whole overlay layer.
 """
 import math
 import time
@@ -13,20 +7,18 @@ import time
 import numpy as np
 import pyray as rl
 
-from cereal import car, custom
-from openpilot.common.constants import CV
-from openpilot.common.filter_simple import FirstOrderFilter
-from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.selfdrive.ui.onroad.hud_renderer import COLORS, FONT_SIZES, UI_CONFIG
-from openpilot.selfdrive.ui.mici.onroad.alert_renderer import IconSide, TURN_SIGNAL_BLINK_PERIOD
-from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.iqwidgets.lib import canvas
+from iqpilot.cereal import car, custom
+from iqpilot.common.constants import CV
+from iqpilot.common.filter_simple import FirstOrderFilter
+from iqpilot.selfdrive.ui.ui_state import ui_state
+from iqpilot.selfdrive.ui.onroad.hud_renderer import COLORS, FONT_SIZES, UI_CONFIG
+from iqpilot.selfdrive.ui.mici.onroad.alert_renderer import IconSide, TURN_SIGNAL_BLINK_PERIOD
+from iqpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+from iqpilot.system.ui.lib.application import gui_app, FontWeight
+from iqpilot.system.ui.lib.multilang import tr
+from iqpilot.system.ui.widgets import Widget
+from iqpilot.system.ui.iqwidgets.lib import canvas
 from iqdbc.car.volkswagen.values import VolkswagenFlags
-
-
-# --- shared state access -----------------------------------------------------
 
 def _feed():
   return ui_state.sm
@@ -36,9 +28,6 @@ def _speed_scale() -> float:
   return CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
 
 
-# ============================================================================
-#  Accel strip
-# ============================================================================
 _STRIP_WIDTH = 28
 _STRIP_INSET = 14
 _STRIP_CEILING = 0.85
@@ -59,7 +48,7 @@ _STRIP_HALO_SPREAD = 11.0
 _STRIP_HALO_LAYERS = 11
 _STRIP_HALO_ALPHA = 0.095
 _STRIP_HALO_TAIL = 34.0
-_STRIP_NEON_FULL = 2.0  # m/s^2 at which the edges reach full brightness
+_STRIP_NEON_FULL = 2.0
 
 
 class IQAccelBar:
@@ -139,10 +128,6 @@ class IQAccelBar:
     self._cap(canvas.Pt(x + cap, top + cap), cap, True, self._tint(fill, frac_top), neon, heat, tail)
     self._cap(canvas.Pt(x + cap, top + reach - cap), cap, False, self._tint(fill, frac_bottom), neon, heat, tail)
 
-
-# ============================================================================
-#  Blind-spot flags
-# ============================================================================
 _BS_INSET = 20
 _BS_DROP = 100
 _BS_MIN = 0.01
@@ -187,13 +172,7 @@ class IQBlindSpotOverlay:
       if side.lit():
         side.place(rect)
 
-
-# ============================================================================
-#  Speed readout
-# ============================================================================
-_MQB_CLUSTER_EXEMPT = (VolkswagenFlags.PQ | VolkswagenFlags.MLB | VolkswagenFlags.MEB |
-                       VolkswagenFlags.MEB_GEN2 | VolkswagenFlags.MQB_EVO)
-
+_MQB_CLUSTER_EXEMPT = (VolkswagenFlags.PQ | VolkswagenFlags.MLB | VolkswagenFlags.MEB | VolkswagenFlags.MEB_GEN2 | VolkswagenFlags.MQB_EVO)
 
 class IQSpeedOverlay:
   def __init__(self):
@@ -223,10 +202,6 @@ class IQSpeedOverlay:
     unit = tr("km/h") if ui_state.is_metric else tr("mph")
     self._stack(self._mid, unit, FONT_SIZES.speed_unit, rect, top + number_h - 10, COLORS.WHITE_TRANSLUCENT)
 
-
-# ============================================================================
-#  Road-name capsule
-# ============================================================================
 def clip_to_width(font, words: str, size: int, limit: float) -> str:
   if canvas.span(font, words, size).x <= limit:
     return words
@@ -238,21 +213,14 @@ def clip_to_width(font, words: str, size: int, limit: float) -> str:
 
 class RoadNameBanner(Widget):
   TYPE_SIZE = 46
-  FLOOR_WIDTH = 200
-  SIDE_PAD = 40
   MARGIN = 40
-  DROP = -4
-  BAR_H = 60
-  CURVE = 0.2
-  SEGS = 10
-  BACKDROP_A = 120
-  INK_A = 200
-  INNER_PAD = 20
+  GAP = 10
+  TORQUE_SCALE = 3.0
 
   def __init__(self):
     super().__init__()
     self.road_name = ""
-    self._face = gui_app.font(FontWeight.SEMI_BOLD)
+    self._face = gui_app.font(FontWeight.BOLD)
 
   def update(self):
     sm = _feed()
@@ -264,24 +232,18 @@ class RoadNameBanner(Widget):
   def _render(self, rect):
     if not self.road_name or not ui_state.road_name_toggle:
       return
-    natural = canvas.span(self._face, self.road_name, self.TYPE_SIZE).x
-    bar_w = max(self.FLOOR_WIDTH, min(natural + self.SIDE_PAD, rect.width - self.MARGIN))
-    bar = canvas.Box(rect.x + (rect.width - bar_w) / 2, rect.y + self.DROP, bar_w, self.BAR_H)
-    canvas.panel(bar, self.CURVE, self.SEGS, canvas.shade(0, 0, 0, self.BACKDROP_A))
-    label = clip_to_width(self._face, self.road_name, self.TYPE_SIZE, bar.width - self.INNER_PAD)
+    label = clip_to_width(self._face, self.road_name, self.TYPE_SIZE, rect.width - self.MARGIN)
     extent = canvas.span(self._face, label, self.TYPE_SIZE)
+    top = min(TorqueBar.resting_bottom(rect, self.TORQUE_SCALE) + self.GAP,
+              rect.y + rect.height - extent.y)
     canvas.glyphs(self._face, label,
-                  canvas.Pt(bar.x + (bar.width - extent.x) / 2, bar.y + (bar.height - extent.y) / 2),
-                  self.TYPE_SIZE, canvas.shade(255, 255, 255, self.INK_A))
+                  canvas.Pt(rect.x + (rect.width - extent.x) / 2, top),
+                  self.TYPE_SIZE, COLORS.WHITE)
 
 
 RoadNameRenderer = RoadNameBanner
 ellipsize = clip_to_width
 
-
-# ============================================================================
-#  Turn indicators
-# ============================================================================
 from dataclasses import dataclass, field
 
 _ARROW = 'signal'
@@ -295,7 +257,6 @@ class TurnSignalConfig:
   right_x: int = 80
   right_y: int = 190
   size: int = 150
-
 
 class _IndicatorLamp(Widget):
   def __init__(self, direction: IconSide):
@@ -314,10 +275,6 @@ class _IndicatorLamp(Widget):
     self.mode = mode
 
   def _pulse(self) -> int:
-    # onroad/offroad run at different target_fps (set_target_fps only takes effect after this
-    # widget is constructed at offroad startup), so re-derive dt each frame instead of trusting
-    # the fps baked in at __init__ — otherwise the glow decays ~3x too slowly onroad and never
-    # visibly dims before the next reset, reading as a static-on arrow instead of a blink.
     self._glow.dt = 1 / gui_app.target_fps
     self._glow.update_alpha(0.3)
     if time.monotonic() - self._epoch > TURN_SIGNAL_BLINK_PERIOD:
@@ -395,16 +352,11 @@ class IQTurnSignalOverlay:
   def config(self, new_config: TurnSignalConfig):
     self._config = new_config
 
-
-# ============================================================================
-#  Nav-influence provider badge
-# ============================================================================
 _PROVIDER_TAGS = {0: "", 1: "NAV", 2: "MBX", 3: "VIS", 4: "OSM"}
 _NAV_TEX_W, _NAV_TEX_H = 256, 128
 _NAV_BADGE_W = 160
 _NAV_FONT = 36
 _NAV_SHIFT = -260
-
 
 class NavInfluenceRenderer(Widget):
   def __init__(self):
@@ -459,17 +411,12 @@ class NavInfluenceRenderer(Widget):
     canvas.stamp_scaled(self._offscreen.texture, canvas.Box(0, 0, _NAV_TEX_W, -_NAV_TEX_H),
                         canvas.Box(ax, ay, _NAV_TEX_W, _NAV_TEX_H), canvas.Pt(0, 0), 0, canvas.WHITE)
 
-
-# ============================================================================
-#  Lead chevron labels
-# ============================================================================
 class ChevronOptions:
   OFF = 0
   DISTANCE_ONLY = 1
   SPEED_ONLY = 2
   TTC_ONLY = 3
   ALL = 4
-
 
 _CH_FONT = 40
 _CH_LINE = 50
@@ -478,28 +425,23 @@ _CH_FADE_DOWN = 0.05
 _CH_FADE_UP = 0.1
 _CH_DEDUP = 3.0
 
-
 def _gap_label(d_rel: float, _v_abs: float) -> str:
   val = max(0.0, d_rel)
   return f"{val:.0f} m" if ui_state.is_metric else f"{val * 3.28084:.0f} ft"
-
 
 def _pace_label(_d_rel: float, v_abs: float) -> str:
   unit = "km/h" if ui_state.is_metric else "mph"
   return f"{max(0.0, v_abs * _speed_scale()):.0f} {unit}"
 
-
 def _ttc_label(d_rel: float, _v_abs: float, v_ego: float) -> str:
   ttc = (d_rel / v_ego) if (d_rel > 0 and v_ego > 0) else 0.0
   return f"{ttc:.1f} s" if 0 < ttc < 200 else "---"
-
 
 _CH_METRICS = (
   ((ChevronOptions.DISTANCE_ONLY, ChevronOptions.ALL), lambda d, va, ve: _gap_label(d, va)),
   ((ChevronOptions.SPEED_ONLY, ChevronOptions.ALL), lambda d, va, ve: _pace_label(d, va)),
   ((ChevronOptions.TTC_ONLY, ChevronOptions.ALL), _ttc_label),
 )
-
 
 class ChevronMetrics:
   def __init__(self):
@@ -552,8 +494,6 @@ class ChevronMetrics:
 
   @staticmethod
   def _active_leads(radar_state, markers):
-    """Yield (lead, marker) for tracked leads with a projected marker, dropping a
-    second lead that sits within the dedup band of the first."""
     tracked = []
     for lead, marker in zip((radar_state.leadOne, radar_state.leadTwo), markers, strict=False):
       if lead and lead.status and marker.center is not None:
@@ -571,11 +511,6 @@ class ChevronMetrics:
     for lead, marker in self._active_leads(radar_state, lead_vehicles):
       self._one_lead(lead, marker, v_ego, rect)
 
-
-# ============================================================================
-#  Developer telemetry bar
-# ============================================================================
-
 _TEAL = canvas.shade(0x0C, 0x94, 0x96, 0xFF)
 _AMBER = canvas.shade(255, 188, 0, 255)
 _GREEN = canvas.shade(0, 255, 0, 255)
@@ -587,7 +522,6 @@ _ANGLE_TYPES = (car.CarParams.SteerControlType.angle, car.CarParams.SteerControl
 
 @dataclass
 class Readout:
-  """One bar cell: 'TAG value unit', with each part pre-measured for layout."""
   tag: str
   value: str
   unit: str = ""
@@ -609,7 +543,6 @@ class Readout:
     self.unit_w = canvas.span(font, self.unit_text, px, 0).x if self.unit else 0
     self.span = self.tag_w + self.value_w + self.unit_w
 
-  # kept for external callers that used the old field/method names
   @property
   def total_width(self):
     return self.span
@@ -620,47 +553,36 @@ class Readout:
 
 UiElement = Readout
 
-
-# --- grading -----------------------------------------------------------------
-
 def _banded(magnitude, warn, crit, ok):
   if magnitude > crit:
     return canvas.RED
   return _AMBER if magnitude > warn else ok
 
-
 def _closing(v_rel):
   return _banded(-v_rel if v_rel < 0 else 0.0, 0.0, 4.4704, canvas.WHITE)
-
 
 def _following(d_rel):
   if d_rel < 5:
     return canvas.RED
   return _AMBER if d_rel < 15 else canvas.WHITE
 
-
 def _steer_tint(sm):
   if not sm['carControl'].latActive:
     return canvas.WHITE
   return _GREY if sm['carState'].steeringPressed else _TEAL
 
-
 def _angle_tint(sm, deg):
   floor = _steer_tint(sm) if sm['carControl'].latActive else canvas.WHITE
   return _banded(abs(deg), 90.0, 180.0, floor)
 
-
 def _yaw_offset(sm):
-  return sm['liveParameters'].angleOffsetAverageDeg if sm.valid['liveParameters'] else 0.0
-
+  return sm['vehicleParameters'].angleOffsetAverageDeg if sm.valid['vehicleParameters'] else 0.0
 
 def _bank(sm):
-  return sm['liveParameters'].roll if sm.valid['liveParameters'] else 0.0
-
+  return sm['vehicleParameters'].roll if sm.valid['vehicleParameters'] else 0.0
 
 def _units(is_metric):
   return (CV.MS_TO_KPH, "km/h") if is_metric else (CV.MS_TO_MPH, "mph")
-
 
 def _fix(sm):
   for svc in ('gpsLocationExternal', 'gpsLocation'):
@@ -668,13 +590,9 @@ def _fix(sm):
       return sm[svc], svc
   return None, None
 
-
-# --- probes (sm, is_metric) -> Readout ---------------------------------------
-
 def steering_angle(sm, is_metric):
   deg = sm['carState'].steeringAngleDeg - _yaw_offset(sm)
   return Readout("R.S.", f"{deg:.1f}°", color=_angle_tint(sm, deg))
-
 
 def desired_steering_angle(sm, is_metric):
   live = sm['carControl'].latActive
@@ -688,7 +606,6 @@ def desired_steering_angle(sm, is_metric):
   tint = _banded(abs(seen), 90.0, 180.0, _TEAL) if live else canvas.WHITE
   return Readout("D.S.", f"{want:.1f}°" if live else "-", color=tint)
 
-
 def desired_steering_pid(sm, is_metric):
   live = sm['carControl'].latActive
   off = _yaw_offset(sm)
@@ -697,32 +614,26 @@ def desired_steering_pid(sm, is_metric):
   tint = _banded(abs(seen), 90.0, 180.0, _TEAL) if live else canvas.WHITE
   return Readout("D.S.", f"{want:.1f}°" if live else "-", color=tint)
 
-
 def actual_lat_accel(sm, is_metric):
   a = sm['controlsState'].curvature * sm['carState'].vEgo ** 2 - _bank(sm) * _G
   return Readout("A.L.A.", f"{a:.2f}", "m/s^2", _steer_tint(sm))
-
 
 def desired_lat_accel(sm, is_metric):
   live = sm['carControl'].latActive
   a = sm['controlsState'].desiredCurvature * sm['carState'].vEgo ** 2 - _bank(sm) * _G
   return Readout("D.L.A.", f"{a:.2f}" if live else "-", "m/s^2", _steer_tint(sm))
 
-
 def a_ego(sm, is_metric):
   return Readout("L.ACC.", f"{sm['carState'].aEgo:.1f}", "m/s^2")
-
 
 def lead_distance(sm, is_metric):
   lead = sm['radarState'].leadOne
   return Readout("REL DIST", "-", "m") if not lead.status else Readout("REL DIST", f"{lead.dRel:.0f}", "m", _following(lead.dRel))
 
-
 def lead_rel_speed(sm, is_metric):
   lead = sm['radarState'].leadOne
   k, unit = _units(is_metric)
   return Readout("REL SPEED", "-", unit) if not lead.status else Readout("REL SPEED", f"{lead.vRel * k:.0f}", unit, _closing(lead.vRel))
-
 
 def lead_speed(sm, is_metric):
   lead = sm['radarState'].leadOne
@@ -731,23 +642,18 @@ def lead_speed(sm, is_metric):
     return Readout("L.S.", "-", unit)
   return Readout("L.S.", f"{(lead.vRel + sm['carState'].vEgo) * k:.0f}", unit, _closing(lead.vRel))
 
-
 def friction_coefficient(sm, is_metric):
-  ltp = sm['liveTorqueParameters']
-  return Readout("FRIC.", f"{ltp.frictionCoefficientFiltered:.3f}", color=_GREEN if ltp.liveValid else canvas.WHITE)
-
+  ltp = sm['lateralTorqueParameters']
+  return Readout("FRIC.", f"{ltp.frictionCoefficientFiltered:.3f}", color=_GREEN if ltp.valid else canvas.WHITE)
 
 def lat_accel_factor(sm, is_metric):
-  ltp = sm['liveTorqueParameters']
-  return Readout("L.A.F.", f"{ltp.latAccelFactorFiltered:.3f}", color=_GREEN if ltp.liveValid else canvas.WHITE)
-
+  ltp = sm['lateralTorqueParameters']
+  return Readout("L.A.F.", f"{ltp.latAccelFactorFiltered:.3f}", color=_GREEN if ltp.valid else canvas.WHITE)
 
 def eps_torque(sm, is_metric):
   return Readout("E.T.", f"{abs(sm['carState'].steeringTorqueEps):.1f}", "N·dm")
 
-
 _COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
-
 
 def bearing(sm, is_metric):
   fix, _ = _fix(sm)
@@ -756,7 +662,6 @@ def bearing(sm, is_metric):
   heading = _COMPASS[int(((fix.bearingDeg + 22.5) % 360) // 45)]
   return Readout("B.D.", f"{heading} | {fix.bearingDeg:.0f}°")
 
-
 def altitude(sm, is_metric):
   fix, svc = _fix(sm)
   if fix is None:
@@ -764,9 +669,7 @@ def altitude(sm, is_metric):
   acc = fix.horizontalAccuracy if svc == 'gpsLocationExternal' else 1.0
   return Readout("ALT.", f"{fix.altitude:.1f}" if acc != 0.0 else "-", "m")
 
-
 def _desired_probe(sm):
-  """The 'desired' cell tracks whichever lateral controller is live."""
   if sm['controlsState'].lateralControlState.which() == 'angleState':
     return desired_steering_angle
   if ui_state.CP is not None and ui_state.CP.steerControlType in _ANGLE_TYPES:
@@ -774,7 +677,6 @@ def _desired_probe(sm):
   if sm['controlsState'].lateralControlState.which() == 'pidState':
     return desired_steering_pid
   return desired_lat_accel
-
 
 class IQDevMetricsOverlay(Widget):
   DEV_UI_OFF = 0
@@ -830,10 +732,6 @@ class IQDevMetricsOverlay(Widget):
     if cell.unit:
       canvas.glyphs(self._face, cell.unit_text, canvas.Pt(x + cell.tag_w + cell.value_w, y), _BAR_FONT, canvas.WHITE)
 
-
-# ============================================================================
-#  Speed-limit sign (Vienna / MUTCD) + limit-ahead preview + assist arrows
-# ============================================================================
 _SL_M_TO_FT = 3.28084
 _SL_M_TO_MI = 0.000621371
 _SL_AHEAD_STEPS = 5
@@ -844,14 +742,10 @@ _SL_DARK = canvas.shade(77, 77, 77, 255)
 _SL_PANEL_BG = canvas.shade(0, 0, 0, 180)
 _SL_PANEL_EDGE = canvas.shade(255, 255, 255, 100)
 
-
 def _dim(color, alpha: float):
   return canvas.with_opacity(color, 255 * alpha)
 
-
 class IQSpeedLimitOverlay(Widget):
-  """Regulatory sign, upcoming-limit preview and pre-active nudge arrows."""
-
   def __init__(self):
     super().__init__()
     self.speed_limit = 0.0
@@ -879,8 +773,8 @@ class IQSpeedLimitOverlay(Widget):
     self._pulse_ema = FirstOrderFilter(1.0, 0.5, 1 / gui_app.target_fps)
 
     px = 90
-    self._up = gui_app.texture("../../iqpilot/selfdrive/assets/img_plus_arrow_up.png", px, px)
-    self._down = gui_app.texture("../../iqpilot/selfdrive/assets/img_minus_arrow_down.png", px, px)
+    self._up = gui_app.texture("img_plus_arrow_up.png", px, px)
+    self._down = gui_app.texture("img_minus_arrow_down.png", px, px)
 
   @property
   def speed_limit_assist_state(self):
@@ -931,13 +825,13 @@ class IQSpeedLimitOverlay(Widget):
     badge = ""
     if self.speed_limit_offset != 0:
       badge = f"{'' if self.speed_limit_offset > 0 else '-'}{round(abs(self.speed_limit_offset))}"
-    warn = ui_state.speed_limit_mode >= 2  # SpeedLimitMode.warning
+    warn = ui_state.speed_limit_mode >= 2
     over = has_limit and round(self.speed_limit_final_last) < round(self.speed)
     tint = canvas.RED if (warn and over) else (_SL_GREY if not self.speed_limit_valid else canvas.BLACK)
     return value, badge, tint, has_limit
 
   def _render(self, rect):
-    if ui_state.speed_limit_mode == 0:  # SpeedLimitMode.off
+    if ui_state.speed_limit_mode == 0:
       return
     w = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
     sign = canvas.Box(rect.x + 60 - 6, rect.y + 45 + UI_CONFIG.set_speed_height + 12, w + 12, 160)

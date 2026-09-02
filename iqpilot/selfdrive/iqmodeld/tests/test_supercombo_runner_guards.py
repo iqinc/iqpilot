@@ -1,3 +1,6 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
 from __future__ import annotations
 
 import hashlib
@@ -5,10 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from cereal import custom
-from openpilot.iqpilot.selfdrive.iqmodeld.models import helpers as model_helpers
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.tinygrad import supercombo_runner as supercombo_runner_mod
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.supercombo_runner import (
+from iqpilot.cereal import custom
+from iqpilot.selfdrive.iqmodeld.models import helpers as model_helpers
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad import supercombo_runner as supercombo_runner_mod
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.supercombo_runner import (
   TinygradSupercomboRunner,
 )
 
@@ -151,6 +154,31 @@ def test_select_default_model_clears_custom_download_state(tmp_path: Path, monke
   assert active is not None and active.get("ref") == "default"
   assert int(params.get("ModelRunnerTypeCache")) == int(custom.IQModelManager.Runner.tinygrad)
   assert not pending_restore.exists()
+
+
+def test_seed_default_bundle_runs_while_a_download_is_queued(monkeypatch: pytest.MonkeyPatch):
+  monkeypatch.setattr(model_helpers, "ensure_default_model_files", lambda *a, **k: None)
+
+  params = _FakeParams()
+  params.put("ModelManager_DownloadIndex", "81")
+
+  model_helpers.seed_default_bundle_if_unset(params)
+
+  active = params.get("ModelManager_ActiveBundle")
+  assert active is not None and active.get("ref") == "default"
+  assert params.get("ModelManager_DownloadIndex") == "81"
+
+
+def test_seed_default_bundle_leaves_an_existing_active_bundle_alone(monkeypatch: pytest.MonkeyPatch):
+  monkeypatch.setattr(model_helpers, "ensure_default_model_files", lambda *a, **k: None)
+
+  params = _FakeParams({"index": 81, "ref": "pop"})
+  params.put("ModelManager_DownloadIndex", "81")
+
+  model_helpers.seed_default_bundle_if_unset(params)
+
+  assert params.get("ModelManager_ActiveBundle").get("ref") == "pop"
+  assert params.get("ModelManager_DownloadIndex") == "81"
 
 
 def test_default_model_is_not_resolved_to_manifest_pop_bundle():

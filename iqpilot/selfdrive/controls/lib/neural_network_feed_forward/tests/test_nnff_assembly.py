@@ -10,20 +10,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from cereal import log
-from openpilot.common.params import Params
-from openpilot.common.pid import PIDController
-from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.selfdrive.controls.lib.latcontrol_torque import NeuralNetworkFeedForward
-from openpilot.selfdrive.controls.lib.latcontrol_torque import TORQUE_NN_MODEL_PATH
+from iqpilot.cereal import log
+from iqpilot.common.params import Params
+from iqpilot.common.pid import PIDController
+from iqpilot.selfdrive.iqmodeld.config import ModelConstants
+from iqpilot.selfdrive.controls.lib.latcontrol_torque import NeuralNetworkFeedForward
+from iqpilot.selfdrive.controls.lib.neural_network_feed_forward.tests.test_network import _MODEL_DIR, _NAMES
 
-_REAL_MODEL = next((f for f in sorted(os.listdir(TORQUE_NN_MODEL_PATH))
-                    if f.endswith(".json") and f != "MOCK.json"), None)
-
-# Models are shipped separately and re-added as retrained; with none present,
-# NNFF is a no-op (falls back to stock torque FF), so the assembly tests skip.
-pytestmark = pytest.mark.skipif(_REAL_MODEL is None,
-                                reason="no NNFF models present (nuked pending retraining)")
+_REAL_MODEL = next((f for f in _NAMES if f != "MOCK.json"), _NAMES[0])
 
 
 def _torque_fn():
@@ -53,7 +47,7 @@ def _model_v2():
 
 def _make_controller(model_file):
   Params().put_bool("NeuralNetworkFeedForward", True)
-  path = os.path.join(TORQUE_NN_MODEL_PATH, model_file)
+  path = os.path.join(_MODEL_DIR, model_file)
   cp = SimpleNamespace(steerActuatorDelay=0.15)
   cp_iq = SimpleNamespace(iqLateralNet=SimpleNamespace(
     model=SimpleNamespace(path=path, name=os.path.splitext(model_file)[0])))
@@ -84,7 +78,10 @@ class TestControllerWiring:
   def test_mock_model_reports_absent(self):
     nnff = _make_controller("MOCK.json")
     assert nnff.has_nn_model is False
-    assert nnff.model.input_size >= 2  # MOCK still loads as a valid net
+    if "MOCK.json" in _NAMES:
+      assert nnff.model.input_size >= 2
+    else:
+      assert nnff.model is None
 
   def test_update_returns_finite_torque(self):
     nnff = _make_controller(_REAL_MODEL)

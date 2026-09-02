@@ -4,28 +4,34 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 
 from types import SimpleNamespace
 
-from cereal import custom
+from iqpilot.cereal import custom
 from iqdbc.car import structs
 from iqdbc.car.hyundai.values import HyundaiFlags, HyundaiFlagsIQ
-from openpilot.iqpilot.sab.behavior import SteeringAssistanceBehavior
-from openpilot.iqpilot.selfdrive.selfdrived.events import IQEvents
-from openpilot.selfdrive.selfdrived.events import Events
+from iqpilot.sab.behavior import SteeringAssistanceBehavior
+from iqpilot.selfdrive.selfdrived.iq_events import IQEvents
+from iqpilot.selfdrive.selfdrived.events import Events
+from iqpilot.cereal import log
 
 
 ButtonType = structs.CarState.ButtonEvent.Type
+EventName = log.OnroadEvent.EventName
 EventNameIQ = custom.IQOnroadEvent.EventName
+GuidanceState = custom.AlwaysOnLateral.AlwaysOnLateralState
 
 
 class MockParams:
-  def __init__(self, main_cruise_allowed: bool = False, aol_enabled: bool = True):
+  def __init__(self, main_cruise_allowed: bool = False, aol_enabled: bool = True,
+               pause_on_steering_override: bool = False):
     self.main_cruise_allowed = main_cruise_allowed
     self.aol_enabled = aol_enabled
+    self.pause_on_steering_override = pause_on_steering_override
 
   def get_bool(self, key: str) -> bool:
     return {
       "AolEnabled": self.aol_enabled,
       "AolMainCruiseAllowed": self.main_cruise_allowed,
       "AolUnifiedEngagementMode": False,
+      "AolPauseOnSteeringOverride": self.pause_on_steering_override,
       "JoystickDebugMode": False,
     }.get(key, False)
 
@@ -39,7 +45,8 @@ class MockParams:
 
 
 def make_selfdrive(cp_flags: int, brand: str = "hyundai", main_cruise_allowed: bool = False,
-                   aol_enabled: bool = True, cp_iq_flags: int = 0):
+                   aol_enabled: bool = True, cp_iq_flags: int = 0,
+                   pause_on_steering_override: bool = False):
   cp = SimpleNamespace(
     brand=brand,
     flags=cp_flags,
@@ -51,7 +58,7 @@ def make_selfdrive(cp_flags: int, brand: str = "hyundai", main_cruise_allowed: b
   return SimpleNamespace(
     CP=cp,
     CP_IQ=cp_iq,
-    params=MockParams(main_cruise_allowed, aol_enabled),
+    params=MockParams(main_cruise_allowed, aol_enabled, pause_on_steering_override),
     state_machine=SimpleNamespace(soft_disable_timer=0, current_alert_types=[]),
     events=Events(),
     events_iq=IQEvents(),
@@ -162,6 +169,53 @@ def test_main_cruise_rising_edge_does_not_engage_when_toggle_is_off():
   assert not guidance.active
   assert not guidance.enabled
   assert guidance.state_machine.state == custom.AlwaysOnLateral.AlwaysOnLateralState.disabled
+
+
+def run_cycle(guidance, selfdrive, car_state, steering_pressed: bool):
+  selfdrive.events.clear()
+  selfdrive.events_iq.clear()
+  if steering_pressed:
+    selfdrive.events.add(EventName.steerOverride)
+  guidance.update(car_state)
+  selfdrive.CS_prev = car_state
+
+
+def make_engaged_guidance(pause_on_steering_override: bool):
+  selfdrive = make_selfdrive(0, brand="volkswagen", pause_on_steering_override=pause_on_steering_override)
+  selfdrive.CS_prev = make_vw_car_state(cruise_available=True)
+  guidance = SteeringAssistanceBehavior(selfdrive)
+  guidance.enabled = True
+  guidance.state_machine.state = GuidanceState.enabled
+  return guidance, selfdrive
+
+
+def test_steering_override_parks_guidance_when_enabled():
+  guidance, selfdrive = make_engaged_guidance(True)
+
+  run_cycle(guidance, selfdrive, make_vw_car_state(cruise_available=True), steering_pressed=True)
+
+  assert guidance.state_machine.state == GuidanceState.paused
+  assert guidance.enabled
+  assert not guidance.active
+
+
+def test_guidance_resumes_once_steering_is_released():
+  guidance, selfdrive = make_engaged_guidance(True)
+
+  run_cycle(guidance, selfdrive, make_vw_car_state(cruise_available=True), steering_pressed=True)
+  run_cycle(guidance, selfdrive, make_vw_car_state(cruise_available=True), steering_pressed=False)
+
+  assert guidance.state_machine.state == GuidanceState.enabled
+  assert guidance.active
+
+
+def test_steering_override_keeps_torque_when_option_is_off():
+  guidance, selfdrive = make_engaged_guidance(False)
+
+  run_cycle(guidance, selfdrive, make_vw_car_state(cruise_available=True), steering_pressed=True)
+
+  assert guidance.state_machine.state == GuidanceState.overriding
+  assert guidance.active
 
 
 def test_main_cruise_rising_edge_engages_when_toggle_is_on():

@@ -1,12 +1,15 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
 from __future__ import annotations
 
 import numpy as np
 
-from openpilot.iqpilot.selfdrive.iqmodeld.tools.compile_supercombo import (
+from iqpilot.selfdrive.iqmodeld.tools.compile_supercombo import (
   _captured_devices,
-  _captured_queue_depth,
   _validate_pose_outputs,
 )
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.supercombo_runner import _captured_queue_depth
 
 
 class _Captured:

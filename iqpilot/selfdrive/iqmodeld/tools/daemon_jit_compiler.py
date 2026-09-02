@@ -272,8 +272,8 @@ def _parse_size(text: str) -> tuple[int, int]:
 
 
 def _read_file_to_shared_memory(path: str) -> str:
-  from openpilot.common.file_chunker import read_file_chunked
-  from openpilot.system.hardware.hw import Paths
+  from iqpilot.common.file_chunker import read_file_chunked
+  from iqpilot.system.hardware.hw import Paths
 
   shm_path = os.path.join(Paths.shm_path(), os.path.basename(path))
   atexit.register(lambda: os.path.exists(shm_path) and os.remove(shm_path))
@@ -295,8 +295,8 @@ def _arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-  from openpilot.iqpilot.selfdrive.iqmodeld.metadata import build_metadata_record
-  from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
+  from iqpilot.selfdrive.iqmodeld.metadata import build_metadata_record
+  from iqpilot.system.camerad.cameras.nv12_info import get_nv12_info
 
   args = _arg_parser().parse_args(argv)
   model_w, model_h = args.model_size

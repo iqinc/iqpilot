@@ -4,42 +4,42 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 Consolidated IQ.Pilot settings panels (display, visuals, network, maps, steering
 and its lane-change / steering-assist sub-panels) in one module.
 """
-from cereal import car
+from iqpilot.cereal import car
 from collections.abc import Callable
 from enum import Enum
 from enum import IntEnum
-from openpilot.common.constants import CV
-from openpilot.common.params import Params
-from openpilot.selfdrive.ui.ui_state import OnroadBrightness
-from openpilot.common.swaglog import cloudlog
-from openpilot.iqpilot.selfdrive.controls.lib.helpers.lane_change import AutoLaneChangeMode
-from openpilot.iqpilot.ui.onroad.offline_tiles import offline_map_root
-from openpilot.selfdrive.ui.layouts.settings.software import time_ago
-from openpilot.selfdrive.ui.ui_state import device, ui_state
-from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.hardware.hw import Paths
-from openpilot.system.ui.iqwidgets.lib.styles import style
-from openpilot.system.ui.iqwidgets.lib.utils import WideButtonAction
-from openpilot.system.ui.iqwidgets.widgets.list_view import IQListItem, toggle_item
-from openpilot.system.ui.iqwidgets.widgets.list_view import OptionControl
-from openpilot.system.ui.iqwidgets.widgets.list_view import multiple_button_item, toggle_item
-from openpilot.system.ui.iqwidgets.widgets.list_view import option_item, toggle_item, ToggleAction
-from openpilot.system.ui.iqwidgets.widgets.list_view import progress_item
-from openpilot.system.ui.iqwidgets.widgets.list_view import toggle_item, multiple_button_item, IQListItem, IQLineSeparator
-from openpilot.system.ui.iqwidgets.widgets.list_view import toggle_item, option_item, IQLineSeparator
-from openpilot.system.ui.iqwidgets.widgets.list_view import toggle_item, simple_button_item, option_item, IQLineSeparator
-from openpilot.system.ui.iqwidgets.widgets.list_view import PickerGroup, PickerItem, PickerDialog
-from openpilot.system.ui.lib.application import gui_app
-from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.lib.multilang import tr, tr_noop
-from openpilot.system.ui.widgets import DialogResult, Widget
-from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.button import Button, ButtonStyle
-from openpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
-from openpilot.system.ui.widgets.list_view import text_item
-from openpilot.system.ui.widgets.network import NavButton
-from openpilot.system.ui.widgets.network import NetworkUI, PanelType as NetworkPanelType, TEAL
-from openpilot.system.ui.widgets.scroller_tici import Scroller
+from iqpilot.common.constants import CV
+from iqpilot.common.params import Params
+from iqpilot.selfdrive.ui.ui_state import OnroadBrightness
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.selfdrive.controls.lib.helpers.lane_change import AutoLaneChangeMode
+from iqpilot.ui.onroad.offline_tiles import offline_map_root
+from iqpilot.selfdrive.ui.layouts.settings.software import time_ago
+from iqpilot.selfdrive.ui.ui_state import device, ui_state
+from iqpilot.selfdrive.ui.ui_state import ui_state
+from iqpilot.system.hardware.hw import Paths
+from iqpilot.system.ui.iqwidgets.lib.styles import style
+from iqpilot.system.ui.iqwidgets.lib.utils import WideButtonAction
+from iqpilot.system.ui.iqwidgets.widgets.list_view import IQListItem, toggle_item
+from iqpilot.system.ui.iqwidgets.widgets.list_view import OptionControl
+from iqpilot.system.ui.iqwidgets.widgets.list_view import multiple_button_item, toggle_item
+from iqpilot.system.ui.iqwidgets.widgets.list_view import option_item, toggle_item, ToggleAction
+from iqpilot.system.ui.iqwidgets.widgets.list_view import progress_item
+from iqpilot.system.ui.iqwidgets.widgets.list_view import toggle_item, multiple_button_item, IQListItem, IQLineSeparator
+from iqpilot.system.ui.iqwidgets.widgets.list_view import toggle_item, option_item, IQLineSeparator
+from iqpilot.system.ui.iqwidgets.widgets.list_view import toggle_item, simple_button_item, option_item, IQLineSeparator
+from iqpilot.system.ui.iqwidgets.widgets.list_view import PickerGroup, PickerItem, PickerDialog
+from iqpilot.system.ui.lib.application import gui_app
+from iqpilot.system.ui.lib.multilang import tr
+from iqpilot.system.ui.lib.multilang import tr, tr_noop
+from iqpilot.system.ui.widgets import DialogResult, Widget
+from iqpilot.system.ui.widgets import Widget
+from iqpilot.system.ui.widgets.button import Button, ButtonStyle
+from iqpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
+from iqpilot.system.ui.widgets.list_view import text_item
+from iqpilot.system.ui.widgets.network import NavButton
+from iqpilot.system.ui.widgets.network import NetworkUI, PanelType as NetworkPanelType, TEAL
+from iqpilot.system.ui.widgets.scroller_tici import Scroller
 from pathlib import Path
 from time import monotonic
 import datetime
@@ -52,16 +52,16 @@ import threading
 import time
 
 
-from cereal import custom
+from iqpilot.cereal import custom
 from dataclasses import dataclass
-from openpilot.iqpilot.selfdrive.car.vehicle_catalog import load_catalog
-from openpilot.iqpilot.selfdrive.iqmodeld.models.helpers import select_default_model, is_default_bundle
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.model_runner import CUSTOM_MODEL_PATH
-from openpilot.selfdrive.ui.layouts.settings import settings as OP
-from openpilot.selfdrive.ui.layouts.settings.toggles import TogglesLayout
-from openpilot.system.hardware import HARDWARE
-from openpilot.system.ui.iqwidgets.lib.styles import metrics
-from openpilot.system.ui.iqwidgets.widgets.list_view import (
+from iqpilot.selfdrive.car.vehicle_catalog import load_catalog
+from iqpilot.selfdrive.iqmodeld.models.helpers import select_default_model, is_default_bundle
+from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import CUSTOM_MODEL_PATH
+from iqpilot.selfdrive.ui.layouts.settings import settings as OP
+from iqpilot.selfdrive.ui.layouts.settings.toggles import TogglesLayout
+from iqpilot.system.hardware import HARDWARE
+from iqpilot.system.ui.iqwidgets.lib.styles import metrics
+from iqpilot.system.ui.iqwidgets.widgets.list_view import (
   option_item as option_item,
   multiple_button_item as multiple_button_item,
   button_item as button_item,
@@ -69,50 +69,44 @@ from openpilot.system.ui.iqwidgets.widgets.list_view import (
   NavSectionButton,
   Spacer,
 )
-from openpilot.system.ui.iqwidgets.widgets.list_view import IQListItem
-from openpilot.system.ui.iqwidgets.widgets.list_view import IQListItem, IQMultipleButtonAction, IQToggleAction, IQLineSeparator
-from openpilot.system.ui.iqwidgets.widgets.list_view import button_item, toggle_item
-from openpilot.system.ui.iqwidgets.widgets.list_view import NoticeModal
-from openpilot.system.ui.iqwidgets.widgets.list_view import PickerDialog, PickerItem, PickerGroup
-from openpilot.system.ui.lib.application import gui_app, MousePos
-from openpilot.system.ui.lib.multilang import tr_noop
-from openpilot.system.ui.lib.text_measure import measure_text_cached
-from openpilot.system.ui.lib.wifi_manager import WifiManager
-from openpilot.system.ui.widgets import DialogResult
-from openpilot.system.ui.widgets.button import ButtonStyle
-from openpilot.system.ui.widgets.confirm_dialog import alert_dialog, ConfirmDialog
-from openpilot.system.ui.widgets.list_view import button_item
-from openpilot.system.ui.widgets.option_dialog import MultiOptionDialog
-from openpilot.system.ui.widgets.scroller_tici import LineSeparator
-from openpilot.system.ui.widgets.toggle import ON_COLOR
+from iqpilot.system.ui.iqwidgets.widgets.list_view import IQListItem
+from iqpilot.system.ui.iqwidgets.widgets.list_view import IQListItem, IQMultipleButtonAction, IQToggleAction, IQLineSeparator
+from iqpilot.system.ui.iqwidgets.widgets.list_view import button_item, toggle_item
+from iqpilot.system.ui.iqwidgets.widgets.list_view import NoticeModal
+from iqpilot.system.ui.iqwidgets.widgets.list_view import PickerDialog, PickerItem, PickerGroup
+from iqpilot.system.ui.lib.application import gui_app, MousePos
+from iqpilot.system.ui.lib.multilang import tr_noop
+from iqpilot.system.ui.lib.text_measure import measure_text_cached
+from iqpilot.system.ui.lib.wifi_manager import WifiManager
+from iqpilot.system.ui.widgets import DialogResult
+from iqpilot.system.ui.widgets.button import ButtonStyle
+from iqpilot.system.ui.widgets.confirm_dialog import alert_dialog, ConfirmDialog
+from iqpilot.system.ui.widgets.list_view import button_item
+from iqpilot.system.ui.widgets.option_dialog import MultiOptionDialog
+from iqpilot.system.ui.widgets.scroller_tici import LineSeparator
+from iqpilot.system.ui.widgets.toggle import ON_COLOR
 import re
 
-from openpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
-from openpilot.selfdrive.ui.layouts.settings.device import DeviceLayout
-from openpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout, time_ago
+from iqpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
+from iqpilot.selfdrive.ui.layouts.settings.device import DeviceLayout
+from iqpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout, time_ago
 
 from functools import partial
 from iqdbc.car.hyundai.values import CAR, CANFD_UNSUPPORTED_LONGITUDINAL_CAR, UNSUPPORTED_LONGITUDINAL_CAR
 from iqdbc.car.subaru.values import CAR, SubaruFlags
 from iqdbc.car.volkswagen.values import CAR, VolkswagenFlags
-from openpilot.common.basedir import BASEDIR
-from openpilot.system.ui.iqwidgets.lib.styles import ink
-from openpilot.system.ui.iqwidgets.widgets.list_view import multiple_button_item
-from openpilot.system.ui.iqwidgets.widgets.list_view import toggle_item
-from openpilot.system.ui.lib.application import gui_app, FontWeight
-from openpilot.system.ui.widgets.list_view import ButtonAction
+from iqpilot.common.basedir import BASEDIR
+from iqpilot.system.ui.iqwidgets.lib.styles import ink
+from iqpilot.system.ui.iqwidgets.widgets.list_view import multiple_button_item
+from iqpilot.system.ui.iqwidgets.widgets.list_view import toggle_item
+from iqpilot.system.ui.lib.application import gui_app, FontWeight
+from iqpilot.system.ui.widgets.list_view import ButtonAction
 import json
-
-# ===== display =====
 
 ONROAD_BRIGHTNESS_TIMER_VALUES = {0: 15, 1: 30, **{i: (i - 1) * 60 for i in range(2, 12)}}
 
-
-
-
 def _fmt_seconds(value) -> str:
   return f"{value} s" if value < 60 else f"{int(value / 60)} m"
-
 
 def onroad_brightness_label(val) -> str:
   if val == OnroadBrightness.AUTO:
@@ -120,7 +114,6 @@ def onroad_brightness_label(val) -> str:
   if val == OnroadBrightness.AUTO_DARK:
     return tr("Auto — Dim")
   return f"{(val - 1) * 5} %"
-
 
 class DisplayLayout(Widget):
   def __init__(self):
@@ -162,8 +155,6 @@ class DisplayLayout(Widget):
       self._dim_delay_row,
       self._idle_close_row,
     ]
-
-  # kept name: visuals.py and ui_state historically called through this
   update_onroad_brightness = staticmethod(onroad_brightness_label)
 
   def _update_state(self):
@@ -184,15 +175,12 @@ class DisplayLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
 
-# ===== visuals =====
-
 CHEVRON_INFO_DESCRIPTION = {
   "enabled": tr_noop("Pins live readouts (gap, speed, time-to-lead) to the chevron marking the car ahead. "
                      "Needs IQ.Pilot to be the one controlling gas and brake."),
   "disabled": tr_noop("Unavailable — IQ.Pilot longitudinal control is not active on this car."),
 }
 
-# param key -> (title fn, description fn)
 _HUD_TOGGLES = {
   "IQBlindSpotAlerts": (
     lambda: tr("Blind Spot Alerts"),
@@ -224,7 +212,6 @@ _HUD_TOGGLES = {
 
 _SECTION_TITLE_COLOR = rl.Color(16, 185, 169, 255)
 
-
 class VisualsLayout(Widget):
   def __init__(self):
     super().__init__()
@@ -253,7 +240,6 @@ class VisualsLayout(Widget):
       callback=lambda on: ui_state.params.put("IQDevUIInfo", 3 if on else 0),
     )
 
-    # Display rows are shared with DisplayLayout (its row 0, Force Mici UI, stays there)
     display_rows = self._display_layout._scroller._items[1:]
 
     return [
@@ -294,24 +280,19 @@ class VisualsLayout(Widget):
       self._chevron_info.set_description(tr(CHEVRON_INFO_DESCRIPTION["disabled"]))
       self._chevron_info.show_description(True)
 
-# ===== network =====
-
 _IDLE_BG = rl.Color(52, 55, 62, 255)
-
 
 class ScanPhase(Enum):
   IDLE = 0
   RUNNING = 1
   FAILED = 2
 
-
 class IQNetworkUI(NetworkUI):
-  """Stock network panel plus a manual wifi rescan button."""
-
   def __init__(self, wifi_manager):
     super().__init__(wifi_manager)
     self._phase = ScanPhase.IDLE
-    self.scan_button = Button(tr("Scan"), self._start_scan, button_style=ButtonStyle.TRANSPARENT_WHITE_TEXT,
+    self.scan_button = Button(lambda: tr("Searching...") if self._phase == ScanPhase.RUNNING else tr("Scan"), self._start_scan,
+                              button_style=ButtonStyle.TRANSPARENT_WHITE_TEXT,
                               font_size=60, border_radius=30)
     self.scan_button.set_rect(rl.Rectangle(0, 0, 400, 100))
     self._wifi_manager.add_callbacks(networks_updated=self._on_networks_updated)
@@ -319,9 +300,7 @@ class IQNetworkUI(NetworkUI):
   def _set_phase(self, phase: ScanPhase):
     self._phase = phase
     running = phase == ScanPhase.RUNNING
-    self.scan_button.set_text(tr("Searching...") if running else tr("Scan"))
     self.scan_button.set_enabled(not running)
-    # keep the manager's spinner in step with the button, not just the quick scan call
     self._wifi_manager._scanning = running
 
   def _start_scan(self):
@@ -354,8 +333,6 @@ class IQNetworkUI(NetworkUI):
       rl.draw_rectangle_rounded(r, 30 / (min(r.width, r.height) / 2), 10, bg)
       self.scan_button.render()
 
-# ===== iq_maps =====
-
 MAP_PATH = Path(Paths.mapd_root()) / "offline"
 OFFLINE_TILES_PATH = offline_map_root() / "regions"
 
@@ -365,7 +342,6 @@ _REGION_PARAMS = ("OsmDownloadedDate", "OsmLocal", "OsmLocationName", "OsmLocati
 
 def _fmt_bytes(n: int) -> str:
   return f"{n / 1024 ** 2:.2f} MB" if n < 1024 ** 3 else f"{n / 1024 ** 3:.2f} GB"
-
 
 def _tree_size(*roots: Path) -> int:
   total = 0
@@ -380,7 +356,6 @@ def _tree_size(*roots: Path) -> int:
     except OSError:
       pass
   return total
-
 
 class IQMapsLayout(Widget):
   def __init__(self):
@@ -423,13 +398,11 @@ class IQMapsLayout(Widget):
     self.items = [self._mapd_version, self._online_maps_toggle, self._offline_maps_toggle, self._delete_maps_btn,
                   self._progress, self._tile_progress, self._update_btn, self._country_btn, self._state_btn]
 
-  # -- disk usage ---------------------------------------------------------------
   def _refresh_disk_usage(self):
     def worker():
       self._delete_maps_btn.action_item.set_value(_fmt_bytes(_tree_size(MAP_PATH, OFFLINE_TILES_PATH)))
     threading.Thread(target=worker, daemon=True).start()
 
-  # -- wipe ---------------------------------------------------------------------
   def _confirm_wipe(self):
     self._ask(tr("This will delete ALL downloaded maps\n\nAre you sure you want to delete all maps?"),
               tr("Yes, delete all maps"), self._start_wipe)
@@ -449,7 +422,6 @@ class IQMapsLayout(Widget):
     self._delete_maps_btn.action_item.set_text(tr("DELETE"))
     self._refresh_disk_usage()
 
-  # -- database download ----------------------------------------------------------
   @staticmethod
   def _ask(msg, confirm_text, then):
     gui_app.set_modal_overlay(ConfirmDialog(msg, confirm_text),
@@ -464,14 +436,12 @@ class IQMapsLayout(Widget):
     nations = [c] if (c := ui_state.params.get("OsmLocationName") or "") else []
     states = [s] if (s := ui_state.params.get("OsmStateName") or "") else []
     if "US" in nations and states:
-      # a state list replaces the whole-US download; "All" is just the marker for every state
       if any(x.lower() == "all" for x in states):
         states = [x for x in states if x.lower() != "all"]
       else:
         nations.remove("US")
     self._mem_params.put("OSMDownloadLocations", {"nations": nations, "states": states})
 
-  # -- region picker ---------------------------------------------------------------
   def _open_region_picker(self, region_type):
     btn = self._country_btn if region_type == "Country" else self._state_btn
     btn.action_item.set_enabled(False)
@@ -506,7 +476,6 @@ class IQMapsLayout(Widget):
 
   def _on_region_picked(self, region_type, locations, key, res, ref):
     if res != DialogResult.CONFIRM or not ref:
-      # cancelling the state picker right after choosing US leaves a half-configured selection — undo it
       if region_type == "State" and res == DialogResult.CANCEL:
         if ui_state.params.get("OsmLocationName") == "US" and not ui_state.params.get("OsmStateName"):
           for param in ("OsmLocationName", "OsmLocationTitle", "OsmLocal"):
@@ -528,7 +497,6 @@ class IQMapsLayout(Widget):
     else:
       self._confirm_db_refresh()
 
-  # -- progress sync -----------------------------------------------------------------
   def _sync_tile_progress(self):
     if not self._mem_params.get("OfflineTilesDownloadRequest"):
       self._tile_progress.set_visible(False)
@@ -613,8 +581,6 @@ class IQMapsLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
 
-# ===== lane_change_settings =====
-
 _TIMER_LABELS = {
   -1: lambda: tr("Off"),
   0: lambda: tr("Nudge"),
@@ -624,7 +590,6 @@ _TIMER_LABELS = {
   4: lambda: f"2 {tr('s')}",
   5: lambda: f"3 {tr('s')}",
 }
-
 
 class LaneChangeSettingsLayout(Widget):
   def __init__(self, back_btn_callback: Callable):
@@ -649,6 +614,11 @@ class LaneChangeSettingsLayout(Widget):
       description=lambda: tr("Hold the automatic lane change while blind spot monitoring reports a car in the "
                              "target lane, releasing it once the lane is clear."),
     )
+    self._edge_guard = toggle_item(
+      param="IQEdgeGuard",
+      title=lambda: tr("Lane Edge Guard"),
+      description=lambda: tr("Blocks lane changes when a road edge is detected on the target side."),
+    )
     self._continuous = toggle_item(
       param="LaneChangeContinuous",
       title=lambda: tr("Auto Lane Change: Continuous Changes"),
@@ -660,6 +630,8 @@ class LaneChangeSettingsLayout(Widget):
       self._lane_change_timer,
       IQLineSeparator(40),
       self._bsm_delay,
+      IQLineSeparator(40),
+      self._edge_guard,
       IQLineSeparator(40),
       self._continuous,
     ]
@@ -681,13 +653,10 @@ class LaneChangeSettingsLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
 
-# ===== sab_settings =====
-
-# (segment label, explanation) — order matches the AolSteeringMode param values
 SAB_BRAKE_RESPONSE_OPTIONS = [
-  (tr("Stay Engaged"), tr_noop("Remain Active: braking never interrupts steering assistance.")),
-  (tr("Standby"), tr_noop("Standby: braking parks steering assistance; it rejoins once you're off the pedal.")),
-  (tr("Disengage"), tr_noop("Disengage: braking shuts steering assistance off entirely.")),
+  (tr_noop("Stay Engaged"), tr_noop("Remain Active: braking never interrupts steering assistance.")),
+  (tr_noop("Standby"), tr_noop("Standby: braking parks steering assistance; it rejoins once you're off the pedal.")),
+  (tr_noop("Disengage"), tr_noop("Disengage: braking shuts steering assistance off entirely.")),
 ]
 
 _MODE_DISENGAGE = 2
@@ -696,9 +665,11 @@ _MODE_STANDBY = 1
 SAB_AVAILABILITY_DESC = tr("Note: on cars lacking an LFA/LKAS button, turning this off keeps steering assistance "
                            "from arming as cruise availability flips.")
 SAB_DRIVER_INTERVENTION_DESC = tr("Pick what a brake-pedal press does to steering assistance.")
+SAB_STEERING_OVERRIDE_DESC = tr(
+  "Steering assistance stands by while you steer yourself and rejoins the moment you let go. It stays armed the whole time; only the torque stops."
+)
 DEFAULT_TO_OFF = tr("Locked OFF on this platform; the vehicle can't support other choices.")
 STATUS_DISENGAGE_ONLY = tr("This platform is limited to Disengage mode.")
-
 
 class SabSettingsLayout(Widget):
   def __init__(self, back_btn_callback: Callable):
@@ -723,14 +694,19 @@ class SabSettingsLayout(Widget):
       param="AolSteeringMode",
       title=lambda: tr("Brake Response Mode"),
       description="",
-      buttons=[label for label, _ in SAB_BRAKE_RESPONSE_OPTIONS],
+      buttons=[lambda label=label: tr(label) for label, _ in SAB_BRAKE_RESPONSE_OPTIONS],
       inline=False,
       button_width=350,
       callback=self._refresh_mode_description,
     )
-    return [self._main_cruise_toggle, self._disengage_on_brake_toggle, self._steering_mode]
+    self._pause_on_steering_override_toggle = toggle_item(
+      title=lambda: tr("Pause While You Steer"),
+      description=SAB_STEERING_OVERRIDE_DESC,
+      param="AolPauseOnSteeringOverride",
+    )
+    return [self._main_cruise_toggle, self._disengage_on_brake_toggle, self._steering_mode,
+            self._pause_on_steering_override_toggle]
 
-  # -- platform capability ----------------------------------------------------
   @staticmethod
   def _has_limited_sab_options() -> bool:
     brand = ""
@@ -741,9 +717,7 @@ class SabSettingsLayout(Widget):
       brand = ui_state.CP.brand
     return brand == "rivian"
 
-  # -- interactions -------------------------------------------------------------
   def _on_brake_shortcut_toggled(self, enabled: bool):
-    """The 'Driver Intervention' toggle is a shortcut between Disengage and Standby."""
     current = int(ui_state.params.get("AolSteeringMode", return_default=True))
     if enabled:
       target = _MODE_DISENGAGE
@@ -762,7 +736,6 @@ class SabSettingsLayout(Widget):
     self._steering_mode.set_description("<br>".join(lines))
     self._steering_mode.show_description(True)
 
-  # -- state sync ---------------------------------------------------------------
   def _apply_limited_platform(self):
     ui_state.params.remove("AolMainCruiseAllowed")
     ui_state.params.put_bool("AolUnifiedEngagementMode", True)
@@ -810,13 +783,10 @@ class SabSettingsLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
 
-# ===== steering =====
-
 class PanelType(IntEnum):
   STEERING = 0
   SAB = 1
   LANE_CHANGE = 2
-
 
 class SteeringLayout(Widget):
   def __init__(self):
@@ -859,10 +829,10 @@ class SteeringLayout(Widget):
       description=""
     )
     self._lane_turn_desire_toggle = toggle_item(
-      tr("Low-Speed Turn Planning"),
-      tr("If you're driving at 20 mph (32 km/h) or below and have your blinker on,"
-         " the car will plan a turn in that direction at the nearest drivable path."
-         " This prevents situations (like at red lights) where the car might plan the wrong turn direction."),
+      lambda: tr("Low-Speed Turn Planning"),
+      lambda: tr("If you're driving at 20 mph (32 km/h) or below and have your blinker on,"
+                 " the car will plan a turn in that direction at the nearest drivable path."
+                 " This prevents situations (like at red lights) where the car might plan the wrong turn direction."),
       param="IQLaneTurnDesire"
     )
     self._lane_turn_value_control = option_item(
@@ -872,7 +842,7 @@ class SteeringLayout(Widget):
       lambda v: f"{int(round(v * (CV.MPH_TO_KPH if ui_state.is_metric else 1)))}"
                 f" {'km/h' if ui_state.is_metric else 'mph'}"
     )
-    self._steer_delay_toggle = toggle_item(tr("Self-Tuning Steer Delay"), "", param="IQLiveSteerDelay")
+    self._steer_delay_toggle = toggle_item(lambda: tr("Self-Tuning Steer Delay"), "", param="IQLiveSteerDelay")
     self._delay_control = option_item(
       tr("Manual Delay Offset"), "IQSoftwareSteerDelay", 5, 50,
       tr("How much lead time to add on top of the car's own steering rack delay while self-tuning is off. Default is 0.2 s."),
@@ -930,7 +900,7 @@ class SteeringLayout(Widget):
     delay_desc = tr("Let IQ.Pilot measure how long your steering takes to respond and keep that figure up to date. "
                     "Switch it off to pin the timing yourself.")
     if live_delay:
-      delay_desc += f"<br>{tr('Measured:')} {ui_state.sm['liveDelay'].lateralDelay:.3f} s"
+      delay_desc += f"<br>{tr('Measured:')} {ui_state.sm['lateralDelay'].lateralDelay:.3f} s"
     elif ui_state.CP:
       sw = float(ui_state.params.get("IQSoftwareSteerDelay", "0.2"))
       cp = ui_state.CP.steerActuatorDelay
@@ -949,8 +919,6 @@ class SteeringLayout(Widget):
     self._set_current_panel(PanelType.STEERING)
     self._scroller.show_event()
 
-
-# ===== cruise =====
 
 class CruiseLayout(Widget):
   def __init__(self):
@@ -1162,9 +1130,6 @@ class CruiseLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
 
-
-# ===== developer =====
-
 class IQDeveloperLayout(DeveloperLayout):
   def __init__(self):
     super().__init__()
@@ -1177,7 +1142,8 @@ class IQDeveloperLayout(DeveloperLayout):
       self._scroller.add_widget(item)
 
   def _initialize_items(self):
-    self.error_log_btn = button_item(tr("Crash Log"), tr("VIEW"), tr("View the error log for IQ.Pilot crashes."), callback=self._on_error_log_clicked)
+    self.error_log_btn = button_item(lambda: tr("Crash Log"), lambda: tr("VIEW"),
+                                     lambda: tr("View the error log for IQ.Pilot crashes."), callback=self._on_error_log_clicked)
 
     self.items: list = [self.error_log_btn]
 
@@ -1206,9 +1172,6 @@ class IQDeveloperLayout(DeveloperLayout):
   def _update_state(self):
     self.error_log_btn.set_visible(not self._is_release_branch)
 
-
-# ===== software =====
-
 UPDATES_DESCRIPTIONS = {
   'disable_updates_offroad': tr_noop(
     "Turns off over-the-air update checks entirely.<br><b>Reboot for this to take effect.</b>"
@@ -1234,7 +1197,6 @@ INSTALL_MODE_LABELS = {
   INSTALL_MODE_DOWNLOAD_ONLY: tr_noop("Predownload Only"),
   INSTALL_MODE_DOWNLOAD_AND_INSTALL: tr_noop("Predownload + Preinstall"),
 }
-
 
 class IQSoftwareLayout(SoftwareLayout):
   def __init__(self):
@@ -1316,9 +1278,6 @@ class IQSoftwareLayout(SoftwareLayout):
     if HARDWARE.get_device_type() == "tici":
       top_level_branches = ["release-new", "release-tici", "staging-tici"]
       branches = [b for b in branches if b in ("release-new", "beta") or b.endswith("-tici")]
-
-    # single flat list: pinned branches first, then the rest alphabetically.
-    # prebuilt ("-prebuilt") branches are internal build outputs, not user-selectable.
     pinned_nodes = [PickerItem(b, {'display_name': b}) for b in top_level_branches if b in branches]
     other_nodes = [PickerItem(b, {'display_name': b}) for b in sorted(branches)
                    if b not in top_level_branches and not b.endswith("-prebuilt")]
@@ -1355,24 +1314,16 @@ class IQSoftwareLayout(SoftwareLayout):
     if install_mode not in INSTALL_MODE_OPTIONS:
       install_mode = INSTALL_MODE_DOWNLOAD_AND_INSTALL
     self.install_mode_btn.action_item.set_value(tr(INSTALL_MODE_LABELS[install_mode]))
-
-    # While we've asked the updater to check but it hasn't responded yet, show an inline spinner
-    # instead of a stale value with a dead greyed-out button.
     waiting = getattr(self, "_waiting_for_updater", False)
     self._download_btn.action_item.set_loading(waiting)
     if waiting:
       self._download_btn.action_item.set_enabled(False)
 
-
-# ===== device =====
-
-# minutes the device may sit offroad before auto-shutdown, indexed by slider step
 _OFFROAD_SHUTDOWN_MINUTES = (0, 5, 10, 15, 30, 60, 120, 180, 300, 600, 1440, 1800)
 offroad_time_options = dict(enumerate(_OFFROAD_SHUTDOWN_MINUTES))
 
 FORCE_ONROAD_DURATION_SEC = 10 * 60
 FORCE_ONROAD_PARAM = "ForceOnroadUntil"
-
 
 class IQDeviceLayout(DeviceLayout):
   MENU_ROOT = 0
@@ -1386,8 +1337,6 @@ class IQDeviceLayout(DeviceLayout):
 
   def _initialize_items(self):
     DeviceLayout._initialize_items(self)
-
-    # Using dual button with no right button for better alignment
     self._always_offroad_btn = self._left_button(lambda: tr("Keep Device Offroad"), self._handle_always_offroad)
     self._force_onroad_btn = self._left_button(lambda: tr("Force On-Road (10 min)"), self._handle_force_onroad)
 
@@ -1418,18 +1367,9 @@ class IQDeviceLayout(DeviceLayout):
       inline=True,
     )
     self._change_language_btn = button_item(lambda: tr("Change Language"), lambda: tr("CHANGE"), callback=self._show_language_dialog)
+    self._driver_camera_btn = button_item(lambda: tr("Driver Camera Check"), lambda: tr("PREVIEW"), callback=self._show_driver_camera)
 
-    # Silent Mode moved to the settings-hub top bar (bell bubble); this is just the dcam preview now.
-    self._driver_camera_btn = button_item(lambda: tr("Driver Camera Check"), lambda: tr("PREVIEW"),
-                                          callback=self._show_driver_camera)
-
-    self._reg_and_training = dual_button_item(
-      left_text=lambda: tr("Regulatory"),
-      left_callback=self._on_regulatory,
-      right_text=lambda: tr("Training Guide"),
-      right_callback=self._on_review_training_guide
-    )
-    self._reg_and_training.action_item.right_button.set_button_style(ButtonStyle.NORMAL)
+    self._reg_and_training = self._left_button(lambda: tr("Regulatory"), self._on_regulatory)
 
     self._onroad_uploads_and_reset_settings = dual_button_item(
       left_text=lambda: tr("Upload While Driving"),
@@ -1495,7 +1435,6 @@ class IQDeviceLayout(DeviceLayout):
 
   def _set_submenu(self, submenu: int):
     self._submenu = submenu
-    # Reset scroll so switching menus doesn't keep a now-invalid offset (which jumps the view).
     self._scroller.scroll_panel.set_offset(0)
 
   def _go_back(self):
@@ -1570,7 +1509,6 @@ class IQDeviceLayout(DeviceLayout):
 
     def _set_force_onroad(result: int):
       if result == DialogResult.CONFIRM and not ui_state.engaged:
-        # Force On-Road relies on Always Offroad being active so expiry returns to offroad.
         ui_state.params.put_bool("IQAlwaysOffroad", True)
         ui_state.params.put(FORCE_ONROAD_PARAM, int(time.time()) + FORCE_ONROAD_DURATION_SEC)
 
@@ -1584,28 +1522,20 @@ class IQDeviceLayout(DeviceLayout):
 
   def _update_state(self):
     super()._update_state()
-
-    # Handle Always Offroad button
     always_offroad = ui_state.params.get_bool("IQAlwaysOffroad")
     now = int(time.time())
     force_onroad_until = ui_state.params.get(FORCE_ONROAD_PARAM, return_default=True)
     force_onroad_active = force_onroad_until > now
-
-    # Text & Color
     offroad_mode_btn_text = tr("Exit Offroad Mode") if always_offroad else tr("Keep Device Offroad")
     offroad_mode_btn_style = ButtonStyle.PRIMARY if always_offroad else ButtonStyle.DANGER
     self._always_offroad_btn.action_item.left_button.set_text(offroad_mode_btn_text)
     self._always_offroad_btn.action_item.left_button.set_button_style(offroad_mode_btn_style)
-
-    # Position
     if self._scroller._items.__contains__(self._always_offroad_btn):
       self._scroller._items.remove(self._always_offroad_btn)
     if ui_state.is_offroad() and not always_offroad:
       self._scroller._items.insert(len(self._scroller._items) - 1, self._always_offroad_btn)
     else:
       self._scroller._items.insert(0, self._always_offroad_btn)
-
-    # Force On-Road button is always shown directly under Always Offroad in System menu.
     if self._scroller._items.__contains__(self._force_onroad_btn):
       self._scroller._items.remove(self._force_onroad_btn)
     self._scroller._items.insert(self._scroller._items.index(self._always_offroad_btn) + 1, self._force_onroad_btn)
@@ -1623,18 +1553,14 @@ class IQDeviceLayout(DeviceLayout):
     self._force_onroad_btn.action_item.left_button.set_button_style(force_onroad_style)
     self._force_onroad_btn.action_item.left_button.set_enabled(ui_state.is_offroad())
 
-    # Onroad Uploads
     self._onroad_uploads_and_reset_settings.action_item.left_button.set_button_style(
       ButtonStyle.PRIMARY if ui_state.params.get_bool("OnroadUploads") else ButtonStyle.NORMAL
     )
 
-    # Offroad only buttons
     self._driver_camera_btn.set_enabled(ui_state.is_offroad())
     self._reg_and_training.action_item.left_button.set_enabled(ui_state.is_offroad())
-    self._reg_and_training.action_item.right_button.set_enabled(ui_state.is_offroad())
     self._onroad_uploads_and_reset_settings.action_item.right_button.set_enabled(ui_state.is_offroad())
 
-    # Group advanced actions under submenu buttons.
     root_menu = self._submenu == self.MENU_ROOT
     system_menu = self._submenu == self.MENU_SYSTEM
     maintenance_menu = self._submenu == self.MENU_MAINTENANCE
@@ -1664,14 +1590,36 @@ class IQDeviceLayout(DeviceLayout):
     self._submenu_top_separator.set_visible(root_menu or system_menu or maintenance_menu)
 
 
-# ===== models =====
-
 if gui_app.iqpilot_ui():
-  from openpilot.system.ui.iqwidgets.widgets.list_view import button_item as button_item
+  from iqpilot.system.ui.iqwidgets.widgets.list_view import button_item as button_item
 
 _ACTIVE_BUNDLE_KEY = "ModelManager_ActiveBundle"
 _DOWNLOAD_INDEX_KEY = "ModelManager_DownloadIndex"
 _RUNNER_CACHE_KEY = "ModelRunnerTypeCache"
+
+def _big_model_options() -> list[tuple[str, str]]:
+  try:
+    from iqpilot.selfdrive.iqmodeld.emac_model_meta import big_models
+    return big_models(ui_state.params)
+  except Exception:
+    return []
+
+
+def _big_model_label(key: str) -> str:
+  for name, display in _big_model_options():
+    if name == key:
+      return display
+  return key
+
+
+def _refresh_big_catalog() -> None:
+  def worker():
+    try:
+      from iqpilot.selfdrive.iqmodeld.emac_model_meta import refresh_catalog
+      refresh_catalog(ui_state.params)
+    except Exception:
+      pass
+  threading.Thread(target=worker, daemon=True).start()
 
 
 class ModelsLayout(Widget):
@@ -1683,6 +1631,7 @@ class ModelsLayout(Widget):
     self.download_status = None
     self.prev_download_status = None
     self.model_dialog = None
+    self._big_model_dialog = None
     self.last_cache_calc_time = 0
 
     self._initialize_items()
@@ -1692,29 +1641,37 @@ class ModelsLayout(Widget):
 
   def _initialize_items(self):
     self.current_model_item = IQListItem(
-      title=tr("Active Model"),
+      title=lambda: tr("Active Model"),
       description="",
-      action_item=WideButtonAction(tr("SELECT")),
+      action_item=WideButtonAction(lambda: tr("SELECT")),
       callback=self._handle_current_model_clicked
     )
+
+    self.big_model_item = button_item(
+      lambda: tr("Big Model"),
+      lambda: tr("CHANGE"),
+      tr("Only works with external compute connected over USB."),
+      self._handle_big_model_clicked,
+    )
+    self.big_model_item.action_item.set_value(self._big_model_value())
 
     self.supercombo_label = progress_item(tr("Combined Model"))
     self.vision_label = progress_item(tr("Vision Weights"))
     self.policy_label = progress_item(tr("Policy Weights"))
 
-    self.refresh_item = button_item(tr("Reload Model List"), tr("REFRESH"), "", self._on_refresh_models)
+    self.refresh_item = button_item(lambda: tr("Reload Model List"), lambda: tr("REFRESH"), "", self._on_refresh_models)
 
     self.clear_cache_item = IQListItem(
-      title=tr("Purge Model Cache"),
+      title=lambda: tr("Purge Model Cache"),
       description="",
-      action_item=WideButtonAction(tr("CLEAR")),
+      action_item=WideButtonAction(lambda: tr("CLEAR")),
       callback=self._clear_cache
     )
 
-    self.redownload_item = button_item(tr("Redownload Current Model"), tr("REDOWNLOAD"), "", self._redownload_model)
+    self.redownload_item = button_item(lambda: tr("Redownload Current Model"), lambda: tr("REDOWNLOAD"), "", self._redownload_model)
     self.cancel_download_item = button_item(tr("Stop Download"), tr("Cancel"), "", self._cancel_model_request)
 
-    self.items = [self.current_model_item, self.cancel_download_item, self.supercombo_label, self.vision_label,
+    self.items = [self.current_model_item, self.big_model_item, self.cancel_download_item, self.supercombo_label, self.vision_label,
                   self.policy_label, self.redownload_item, self.refresh_item, self.clear_cache_item]
 
   def _is_downloading(self):
@@ -1895,8 +1852,6 @@ class ModelsLayout(Widget):
       label.action_item.update(p.progress, text, show, color, indeterminate=indeterminate)
 
   def _model_label_state(self, p, bundle, bundle_downloading, status_changed):
-    # RL/supercombo weights are served without a content-length, so their per-artifact
-    # progress never updates; show a live bar whenever the bundle itself is downloading.
     DS = custom.IQModelManager.DownloadStatus
     name = bundle.displayName
     live = p.status == DS.downloading or (bundle_downloading and p.status not in (DS.downloaded, DS.cached, DS.failed))
@@ -1966,8 +1921,40 @@ class ModelsLayout(Widget):
                                          get_folders_fn=self._get_folders, on_exit=self._on_model_selected)
     gui_app.set_modal_overlay(self.model_dialog, callback=self._on_model_selected)
 
+  @staticmethod
+  def _big_model_value() -> str:
+    if not ui_state.params.get_bool("IQEmacEnabled"):
+      return tr("Off")
+    key = ui_state.params.get("IQEmacModel")
+    key = key.decode() if isinstance(key, bytes) else (key or "")
+    return _big_model_label(key) if key in [n for n, _ in _big_model_options()] else tr("Off")
+
+  def _handle_big_model_clicked(self):
+    options = _big_model_options()
+    if len(options) <= 1:
+      _refresh_big_catalog()
+    keys = [n for n, _ in options]
+    labels = [tr("Off")] + [d for _, d in options]
+    self._big_model_dialog = MultiOptionDialog(tr("Big Model"), labels, self._big_model_value())
+
+    def handle_selection(result):
+      if result == DialogResult.CONFIRM and self._big_model_dialog is not None and self._big_model_dialog.selection:
+        selected = self._big_model_dialog.selection
+        if selected == tr("Off"):
+          ui_state.params.put_bool("IQEmacEnabled", False)
+        else:
+          for key in keys:
+            if _big_model_label(key) == selected:
+              ui_state.params.put("IQEmacModel", key)
+              ui_state.params.put_bool("IQEmacEnabled", True)
+              break
+        self.big_model_item.action_item.set_value(self._big_model_value())
+      self._big_model_dialog = None
+
+    gui_app.set_modal_overlay(self._big_model_dialog, callback=handle_selection)
+
   def _on_refresh_models(self):
-    # Trigger a re-sync and show inline loading instead of a blocking dialog
+    _refresh_big_catalog()
     ui_state.params.put("ModelManager_LastSyncTime", 0)
     self._refreshing = True
     self._refresh_start = time.monotonic()
@@ -2018,9 +2005,6 @@ class ModelsLayout(Widget):
   def show_event(self):
     self._scroller.show_event()
 
-
-# ===== settings =====
-
 OP.PANEL_COLOR = rl.Color(10, 10, 10, 255)
 ICON_SIZE = 70
 
@@ -2037,15 +2021,11 @@ OP.PanelType = IntEnum(
   start=0,
 )
 
-
 @dataclass
 class PanelInfo(OP.PanelInfo):
   icon: str = ""
 
-
 class SidebarEntry(Widget):
-  """One sidebar row: optional icon + label, with a rounded pill behind the active panel."""
-
   def __init__(self, hub, panel_type, panel_info):
     super().__init__()
     self._hub = hub
@@ -2073,9 +2053,7 @@ class SidebarEntry(Widget):
                     rl.Vector2(x, rect.y + (OP.NAV_BTN_HEIGHT - label_h) / 2), 55, 0,
                     OP.TEXT_SELECTED if active else OP.TEXT_NORMAL)
 
-    # remembered for the hub's release-hit-testing
     self.panel_info.button_rect = rect
-
 
 class IQSettingsLayout(OP.SettingsLayout):
   def __init__(self):
@@ -2086,7 +2064,7 @@ class IQSettingsLayout(OP.SettingsLayout):
     wifi_manager = WifiManager()
     wifi_manager.set_active(False)
 
-    iq_asset = "../../iqpilot/selfdrive/assets/offroad"
+    iq_asset = "offroad"
     self._panels = {
       OP.PanelType.DEVICE: PanelInfo(tr_noop("Device"), IQDeviceLayout(), icon=f"{iq_asset}/icon_home.png"),
       OP.PanelType.NETWORK: PanelInfo(tr_noop("Network"), IQNetworkUI(wifi_manager), icon="icons/network.png"),
@@ -2099,8 +2077,6 @@ class IQSettingsLayout(OP.SettingsLayout):
       OP.PanelType.VEHICLE: PanelInfo(tr_noop("Vehicle"), VehicleLayout(), icon=f"{iq_asset}/icon_vehicle.png"),
       OP.PanelType.DEVELOPER: PanelInfo(tr_noop("Developer"), IQDeveloperLayout(), icon="icons/shell.png"),
     }
-
-    # Cruise is reachable only via double-click on IQ.Dynamic in Toggles
     self._hidden_from_sidebar = {OP.PanelType.CRUISE}
     self._panels[OP.PanelType.TOGGLES].instance.set_cruise_panel_callback(
       lambda: self.set_current_panel(OP.PanelType.CRUISE)
@@ -2162,27 +2138,17 @@ class IQSettingsLayout(OP.SettingsLayout):
     self._panels[self._current_panel].instance.show_event()
     self._sidebar_scroller.show_event()
 
-
-# ===== vehicle_brands_base =====
-
 class BrandPanel:
-  """Per-brand extra settings rows; brands without any simply don't register."""
-
   def __init__(self):
     self.items: list = []
-
   def update_settings(self) -> None:
     pass
-
-
-# ===== vehicle_brands_hyundai =====
 
 _TUNING_BLURBS = (
   lambda: tr("Factory-default longitudinal tuning."),
   lambda: tr("Dynamic tuning: livelier gas/brake response."),
   lambda: tr("Predictive tuning: anticipates and smooths accel changes."),
 )
-
 
 class HyundaiSettings(BrandPanel):
   def __init__(self):
@@ -2221,11 +2187,7 @@ class HyundaiSettings(BrandPanel):
     row.action_item.set_selected_button(selected)
     row.set_visible(self.alpha_long_available)
 
-
-# ===== vehicle_brands_subaru =====
-
 _UNSUPPORTED_FLAGS = SubaruFlags.GLOBAL_GEN2 | SubaruFlags.HYBRID
-
 
 class SubaruSettings(BrandPanel):
   def __init__(self):
@@ -2269,25 +2231,21 @@ class SubaruSettings(BrandPanel):
       row.action_item.set_enabled(usable)
       row.set_description(f"<b>{blocker}</b><br><br>{body}" if blocker else body)
 
-
-# ===== vehicle_brands_tesla =====
-
 COOP_STEERING_MIN_KMH = 23
 OEM_STEERING_MIN_KMH = 48
 KM_TO_MILE = 0.621371
-
 
 def _speed_text(kmh: int) -> str:
   if ui_state.is_metric:
     return f"{kmh} km/h"
   return f"{round(kmh * KM_TO_MILE)} mph"
 
-
 class TeslaSettings(BrandPanel):
   def __init__(self):
     super().__init__()
     self.torque_blend_toggle = toggle_item(tr("VTB (Virtual Torque Blending)"), "", param="IQTeslaTorqueBlend")
-    self.items = [self.torque_blend_toggle]
+    self.fsd_visualization_toggle = toggle_item(tr("FSD Visualization"), "", param="IQTeslaFsdVisualization")
+    self.items = [self.torque_blend_toggle, self.fsd_visualization_toggle]
 
   def update_settings(self):
     caution = tr("Warning: steering may oscillate in turns below {}; turn this off if you feel it.").format(
@@ -2301,10 +2259,13 @@ class TeslaSettings(BrandPanel):
       body = f"<b>{blocker}</b><br><br>{body}"
 
     self.torque_blend_toggle.set_description(body)
-    self.torque_blend_toggle.action_item.set_enabled(ui_state.is_offroad())
-
-
-# ===== vehicle_brands_toyota =====
+    visualization_body = tr("Shows Tesla's FSD / Autosteer visualization while IQ.Pilot controls steering. " +
+                            "Requires an offroad restart or reboot.")
+    if not ui_state.is_offroad():
+      visualization_body = f"<b>{blocker}</b><br><br>{visualization_body}"
+    self.fsd_visualization_toggle.set_description(visualization_body)
+    for row in self.items:
+      row.action_item.set_enabled(ui_state.is_offroad())
 
 class ToyotaSettings(BrandPanel):
   def __init__(self):
@@ -2340,9 +2301,6 @@ class ToyotaSettings(BrandPanel):
     prompt = f"<h1>{row.title}</h1><br><p>{row.description}</p>"
     gui_app.set_modal_overlay(ConfirmDialog(prompt, tr("Enable"), rich=True), callback=after_confirm)
 
-
-# ===== vehicle_brands_volkswagen =====
-
 DESCRIPTIONS = {
   'pqhca5or7Toggle': tr_noop(
     'Use HCA Status 7 instead of Status 5 for steering control on PQ platform vehicles. '
@@ -2358,8 +2316,15 @@ DESCRIPTIONS = {
   'iqMqbSteeringLockout': tr_noop(
     'Enable MQB steering lockout handling on Volkswagen MQB vehicles with low speed LKAS faults.'
   ),
+  'EnableCurvatureController': tr_noop(
+    'Close the steering loop on MEB and MQB Evo vehicles. IQ.Pilot corrects its steering command against '
+    'the curvature the car is actually holding, instead of sending the planned curvature straight through.'
+  ),
+  'EnableSmoothSteer': tr_noop(
+    'Low-pass the planned curvature before it reaches the rack on MEB and MQB Evo vehicles, which damps '
+    'lateral wobble. On by default for these cars.'
+  ),
 }
-
 
 class VolkswagenSettings(BrandPanel):
   def __init__(self):
@@ -2397,7 +2362,24 @@ class VolkswagenSettings(BrandPanel):
       enabled=lambda: not ui_state.engaged,
     )
 
-    self.items = [self.pq_hca_toggle, self.lateral_when_long_unavailable, self.mqb_acc_resume, self.mqb_steering_lockout]
+    self.curvature_controller = toggle_item(
+      lambda: tr("Curvature Controller"),
+      description=lambda: tr(DESCRIPTIONS["EnableCurvatureController"]),
+      initial_state=ui_state.params.get_bool("EnableCurvatureController"),
+      callback=self._on_curvature_controller,
+      enabled=lambda: not ui_state.engaged,
+    )
+
+    self.smooth_steer = toggle_item(
+      lambda: tr("Smooth Steering"),
+      description=lambda: tr(DESCRIPTIONS["EnableSmoothSteer"]),
+      initial_state=ui_state.params.get_bool("EnableSmoothSteer"),
+      callback=self._on_smooth_steer,
+      enabled=lambda: not ui_state.engaged,
+    )
+
+    self.items = [self.pq_hca_toggle, self.lateral_when_long_unavailable, self.mqb_acc_resume, self.mqb_steering_lockout,
+                  self.curvature_controller, self.smooth_steer]
 
   def _flags(self) -> VolkswagenFlags:
     bundle = ui_state.params.get("CarPlatformBundle")
@@ -2412,8 +2394,8 @@ class VolkswagenSettings(BrandPanel):
       return ui_state.CP.flags
     return VolkswagenFlags(0)
 
-  def _is_pq(self) -> bool:
-    return bool(self._flags() & VolkswagenFlags.PQ)
+  def _uses_hca_status_toggle(self) -> bool:
+    return bool(self._flags() & (VolkswagenFlags.PQ | VolkswagenFlags.MLB))
 
   def _is_mqb(self) -> bool:
     flags = self._flags()
@@ -2421,6 +2403,9 @@ class VolkswagenSettings(BrandPanel):
 
   def _supports_lateral_when_faulted(self) -> bool:
     return not bool(self._flags() & VolkswagenFlags.MLB)
+
+  def _is_curvature_car(self) -> bool:
+    return bool(self._flags() & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO))
 
   def _on_pq_hca_toggle(self, state: bool):
     ui_state.params.put_bool("pqhca5or7Toggle", state)
@@ -2434,17 +2419,22 @@ class VolkswagenSettings(BrandPanel):
   def _on_mqb_steering_lockout(self, state: bool):
     ui_state.params.put_bool("iqMqbSteeringLockout", state)
 
+  def _on_curvature_controller(self, state: bool):
+    ui_state.params.put_bool("EnableCurvatureController", state)
+
+  def _on_smooth_steer(self, state: bool):
+    ui_state.params.put_bool("EnableSmoothSteer", state)
+
   def update_settings(self):
-    self.pq_hca_toggle.set_visible(self._is_pq())
+    self.pq_hca_toggle.set_visible(self._uses_hca_status_toggle())
     self.lateral_when_long_unavailable.set_visible(self._supports_lateral_when_faulted())
     is_mqb = self._is_mqb()
     self.mqb_acc_resume.set_visible(is_mqb)
     self.mqb_steering_lockout.set_visible(is_mqb)
+    is_curvature_car = self._is_curvature_car()
+    self.curvature_controller.set_visible(is_curvature_car)
+    self.smooth_steer.set_visible(is_curvature_car)
 
-
-# ===== vehicle_brands_factory =====
-
-# Only brands that actually ship extra rows appear here; every other brand gets None.
 _REGISTRY: dict[str, type[BrandPanel]] = {
   "hyundai": HyundaiSettings,
   "subaru": SubaruSettings,
@@ -2460,13 +2450,7 @@ def brand_settings_for(brand: str) -> BrandPanel | None:
 
 
 class BrandPanelFactory:
-  """Legacy shim for callers using the old factory name."""
-
   create_brand_settings = staticmethod(brand_settings_for)
-
-
-# ===== vehicle_platform_selector =====
-
 
 class FingerprintStatus(IntEnum):
   NONE = 0      # nothing identified, nothing forced
@@ -2482,8 +2466,6 @@ STATUS_COLORS = {
 
 
 class VehicleSelection:
-  """Owns the car list and the CarPlatformBundle param; widgets render from this."""
-
   def __init__(self):
     self.platforms: dict = load_catalog()
 
@@ -2532,8 +2514,6 @@ class VehicleSelection:
 
 
 class VehiclePicker(Button):
-  """Row button that either clears a forced platform or opens the vehicle picker."""
-
   def __init__(self, on_platform_change: Callable[[], None] | None = None):
     super().__init__(tr("Vehicle"), self._on_clicked, button_style=ButtonStyle.NORMAL)
     self.set_rect(rl.Rectangle(0, 0, 0, 120))
@@ -2605,10 +2585,7 @@ _LEGEND = (
   (FingerprintStatus.NONE, lambda: tr("Undetected and unset")),
 )
 
-
 class LegendWidget(Widget):
-  """Explains the fingerprint status colours; the active row is highlighted."""
-
   def __init__(self, platform_selector: VehiclePicker):
     super().__init__()
     self.set_rect(rl.Rectangle(0, 0, 0, 350))
@@ -2635,15 +2612,11 @@ class LegendWidget(Widget):
       rl.draw_text_ex(font, text, rl.Vector2(x + 56, y - 7), 40, 0, text_color)
       y += 50
 
-
-# ===== vehicle___init__ =====
-
 _STATUS_BADGES = {
   FingerprintStatus.AUTO: lambda: tr("AUTO"),
   FingerprintStatus.FORCED: lambda: tr("MANUAL"),
   FingerprintStatus.NONE: lambda: tr("NONE"),
 }
-
 
 class VehicleLayout(Widget):
   def __init__(self):
@@ -2668,7 +2641,6 @@ class VehicleLayout(Widget):
     return ui_state.CP.brand if fingerprinted else ""
 
   def _refresh_vehicle_row(self):
-    # White name for legibility; the fingerprint status lives in a coloured chip beside it.
     status = self._platform_selector.status
     self._vehicle_item._title = self._platform_selector.text
     self._vehicle_item.title_color = rl.WHITE

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 import time
 
-from openpilot.common.constants import CV
-from openpilot.common.params import Params
-from openpilot.common.swaglog import cloudlog
-from openpilot.iqpilot.common.k3_slc_log import k3_slc_log
-from openpilot.iqpilot.selfdrive.controls.lib.speed_limit_controller import SpeedLimitController
+from iqpilot.common.constants import CV
+from iqpilot.common.params import Params
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.common.k3_slc_log import k3_slc_log
+from iqpilot.selfdrive.controls.lib.speed_limit_controller import SpeedLimitController
 
 CRUISING_SPEED = 7
 
@@ -189,6 +189,8 @@ class SLCVCruise:
         self._user_max_speed = v_cruise_cluster
     else:
       self._user_max_speed = 0.0
+    if not slc_params["speed_limit_controller"]:
+      self.slc.reset_override(sm)
     if slc_params["speed_limit_controller"]:
       self.slc.update_limits(dashboard_speed_limit, now, time_validated, v_cruise, v_ego, sm, slc_params)
       self.pending_events = list(getattr(self.slc, 'pending_events', []))

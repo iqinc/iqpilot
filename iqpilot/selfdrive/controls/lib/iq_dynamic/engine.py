@@ -1,12 +1,12 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
-from cereal import messaging
+from iqpilot.cereal import messaging
 from numpy import interp
 from iqdbc.car import structs
-from openpilot.common.params import Params
-from openpilot.common.realtime import DT_MDL
-from openpilot.iqpilot.selfdrive.controls.lib.iq_dynamic.imahelper import (
+from iqpilot.common.params import Params
+from iqpilot.common.realtime import DT_MDL
+from iqpilot.selfdrive.controls.lib.iq_dynamic.imahelper import (
   IQConstants,
   IQFilterEngine,
   IQModeEngine,

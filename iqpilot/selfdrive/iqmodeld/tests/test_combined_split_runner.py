@@ -1,3 +1,6 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -5,13 +8,14 @@ from pathlib import Path
 
 import numpy as np
 
-from openpilot.iqpilot.selfdrive.iqmodeld.models.combined_artifact import resolve_combined_split_artifact
-import openpilot.iqpilot.selfdrive.iqmodeld.models.runners.model_runner as runner_helpers
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.combined_split_runner import TinygradCombinedSplitRunner
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.tinygrad import combined_split_runner as combined_runner_mod
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.model_runner import ModelType
-from openpilot.iqpilot.selfdrive.iqmodeld.parser import PhaseParser
-from openpilot.iqpilot.selfdrive.iqmodeld.tests.test_iqmodeld_contracts import _phase_sample
+from iqpilot.selfdrive.iqmodeld.models.combined_artifact import resolve_combined_split_artifact
+import iqpilot.selfdrive.iqmodeld.models.runners.model_runner as runner_helpers
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad import tinygrad_runner as tinygrad_runner_mod
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.combined_split_runner import TinygradCombinedSplitRunner
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad import combined_split_runner as combined_runner_mod
+from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import ModelType
+from iqpilot.selfdrive.iqmodeld.parser import PhaseParser
+from iqpilot.selfdrive.iqmodeld.tests.test_iqmodeld_contracts import _phase_sample
 
 
 @dataclass
@@ -77,7 +81,7 @@ def test_resolve_combined_split_artifact_prefers_override(tmp_path: Path, monkey
   expected = tmp_path / "driving_combined_demo.pkl"
   expected.write_bytes(b"iq")
 
-  monkeypatch.setattr("openpilot.iqpilot.selfdrive.iqmodeld.models.combined_artifact._MODEL_ROOT", tmp_path)
+  monkeypatch.setattr("iqpilot.selfdrive.iqmodeld.models.combined_artifact._MODEL_ROOT", tmp_path)
 
   assert resolve_combined_split_artifact(bundle) == expected
 
@@ -89,7 +93,7 @@ def test_get_model_runner_prefers_combined_split_artifact(monkeypatch):
   ], generation=11)
 
   marker = object()
-  monkeypatch.setattr(runner_helpers, "get_active_bundle", lambda: bundle)
+  monkeypatch.setattr(runner_helpers, "_fetch_bundle", lambda: bundle)
   monkeypatch.setattr(runner_helpers, "has_combined_split_artifact", lambda _: True)
   monkeypatch.setattr(combined_runner_mod, "TinygradCombinedSplitRunner", lambda: marker)
 
@@ -103,9 +107,9 @@ def test_get_model_runner_keeps_split_bundle_on_existing_runner_without_combined
   ], generation=12)
 
   marker = object()
-  monkeypatch.setattr(runner_helpers, "get_active_bundle", lambda: bundle)
+  monkeypatch.setattr(runner_helpers, "_fetch_bundle", lambda: bundle)
   monkeypatch.setattr(runner_helpers, "has_combined_split_artifact", lambda _: False)
-  monkeypatch.setattr(runner_helpers, "TinygradSplitRunner", lambda: marker)
+  monkeypatch.setattr(tinygrad_runner_mod, "TinygradSplitRunner", lambda: marker)
 
   assert runner_helpers.get_model_runner() is marker
 

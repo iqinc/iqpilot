@@ -1,16 +1,12 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-IQ.Pilot road-view HUD: extends the stock renderer and layers on the IQ overlays
-(developer bar, nav map, road name, speed + speed-limit, turn signals, rocket-fuel
-accel bar, soft warnings, steering arc).
 """
 import pyray as rl
 
-from openpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
-from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
-from openpilot.iqpilot.ui.onroad.hud_overlays import (
+from iqpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
+from iqpilot.selfdrive.ui.ui_state import ui_state
+from iqpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer
+from iqpilot.ui.onroad.hud_overlays import (
   IQDevMetricsOverlay,
   RoadNameRenderer,
   IQAccelBar,
@@ -18,8 +14,9 @@ from openpilot.iqpilot.ui.onroad.hud_overlays import (
   IQTurnSignalOverlay,
   IQSpeedOverlay,
 )
-from openpilot.iqpilot.ui.onroad.nav_map_panel import NavMapPanel
-from openpilot.iqpilot.ui.onroad.soft_warning import SoftWarningRenderer
+from iqpilot.ui.onroad.nav_map_panel import NavMapPanel
+from iqpilot.ui.onroad.soft_warning import SoftWarningRenderer
+from iqpilot.ui.onroad.emac_status import EmacStatusRenderer
 
 ENABLE_FLOATING_NAV_MAP_PANEL = False
 ENABLE_SPLIT_NAV_MAP_PANEL = True
@@ -29,6 +26,7 @@ class IQHudRenderer(HudRenderer):
   def __init__(self):
     super().__init__()
     self.developer_ui = IQDevMetricsOverlay()
+    self.emac_status = EmacStatusRenderer()
     self.nav_map_panel = NavMapPanel()
     self.road_name_renderer = RoadNameRenderer()
     self.rocket_fuel = IQAccelBar()
@@ -42,6 +40,7 @@ class IQHudRenderer(HudRenderer):
     super()._update_state()
     if ENABLE_FLOATING_NAV_MAP_PANEL or ENABLE_SPLIT_NAV_MAP_PANEL:
       self.nav_map_panel.update()
+    self.emac_status.update()
     self.road_name_renderer.update()
     self.speed_limit_renderer.update()
     has_limit = self.speed_limit_renderer.speed_limit_valid or self.speed_limit_renderer.speed_limit_last_valid
@@ -59,17 +58,18 @@ class IQHudRenderer(HudRenderer):
   def _render(self, rect: rl.Rectangle) -> None:
     super()._render(rect)
 
+    torque_rect = rect
+    if ui_state.developer_ui in (IQDevMetricsOverlay.DEV_UI_BOTTOM, IQDevMetricsOverlay.DEV_UI_BOTH):
+      torque_rect = rl.Rectangle(rect.x, rect.y, rect.width, rect.height - IQDevMetricsOverlay.BOTTOM_BAR_HEIGHT)
     if ui_state.torque_bar:
-      torque_rect = rect
-      if ui_state.developer_ui in (IQDevMetricsOverlay.DEV_UI_BOTTOM, IQDevMetricsOverlay.DEV_UI_BOTH):
-        torque_rect = rl.Rectangle(rect.x, rect.y, rect.width, rect.height - IQDevMetricsOverlay.BOTTOM_BAR_HEIGHT)
       self._torque_bar.render(torque_rect)
 
     if not self.split_nav_enabled():
       self.developer_ui.render(rect)
     if ENABLE_FLOATING_NAV_MAP_PANEL:
       self.nav_map_panel.render(rect)
-    self.road_name_renderer.render(rect)
+    self.emac_status.render(rect)
+    self.road_name_renderer.render(torque_rect)
     self.turn_signal_controller.render(rect)
     self.soft_warning_renderer.render(rect)
     self.rocket_fuel.render(rect, ui_state.sm)

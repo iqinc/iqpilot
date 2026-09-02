@@ -6,8 +6,8 @@ Original concept ("Increased Stop Distance") by SpysyWeeb (github.com/SpysyWeeb)
 from types import SimpleNamespace
 
 from iqdbc.car.interfaces import ACCEL_MIN
-from openpilot.selfdrive.modeld.constants import ModelConstants
-from openpilot.iqpilot.selfdrive.controls.lib.custom_stop_distance import (
+from iqpilot.selfdrive.iqmodeld.config import ModelConstants
+from iqpilot.selfdrive.controls.lib.custom_stop_distance import (
   CustomStopDistance,
   MIN_ADJUSTED_D_REL,
 )

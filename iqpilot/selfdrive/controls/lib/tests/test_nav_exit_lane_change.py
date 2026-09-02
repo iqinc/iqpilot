@@ -1,9 +1,9 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
-from cereal import custom, log
-from openpilot.selfdrive.controls.lib.desire_helper import DesireHelper, LaneChangeState
-from openpilot.iqpilot.selfdrive.controls.lib.helpers.lane_change import AutoLaneChangeMode
+from iqpilot.cereal import custom, log
+from iqpilot.selfdrive.controls.lib.desire_helper import DesireHelper, LaneChangeState
+from iqpilot.selfdrive.controls.lib.helpers.lane_change import AutoLaneChangeMode
 
 ManeuverType = custom.IQNavState.ManeuverType
 NavDirection = custom.NavDirection

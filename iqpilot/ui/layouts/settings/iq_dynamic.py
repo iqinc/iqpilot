@@ -5,14 +5,14 @@ from collections.abc import Callable
 
 import pyray as rl
 
-from openpilot.common.params import Params
-from openpilot.selfdrive.ui.ui_state import ui_state
-from openpilot.system.ui.lib.multilang import tr
-from openpilot.system.ui.iqwidgets.widgets.list_view import IQListItem, IQToggleAction, SafeIQToggleAction
-from openpilot.system.ui.iqwidgets.widgets.list_view import OptionControl
-from openpilot.system.ui.widgets import Widget
-from openpilot.system.ui.widgets.network import NavButton
-from openpilot.system.ui.widgets.scroller_tici import Scroller
+from iqpilot.common.params import Params
+from iqpilot.selfdrive.ui.ui_state import ui_state
+from iqpilot.system.ui.lib.multilang import tr
+from iqpilot.system.ui.iqwidgets.widgets.list_view import IQListItem, IQToggleAction, SafeIQToggleAction
+from iqpilot.system.ui.iqwidgets.widgets.list_view import OptionControl
+from iqpilot.system.ui.widgets import Widget
+from iqpilot.system.ui.widgets.network import NavButton
+from iqpilot.system.ui.widgets.scroller_tici import Scroller
 from iqdbc.car.volkswagen.values import CAR, VolkswagenFlags
 
 

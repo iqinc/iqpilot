@@ -17,10 +17,11 @@ import time
 
 import numpy as np
 
-import cereal.messaging as messaging
-from cereal import custom
-from msgq.visionipc import VisionIpcClient, VisionStreamType
-from openpilot.common.swaglog import cloudlog
+import iqpilot.cereal.messaging as messaging
+from iqpilot.cereal import custom
+from iqpilot.cereal.visionipc import VisionStreamType
+from msgq.visionipc import VisionIpcClient
+from iqpilot.common.swaglog import cloudlog
 
 State = custom.IQConstructionZone.State
 

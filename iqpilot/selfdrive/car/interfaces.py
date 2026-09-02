@@ -2,11 +2,11 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
 from iqdbc.car import structs as _dbc
-from openpilot.common.params import Params as _Store
-from openpilot.common.swaglog import cloudlog as _log
-from openpilot.selfdrive.controls.lib.latcontrol_torque import get_nn_model_path as _resolve_nn
+from iqpilot.common.params import Params as _Store, UnknownKeyName as _UnknownKey
+from iqpilot.common.swaglog import cloudlog as _log
+from iqpilot.selfdrive.controls.lib.latcontrol_torque import get_nn_model_path as _resolve_nn
 
-import openpilot.system.sentry as _telemetry
+import iqpilot.system.sentry as _telemetry
 
 _ANGLE = _dbc.CarParams.SteerControlType.angle
 
@@ -15,6 +15,7 @@ _TUNABLES = (
   "IQHyundaiLongTune",
   "IQSubaruCreepAssist",
   "IQSubaruCreepAssistManualBrake",
+  "IQTeslaFsdVisualization",
   "IQTeslaTorqueBlend",
   "IQToyotaFactoryLong",
   "ToyotaSnGHack",
@@ -69,8 +70,23 @@ def _cleanup_unsupported_params(cp, cp_iq, store=None) -> None:
   set_speed_limit_controller_availability(cp, cp_iq, store)
 
 
+def _apply_radar_scan_switch(cp, store) -> None:
+  if cp.brand != "honda" or cp.radarUnavailable:
+    return
+  try:
+    switch = store.get("IQHondaRadarScan")
+  except _UnknownKey:
+    # params store predates the key (mid-update): the switch defaults on
+    return
+  # opt-out kill switch: only an explicit "0" disables, so a never-materialized param stays on
+  if switch in (b"0", "0"):
+    _log.warning("IQHondaRadarScan disabled, running without the radar object scan")
+    cp.radarUnavailable = True
+
+
 def apply_iq_car_config(ci, store=None) -> None:
   store = store or _Store()
   if _stamp_lateral_model(ci.CP, ci.CP_IQ, store):
     ci.configure_torque_tune(ci.CP.carFingerprint, ci.CP.lateralTuning)
   _cleanup_unsupported_params(ci.CP, ci.CP_IQ, store)
+  _apply_radar_scan_switch(ci.CP, store)

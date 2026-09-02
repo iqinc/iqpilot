@@ -13,7 +13,7 @@ from pathlib import Path
 
 import onnx
 
-from openpilot.system.hardware.hw import Paths
+from iqpilot.system.hardware.hw import Paths
 
 _MODEL_STEMS = ("driving_off_policy", "driving_on_policy", "driving_policy", "driving_vision")
 

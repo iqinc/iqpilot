@@ -5,8 +5,8 @@ Sound-suppression policy for Soundd. The driver's "IQAlertSilence" param, when s
 mutes routine chimes and keeps only a named allow-list of safety-critical cues
 audible. The param is re-sampled on a fixed poll interval rather than every frame.
 """
-from cereal import car
-from openpilot.common.params import Params
+from iqpilot.cereal import car
+from iqpilot.common.params import Params
 
 # policy expressed as data: names resolved against the enum at construction so the
 # allow-list reads as configuration instead of a hardcoded wall of enum accesses

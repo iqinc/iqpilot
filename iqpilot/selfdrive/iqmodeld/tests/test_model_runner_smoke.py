@@ -1,17 +1,20 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
+"""
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pytest
 from tinygrad.tensor import Tensor
 
-import openpilot.iqpilot.selfdrive.iqmodeld.models.helpers as bundle_helpers
-import openpilot.iqpilot.selfdrive.iqmodeld.models.runners.model_runner as model_runner_mod
-import openpilot.iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.tinygrad_runner as tinygrad_runner_mod
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.model_runner import ModelType
-from openpilot.iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.tinygrad_runner import TinygradRunner
+import iqpilot.selfdrive.iqmodeld.models.helpers as bundle_helpers
+import iqpilot.selfdrive.iqmodeld.models.runners.model_runner as model_runner_mod
+import iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.tinygrad_runner as tinygrad_runner_mod
+from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import ModelType
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.tinygrad_runner import TinygradRunner
 
 
 LOCAL_MODEL_DIR = Path(__file__).resolve().parents[1] / "default_model"
@@ -49,6 +52,7 @@ def _seed_runner_inputs(runner: TinygradRunner) -> None:
     ).realize()
 
 
+@pytest.mark.tici
 def test_local_tinygrad_models_execute(monkeypatch):
   bundle = _Bundle([
     _Model(ModelType.vision, "driving_vision_c210m_tinygrad.pkl", "driving_vision_c210m_metadata.pkl"),
@@ -56,7 +60,7 @@ def test_local_tinygrad_models_execute(monkeypatch):
   ])
 
   monkeypatch.setattr(bundle_helpers, "get_active_bundle", lambda params=None: bundle, raising=False)
-  monkeypatch.setattr(model_runner_mod, "get_active_bundle", lambda params=None: bundle, raising=False)
+  monkeypatch.setattr(model_runner_mod, "_fetch_bundle", lambda params=None: bundle)
   monkeypatch.setattr(tinygrad_runner_mod, "CUSTOM_MODEL_PATH", str(LOCAL_MODEL_DIR), raising=False)
   monkeypatch.setattr(model_runner_mod, "CUSTOM_MODEL_PATH", str(LOCAL_MODEL_DIR), raising=False)
 

@@ -1,7 +1,7 @@
-from cereal import custom
+from iqpilot.cereal import custom
 from iqdbc.car import structs
 
-from openpilot.iqpilot.selfdrive.car.interfaces import _cleanup_unsupported_params
+from iqpilot.selfdrive.car.interfaces import _cleanup_unsupported_params
 
 
 class DummyParams:

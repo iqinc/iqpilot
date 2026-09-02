@@ -60,7 +60,7 @@ public:
   void consume_gnss_frame(double current_time, const cereal::GnssMeasurements::Reader& log);
   void consume_car_state_frame(double current_time, const cereal::CarState::Reader& log);
   void consume_camera_odometry(double current_time, const cereal::CameraOdometry::Reader& log);
-  void consume_live_calibration(double current_time, const cereal::LiveCalibrationData::Reader& log);
+  void consume_live_calibration(double current_time, const cereal::ExtrinsicsCalibration::Reader& log);
 
   void seed_fake_gps_observations(double current_time);
 
@@ -85,6 +85,7 @@ private:
   double first_valid_log_time = NAN;
   double ttff = NAN;
   double last_gps_msg = 0;
+  double last_gps_param_time = NAN;
   AtlasGnssMode gnss_source;
   bool observation_timings_invalid = false;
   std::map<std::string, double> observation_values_invalid;

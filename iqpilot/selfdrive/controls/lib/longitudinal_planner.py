@@ -1,256 +1,297 @@
-"""
-Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-"""
-from datetime import datetime
-
+#!/usr/bin/env python3
+import math
 import numpy as np
 
-from cereal import messaging, custom
-from iqdbc.car import structs
-from openpilot.common.constants import CV
-from openpilot.common.realtime import DT_MDL
-from openpilot.selfdrive.car.cruise import V_CRUISE_MAX
-from openpilot.iqpilot.selfdrive.controls.lib.custom_stop_distance import CustomStopDistance
-from openpilot.iqpilot.selfdrive.controls.lib.iq_dynamic.engine import IQDynamicController
-from openpilot.iqpilot.selfdrive.controls.lib.iq_dynamic.imahelper import IQConstants
-from openpilot.iqpilot.selfdrive.controls.lib.helpers.e2e_alerts import EndToEndAlertEngine
-from openpilot.iqpilot.selfdrive.controls.lib.slc_vcruise import SLCVCruise
-from openpilot.iqpilot.selfdrive.controls.lib.speed_limit_controller import LIMIT_ADAPT_ACC
-from openpilot.iqpilot.selfdrive.selfdrived.events import IQEvents
-from openpilot.iqpilot.selfdrive.iqmodeld.models.helpers import get_active_bundle
+import iqpilot.cereal.messaging as messaging
+from iqdbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
+from iqpilot.common.constants import CV
+from iqpilot.common.filter_simple import FirstOrderFilter
+from iqpilot.common.params import Params, UnknownKeyName
+from iqpilot.common.realtime import DT_MDL
+from iqpilot.selfdrive.iqmodeld.config import ModelConstants
+from iqpilot.selfdrive.controls.lib.longcontrol import LongCtrlState
+from iqpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import LongitudinalMpc, LongitudinalPlanSource
+from iqpilot.selfdrive.controls.lib.longitudinal_mpc_lib.long_mpc import T_IDXS as T_IDXS_MPC
+from iqpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, DEFAULT_STOPPING_SPEED, get_accel_from_plan
+from iqpilot.selfdrive.car.cruise import V_CRUISE_MAX, V_CRUISE_UNSET
+from iqpilot.common.swaglog import cloudlog
+from iqpilot.common.issue_debug import log_issue_limited
 
-IQDynamicState = custom.IQPlan.IQDynamicControl.IQDynamicControlState
-LongitudinalPlanSource = custom.IQPlan.LongitudinalPlanSource
-SpeedLimitAssistState = custom.IQPlan.SpeedLimit.AssistState
-SpeedLimitSource = custom.IQPlan.SpeedLimit.Source
-NavProvider = custom.IQNavState.LongitudinalProvider
-NavLongitudinalState = custom.IQNavState.LongitudinalState
+from iqpilot.selfdrive.controls.lib.iq_longitudinal_planner import LongitudinalPlannerIQ
 
-class LongitudinalPlannerIQ:
-  def __init__(self, CP: structs.CarParams, CP_IQ: structs.IQCarParams, mpc):
-    self.events_iq = IQEvents()
-    self.iq_dynamic = IQDynamicController(CP, mpc)
-    self.custom_stop_distance = CustomStopDistance()
-    self.slimit = SLCVCruise()
-    self.generation = int(model_bundle.generation) if (model_bundle := get_active_bundle()) else None
-    self.source = LongitudinalPlanSource.cruise
-    self.e2e_alerts = EndToEndAlertEngine()
-    self.output_v_target = 0.
-    self.output_a_target = 0.
-    self.speed_limit_last = 0.
-    self.speed_limit_final_last = 0.
-    self.speed_limit_source = SpeedLimitSource.none
-    self.nav_engaged = False
-    self.nav_provider = NavProvider.none
-    self.nav_state = NavLongitudinalState.disabled
-    self.nav_speed_target = 0.
-    self.nav_accel_target = 0.
-    self.nav_valid = False
-    self.force_stop_timer = 0.0
-    self.forcing_stop = False
-    self.override_force_stop = False
-    self.override_force_stop_timer = 0.0
-    self.tracked_model_length = 0.0
+A_CRUISE_MAX_VALS = [2.0, 1.6, 0.8, 0.6]
+A_CRUISE_MAX_BP = [0., 10.0, 25., 40.]
+A_CRUISE_MIN = -1.2
+J_CRUISE = 1.0
+CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
+ALLOW_THROTTLE_THRESHOLD = 0.4
+MIN_ALLOW_THROTTLE_SPEED = 2.5
 
-  def is_e2e(self, sm: messaging.SubMaster) -> bool:
-    experimental_mode = sm['selfdriveState'].experimentalMode
-    if not self.iq_dynamic.active():
-      return experimental_mode
+LAUNCH_DISARM_SPEED = 2.0
+LAUNCH_COMMIT_T = 3.5
+LAUNCH_MOVING_SPEED = 1.2
+LAUNCH_MAX_ACCEL = 1.5
 
-    return experimental_mode and self.iq_dynamic.mode() == "blended"
+E2E_CRUISE_CONVERGENCE_TAU = 15.0
+E2E_CRUISE_ACCEL_MAX = 0.5
+E2E_MODEL_SPEED_HORIZON = 5.0
+E2E_ACCEL_INTENT_BP = [-0.05, 0.05]
+E2E_MODEL_SPEED_INTENT_BP = [-0.5, 0.0]
 
-  def update_targets(self, sm: messaging.SubMaster, v_ego: float, a_ego: float, v_cruise: float) -> tuple[float, float]:
-    CS = sm['carState']
-    v_cruise_cluster_kph = min(CS.vCruiseCluster, V_CRUISE_MAX)
-    v_cruise_cluster = v_cruise_cluster_kph * CV.KPH_TO_MS
-    # SLC should apply whenever IQ.Pilot is engaged, even on stock-longitudinal cars
-    # where carControl.longActive stays false.
-    slc_apply_enabled = bool(getattr(sm['selfdriveState'], "enabled", False))
+# Lookup table for turns
+_A_TOTAL_MAX_V = [1.7, 3.2]
+_A_TOTAL_MAX_BP = [20., 40.]
 
-    nav_state = sm['iqNavState']
-    self.nav_engaged = bool(getattr(nav_state, "longitudinalEngaged", False))
-    self.nav_provider = getattr(nav_state, "longitudinalProvider", NavProvider.none)
-    self.nav_state = getattr(nav_state, "longitudinalState", NavLongitudinalState.disabled)
-    self.nav_speed_target = float(getattr(nav_state, "speedTarget", 0.0))
-    self.nav_accel_target = float(getattr(nav_state, "accelTarget", 0.0))
-    self.nav_valid = bool(getattr(nav_state, "valid", False) and self.nav_engaged)
+def get_max_accel(v_ego):
+  return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
 
-    # IQ.Pilot custom Speed Limit Controller
-    now = datetime.now()
-    if hasattr(sm, "alive"):
-      time_validated = sm.alive.get('clocks', False) and getattr(sm['clocks'], 'timeValid', False)
+def get_coast_accel(pitch):
+  return np.sin(pitch) * -5.65 - 0.3  # fitted from data using xx/projects/allow_throttle/compute_coast_accel.py
+
+def get_lead_distance(radarState):
+  if radarState.leadOne.status and (not radarState.leadTwo.status or radarState.leadOne.dRel < radarState.leadTwo.dRel):
+    return radarState.leadOne.dRel
+  if radarState.leadTwo.status:
+    return radarState.leadTwo.dRel
+  return 0
+
+def get_cruise_accel(e2e, v_cruise, v_ego, a_cruise_prev, angle_steers, CP, dt, accel_coast, allow_throttle):
+  max_accel = ACCEL_MAX if e2e else get_max_accel(v_ego)
+
+  if not e2e:
+    a_total_max = np.interp(v_ego, _A_TOTAL_MAX_BP, _A_TOTAL_MAX_V)
+    a_y = v_ego ** 2 * angle_steers * CV.DEG_TO_RAD / (CP.steerRatio * CP.wheelbase)
+    a_x_allowed = math.sqrt(max(a_total_max ** 2 - a_y ** 2, 0.))
+    max_accel = min(max_accel, a_x_allowed)
+  if not allow_throttle:
+    clipped_accel_coast = max(accel_coast, ACCEL_MIN)
+    coast_limit = np.interp(v_ego, [MIN_ALLOW_THROTTLE_SPEED, MIN_ALLOW_THROTTLE_SPEED*2], [max_accel, clipped_accel_coast])
+    max_accel = min(max_accel, coast_limit)
+
+  target_accel = np.clip(v_cruise - v_ego, A_CRUISE_MIN, max_accel)
+  target_accel = float(np.clip(target_accel, a_cruise_prev - J_CRUISE * dt, a_cruise_prev + J_CRUISE * dt))
+
+  cruise_should_stop = v_cruise == 0.0
+  return target_accel, cruise_should_stop
+
+
+def get_e2e_accel(v_ego, v_cruise, model_v, a_target, should_stop):
+  if should_stop or v_cruise <= v_ego or len(model_v) != len(T_IDXS_MPC):
+    return a_target
+
+  convergence_accel = min((v_cruise - v_ego) / E2E_CRUISE_CONVERGENCE_TAU, E2E_CRUISE_ACCEL_MAX)
+  if convergence_accel <= a_target:
+    return a_target
+
+  # Only help the model converge to cruise when both its immediate action and
+  # velocity trajectory show no active deceleration intent. The lead MPC and
+  # cruise candidates remain hard upper bounds on the final acceleration.
+  accel_intent = np.interp(a_target, E2E_ACCEL_INTENT_BP, [0.0, 1.0])
+  model_speed = np.interp(E2E_MODEL_SPEED_HORIZON, T_IDXS_MPC, model_v)
+  speed_intent = np.interp(model_speed - v_ego, E2E_MODEL_SPEED_INTENT_BP, [0.0, 1.0])
+  return float(np.interp(min(accel_intent, speed_intent), [0.0, 1.0], [a_target, convergence_accel]))
+
+
+def get_accel_candidates(e2e, has_lead, mpc_candidate, cruise_candidate, e2e_candidate):
+  candidates = []
+  # With no lead, the MPC follows a synthetic fast lead. It remains the ACC
+  # policy, but must not limit the model policy in full E2E.
+  if not e2e or has_lead:
+    candidates.append(mpc_candidate)
+  candidates.append(cruise_candidate)
+  if e2e:
+    candidates.append(e2e_candidate)
+  return candidates
+
+
+class LongitudinalPlanner(LongitudinalPlannerIQ):
+  def __init__(self, CP, CP_IQ, init_v=0.0, init_a=0.0, dt=DT_MDL):
+    self.CP = CP
+    self.stopping_speed = CP_IQ.longitudinalStoppingSpeedOverride or DEFAULT_STOPPING_SPEED
+    self.mpc = LongitudinalMpc(dt=dt)
+    LongitudinalPlannerIQ.__init__(self, self.CP, CP_IQ, self.mpc)
+    self.fcw = False
+    self.dt = dt
+    self.allow_throttle = True
+
+    self.a_desired = init_a
+    self.v_desired_filter = FirstOrderFilter(init_v, 2.0, self.dt)
+    self.a_cruise = init_a
+    self.output_a_target = 0.0
+    self.output_should_stop = False
+    self.launch_armed = False
+    try:
+      self.exp_speed_conv = Params().get_bool("expSpeedConv")
+    except UnknownKeyName:
+      self.exp_speed_conv = False
+
+    self.v_desired_trajectory = np.zeros(CONTROL_N)
+    self.a_desired_trajectory = np.zeros(CONTROL_N)
+    self.j_desired_trajectory = np.zeros(CONTROL_N)
+
+  @staticmethod
+  def parse_model(model_msg):
+    if (len(model_msg.position.x) == ModelConstants.IDX_N and
+      len(model_msg.velocity.x) == ModelConstants.IDX_N and
+      len(model_msg.acceleration.x) == ModelConstants.IDX_N):
+      x = np.interp(T_IDXS_MPC, ModelConstants.T_IDXS, model_msg.position.x)
+      v = np.interp(T_IDXS_MPC, ModelConstants.T_IDXS, model_msg.velocity.x)
+      a = np.interp(T_IDXS_MPC, ModelConstants.T_IDXS, model_msg.acceleration.x)
+      j = np.zeros(len(T_IDXS_MPC))
     else:
-      clocks = sm.get('clocks', None) if isinstance(sm, dict) else None
-      time_validated = bool(getattr(clocks, 'timeValid', False))
-    slc_v_cruise = self.slimit.update(slc_apply_enabled, now, time_validated, v_cruise, v_ego, sm)
-    self.iq_dynamic.set_slc_experimental_mode(self.slimit.slc_experimental_mode)
-    self.iq_dynamic.update(sm)
-    # Prefer confirmed controller output for UI/planner rendering.
-    # Fall back to active (policy-resolved) target/source when confirmed is unavailable.
-    display_speed_limit = self.slimit.slc_target if self.slimit.slc_target > 0 else self.slimit.slc_active_target
-    display_source = self.slimit.slc_source if self.slimit.slc_source != "None" else self.slimit.slc_active_source
-
-    if display_speed_limit > 0:
-      self.speed_limit_last = display_speed_limit
-      self.speed_limit_final_last = display_speed_limit + self.slimit.slc_offset
-    elif display_source == "None":
-      self.speed_limit_last = 0.0
-      self.speed_limit_final_last = 0.0
-    # Respect user-defined max cruise speed when applying SLC.
-    if v_cruise_cluster > 0 and self.speed_limit_final_last > 0:
-      self.speed_limit_final_last = min(self.speed_limit_final_last, v_cruise_cluster)
-    source_map = {
-      "Dashboard": SpeedLimitSource.car,
-      "Map Data": SpeedLimitSource.map,
-      "Mapbox": SpeedLimitSource.map,
-      "None": SpeedLimitSource.none,
-    }
-    self.speed_limit_source = source_map.get(display_source, SpeedLimitSource.none)
-
-    targets = {
-      LongitudinalPlanSource.cruise: (v_cruise, a_ego),
-      LongitudinalPlanSource.speedLimitAssist: (slc_v_cruise, a_ego),
-    }
-    if self.nav_valid:
-      targets[LongitudinalPlanSource.nav] = (self.nav_speed_target, self.nav_accel_target)
-
-    self.source = min(targets, key=lambda k: targets[k][0])
-    self.output_v_target, self.output_a_target = targets[self.source]
-    self.output_v_target = self._apply_force_stop(self.output_v_target, v_ego, sm, slc_apply_enabled)
-    # envelope shaping only in Assist mode: info/warn must never change the plan
-    self._envelope_enabled = (slc_apply_enabled and bool(getattr(self.slimit, "controller_enabled", False))
-                              and bool(getattr(self.slimit, "mode_assist", False)))
-    return self.output_v_target, self.output_a_target
-
-  def cruise_envelope(self, v_target: float, v_ego: float, t_idxs) -> np.ndarray:
-    """Per-timestep cruise speed over the MPC horizon: the scalar target, shaped down
-    ahead of an upcoming lower speed limit so the solver decelerates before the sign
-    instead of at it."""
-    env = np.full(len(t_idxs), max(float(v_target), 0.0))
-    if not getattr(self, "_envelope_enabled", False):
-      return env
-    slc = getattr(self.slimit, "slc", None)
-    next_limit = float(getattr(slc, "next_speed_limit", 0.0) or 0.0)
-    next_dist = float(getattr(slc, "next_speed_distance", 0.0) or 0.0)
-    if next_limit <= 0.0 or next_dist <= 0.0:
-      return env
-    next_target = max(next_limit + float(getattr(self.slimit, "slc_offset", 0.0) or 0.0), 0.0)
-    if next_target >= env[0]:
-      return env
-    travel = np.maximum(v_ego, 1.0) * np.asarray(t_idxs)
-    v_allowed = np.sqrt(np.maximum(next_target ** 2 + 2.0 * abs(LIMIT_ADAPT_ACC) * (next_dist - travel), next_target ** 2))
-    return np.minimum(env, v_allowed)
-
-  def update(self, sm: messaging.SubMaster) -> None:
-    self.events_iq.clear()
-    for event_name in getattr(self.slimit, 'pending_events', []):
-      self.events_iq.add(event_name)
-    self.custom_stop_distance.update()
-    self.e2e_alerts.update(sm, self.events_iq)
-    if bool(getattr(sm["iqCarState"], "alcOverrideAlert", False)):
-      self.events_iq.add(custom.IQOnroadEvent.EventName.steeringOverrideReengageAlc)
-
-  def apply_e2e_stop_distance(self, sm: messaging.SubMaster, v_ego: float, a_target: float, should_stop: bool) -> tuple[float, bool]:
-    if not self.is_e2e(sm):
-      return a_target, should_stop
-    return self.custom_stop_distance.adjust_e2e_stop(a_target, should_stop, v_ego, sm['modelV2'])
-
-  def _apply_force_stop(self, v_target: float, v_ego: float, sm: messaging.SubMaster, apply_enabled: bool) -> float:
-    force_stop = self.iq_dynamic.force_stop_requested() and apply_enabled and self.override_force_stop_timer <= 0.0
-    self.force_stop_timer = self.force_stop_timer + DT_MDL if force_stop else 0.0
-    force_stop_enabled = self.force_stop_timer >= 1.0
-    force_stop_ramp_time = max(float(getattr(self.iq_dynamic, "model_stop_time", IQConstants.FORCE_STOP_PLANNER_TIME)), DT_MDL)
-
-    accel_pressed = bool(getattr(sm["iqCarState"], "accelPressed", False))
-    self.override_force_stop |= sm["carState"].gasPressed or accel_pressed
-    self.override_force_stop &= force_stop_enabled
-
-    if self.override_force_stop:
-      self.override_force_stop_timer = 10.0
-    elif self.override_force_stop_timer > 0.0:
-      self.override_force_stop_timer = max(0.0, self.override_force_stop_timer - DT_MDL)
+      x = np.zeros(len(T_IDXS_MPC))
+      v = np.zeros(len(T_IDXS_MPC))
+      a = np.zeros(len(T_IDXS_MPC))
+      j = np.zeros(len(T_IDXS_MPC))
+    if len(model_msg.meta.disengagePredictions.gasPressProbs) > 1:
+      throttle_prob = model_msg.meta.disengagePredictions.gasPressProbs[1]
     else:
-      self.override_force_stop = False
+      throttle_prob = 1.0
+    return x, v, a, j, throttle_prob
 
-    if force_stop_enabled and not self.override_force_stop:
-      self.forcing_stop = True
-      self.tracked_model_length = max(self.tracked_model_length - (v_ego * DT_MDL), 0.0)
-      if sm["carState"].standstill:
-        return 0.0
-      return min(self.tracked_model_length / force_stop_ramp_time, v_target)
+  def update(self, sm):
+    LongitudinalPlannerIQ.update(self, sm)
 
-    self.forcing_stop = False
-    self.tracked_model_length = max(
-      float(getattr(self.iq_dynamic, "model_length", 0.0)),
-      float(getattr(self.iq_dynamic, "minimum_force_stop_length", 0.0)),
-      0.0,
+    if len(sm['carControl'].orientationNED) == 3:
+      accel_coast = get_coast_accel(sm['carControl'].orientationNED[1])
+    else:
+      accel_coast = ACCEL_MAX
+
+    v_ego = sm['carState'].vEgo
+    v_cruise_kph = min(sm['carState'].vCruise, V_CRUISE_MAX)
+    v_cruise = v_cruise_kph * CV.KPH_TO_MS
+    if sm['controlsState'].forceDecel:
+      v_cruise = 0.0
+
+    long_control_off = sm['controlsState'].longControlState == LongCtrlState.off
+
+    # Reset current state when not engaged, or user is controlling the speed
+    reset_state = long_control_off if self.CP.openpilotLongitudinalControl else not sm['selfdriveState'].enabled
+    # PCM cruise speed may be updated a few cycles later, check if initialized
+    v_cruise_initialized = sm['carState'].vCruise != V_CRUISE_UNSET
+    reset_state = reset_state or not v_cruise_initialized
+    steer_angle_without_offset = sm['carState'].steeringAngleDeg - sm['vehicleParameters'].angleOffsetDeg
+
+    if reset_state:
+      self.v_desired_filter.x = v_ego
+      self.a_desired = np.clip(sm['carState'].aEgo, ACCEL_MIN, ACCEL_MAX)
+      self.a_cruise = self.a_desired
+
+    # Prevent divergence, smooth in current v_ego
+    self.v_desired_filter.x = max(0.0, self.v_desired_filter.update(v_ego))
+    _, model_v, model_a, _, throttle_prob = self.parse_model(sm['modelV2'])
+    # Don't clip at low speeds since throttle_prob doesn't account for creep
+    self.allow_throttle = throttle_prob > ALLOW_THROTTLE_THRESHOLD or v_ego <= MIN_ALLOW_THROTTLE_SPEED
+
+    # Get new v_cruise from Smart Cruise Control and Speed Limit Assist
+    v_cruise = LongitudinalPlannerIQ.update_targets(self, sm, self.v_desired_filter.x, v_cruise)
+
+    if sm['controlsState'].forceDecel:
+      v_cruise = 0.0
+
+    personality = sm['selfdriveState'].personality
+    self.mpc.set_weights(personality=personality)
+    self.mpc.set_cur_state(self.v_desired_filter.x, self.a_desired)
+    self.mpc.update(sm['modelV2'], sm['radarState'], personality=personality)
+
+    self.v_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.v_solution)
+    self.a_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC, self.mpc.a_solution)
+    self.j_desired_trajectory = np.interp(CONTROL_N_T_IDX, T_IDXS_MPC[:-1], self.mpc.j_solution)
+
+    # TODO counter is only needed because radar is glitchy, remove once radar is gone
+    self.fcw = self.mpc.crash_cnt > 2 and not sm['carState'].standstill
+    if self.fcw:
+      cloudlog.info("FCW triggered")
+
+    # Save starting point for next iteration
+    a_prev = self.a_desired
+
+    action_t =  self.CP.longitudinalActuatorDelay + DT_MDL
+    output_a_target_mpc, output_should_stop_mpc = get_accel_from_plan(self.v_desired_trajectory, self.a_desired_trajectory, CONTROL_N_T_IDX,
+                                                                        action_t=action_t, stopping_speed=self.stopping_speed)
+
+    output_a_target_e2e = sm['modelV2'].action.desiredAcceleration
+    output_should_stop_e2e = sm['modelV2'].action.shouldStop
+    output_a_target_e2e, output_should_stop_e2e = self.apply_e2e_stop_distance(sm, v_ego, output_a_target_e2e, output_should_stop_e2e)
+    if self.is_e2e(sm) and self.exp_speed_conv and not self.mpc.status:
+      output_a_target_e2e = get_e2e_accel(v_ego, v_cruise, model_v, output_a_target_e2e, output_should_stop_e2e)
+
+    if sm['carState'].standstill:
+      self.launch_armed = True
+    elif v_ego > LAUNCH_DISARM_SPEED:
+      self.launch_armed = False
+    if (self.launch_armed and self.is_e2e(sm) and not output_should_stop_e2e and
+        np.interp(LAUNCH_COMMIT_T, T_IDXS_MPC, model_v) > LAUNCH_DISARM_SPEED):
+      t_cut = min(float(T_IDXS_MPC[np.argmax(model_v > LAUNCH_MOVING_SPEED)]), LAUNCH_COMMIT_T)
+      t_shifted = T_IDXS_MPC + t_cut
+      v_shifted = np.interp(t_shifted, T_IDXS_MPC, model_v)
+      a_shifted = np.interp(t_shifted, T_IDXS_MPC, model_a)
+      a_launch = get_accel_from_plan(v_shifted, a_shifted, T_IDXS_MPC, action_t=action_t)[0]
+      a_launch_max = np.interp(v_ego, [LAUNCH_MOVING_SPEED, LAUNCH_DISARM_SPEED], [LAUNCH_MAX_ACCEL, 0.])
+      output_a_target_e2e = max(output_a_target_e2e, min(a_launch, a_launch_max))
+
+    e2e = self.is_e2e(sm)
+    self.a_cruise, cruise_should_stop = get_cruise_accel(e2e, v_cruise, v_ego, self.a_cruise,
+                                                          steer_angle_without_offset, self.CP, self.dt,
+                                                          accel_coast, self.allow_throttle)
+
+    candidates = get_accel_candidates(
+      e2e,
+      self.mpc.status,
+      (output_a_target_mpc, self.mpc.source, output_should_stop_mpc),
+      (self.a_cruise, LongitudinalPlanSource.cruise, cruise_should_stop),
+      (output_a_target_e2e, LongitudinalPlanSource.e2e, output_should_stop_e2e),
     )
-    return v_target
 
-  def publish_longitudinal_plan_iq(self, sm: messaging.SubMaster, pm: messaging.PubMaster) -> None:
-    def fill_plan(plan_msg) -> None:
-      plan_msg.longitudinalPlanSource = self.source
-      plan_msg.vTarget = float(self.output_v_target)
-      plan_msg.aTarget = float(self.output_a_target)
-      plan_msg.events = self.events_iq.to_msg()
+    output_a_target, self.mpc.source, _ = min(candidates, key=lambda c: c[0])
+    self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
 
-      # IQ.Dynamic control state
-      iq_dynamic = plan_msg.iqDynamic
-      iq_dynamic.state = IQDynamicState.blended if self.iq_dynamic.mode() == 'blended' else IQDynamicState.acc
-      iq_dynamic.enabled = self.iq_dynamic.enabled()
-      iq_dynamic.active = self.iq_dynamic.active()
+    self.output_should_stop = self.output_should_stop or self.forcing_stop
+    self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
-      nav_summary = plan_msg.iqNavState.nav
-      nav_summary.engaged = self.nav_engaged
-      nav_summary.provider = self.nav_provider
-      nav_summary.state = self.nav_state
-      nav_summary.speedTarget = float(self.nav_speed_target)
-      nav_summary.accelTarget = float(self.nav_accel_target)
-      nav_summary.valid = self.nav_valid
+    self.a_desired = float(self.output_a_target)
+    self.v_desired_filter.x = self.v_desired_filter.x + self.dt * (self.output_a_target + a_prev) / 2.0
 
-      # Speed Limit
-      speedLimit = plan_msg.speedLimit
-      resolver = speedLimit.resolver
-      speed_limit = float(self.slimit.slc_target if self.slimit.slc_target > 0 else self.slimit.slc_active_target)
-      speed_limit_offset = float(self.slimit.slc_offset)
-      speed_limit_final = speed_limit + speed_limit_offset if speed_limit > 0 else 0.
-      speed_limit_valid = speed_limit > 0.
-      speed_limit_last_valid = self.speed_limit_last > 0.
+  def publish(self, sm, pm):
+    plan_send = messaging.new_message('longitudinalPlan')
 
-      resolver.speedLimit = speed_limit
-      resolver.speedLimitLast = float(self.speed_limit_last)
-      resolver.speedLimitFinal = float(speed_limit_final)
-      resolver.speedLimitFinalLast = float(self.speed_limit_final_last)
-      resolver.speedLimitValid = speed_limit_valid
-      resolver.speedLimitLastValid = speed_limit_last_valid
-      resolver.speedLimitOffset = speed_limit_offset
-      resolver.distToSpeedLimit = 0.
-      resolver.source = self.speed_limit_source
+    gate_services = ['carState', 'controlsState', 'selfdriveState', 'radarState']
+    plan_send.valid = sm.all_checks(service_list=gate_services)
+    if not plan_send.valid:
+      log_issue_limited(
+        "longitudinal_plan_invalid",
+        "planner",
+        f"longitudinalPlan invalid alive={ {s: sm.alive[s] for s in gate_services} } "
+        f"freq_ok={ {s: sm.freq_ok[s] for s in gate_services} } valid={ {s: sm.valid[s] for s in gate_services} } "
+        f"subchecks=({sm.all_alive(gate_services)},{sm.all_freq_ok(gate_services)},{sm.all_valid(gate_services)}) "
+        f"recheck={sm.all_checks(service_list=gate_services)}",
+        interval_sec=5.0,
+      )
 
-      assist = speedLimit.assist
-      slc_assist_state = self.slimit.assist_state
-      assist.enabled = bool(self.slimit.slc_target > 0 or self.slimit.slc_unconfirmed > 0)
-      assist.active = self.source == LongitudinalPlanSource.speedLimitAssist and self.slimit.slc_target > 0
-      if slc_assist_state is not None:
-        assist.state = slc_assist_state
-      elif not assist.enabled:
-        assist.state = SpeedLimitAssistState.disabled
-      elif self.slimit.slc_unconfirmed > 0:
-        assist.state = SpeedLimitAssistState.preActive
-      elif assist.active:
-        assist.state = SpeedLimitAssistState.active
-      else:
-        assist.state = SpeedLimitAssistState.inactive
-      assist.vTarget = float(self.output_v_target if assist.active else 255.)
-      assist.aTarget = float(self.slimit.slc_a_target if assist.active else 0.)
+    longitudinalPlan = plan_send.longitudinalPlan
+    longitudinalPlan.modelMonoTime = sm.logMonoTime['modelV2']
+    longitudinalPlan.processingDelay = (plan_send.logMonoTime / 1e9) - sm.logMonoTime['modelV2']
+    longitudinalPlan.solverExecutionTime = self.mpc.solve_time
 
-      e2eAlerts = plan_msg.e2eAlerts
-      e2eAlerts.pathOpen = self.e2e_alerts.path_alert
-      e2eAlerts.leadPullaway = self.e2e_alerts.lead_alert
+    longitudinalPlan.speeds = self.v_desired_trajectory.tolist()
+    longitudinalPlan.accels = self.a_desired_trajectory.tolist()
+    longitudinalPlan.jerks = self.j_desired_trajectory.tolist()
 
-    valid = sm.all_checks(service_list=['carState', 'controlsState'])
+    longitudinalPlan.hasLead = sm['radarState'].leadOne.status
+    longitudinalPlan.leadDistance = get_lead_distance(sm['radarState'])
+    longitudinalPlan.longitudinalPlanSource = self.mpc.source
+    longitudinalPlan.fcw = self.fcw
 
-    plan_iq_send = messaging.new_message('iqPlan')
-    plan_iq_send.valid = valid
-    fill_plan(plan_iq_send.iqPlan)
-    pm.send('iqPlan', plan_iq_send)
+    longitudinalPlan.leadTrajectoryX0 = self.mpc.lead_xv_0[:, 0].tolist()
+    longitudinalPlan.leadTrajectoryV0 = self.mpc.lead_xv_0[:, 1].tolist()
+    longitudinalPlan.leadTrajectoryX1 = self.mpc.lead_xv_1[:, 0].tolist()
+    longitudinalPlan.leadTrajectoryV1 = self.mpc.lead_xv_1[:, 1].tolist()
+
+    longitudinalPlan.aTarget = float(self.output_a_target)
+    longitudinalPlan.shouldStop = bool(self.output_should_stop)
+    longitudinalPlan.allowBrake = True
+    longitudinalPlan.allowThrottle = bool(self.allow_throttle)
+
+    pm.send('longitudinalPlan', plan_send)
+
+    self.publish_longitudinal_plan_iq(sm, pm)

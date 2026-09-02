@@ -62,8 +62,8 @@ WARP_DEVICE = os.getenv("WARP_DEV")
 
 
 def _read_shared_copy(path: str) -> str:
-  from openpilot.common.file_chunker import read_file_chunked
-  from openpilot.system.hardware.hw import Paths
+  from iqpilot.common.file_chunker import read_file_chunked
+  from iqpilot.system.hardware.hw import Paths
 
   shm_path = os.path.join(Paths.shm_path(), os.path.basename(path))
   atexit.register(lambda: os.path.exists(shm_path) and os.remove(shm_path))
@@ -127,8 +127,8 @@ def _project_pixels(src_flat, inverse_matrix, dst_shape, src_shape, stride_pad, 
   dst_w, dst_h = dst_shape
   src_h, src_w = src_shape
 
-  x_coords = Tensor.arange(dst_w, device=WARP_DEVICE).reshape(1, dst_w).expand(dst_h, dst_w).reshape(-1)
-  y_coords = Tensor.arange(dst_h, device=WARP_DEVICE).reshape(dst_h, 1).expand(dst_h, dst_w).reshape(-1)
+  x_coords = Tensor.arange(dst_w).to(WARP_DEVICE).reshape(1, dst_w).expand(dst_h, dst_w).reshape(-1)
+  y_coords = Tensor.arange(dst_h).to(WARP_DEVICE).reshape(dst_h, 1).expand(dst_h, dst_w).reshape(-1)
 
   src_x = inverse_matrix[0, 0] * x_coords + inverse_matrix[0, 1] * y_coords + inverse_matrix[0, 2]
   src_y = inverse_matrix[1, 0] * x_coords + inverse_matrix[1, 1] * y_coords + inverse_matrix[1, 2]
@@ -352,8 +352,8 @@ def _arg_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-  from openpilot.iqpilot.selfdrive.iqmodeld.metadata import build_metadata_record
-  from openpilot.system.camerad.cameras.nv12_info import get_nv12_info
+  from iqpilot.selfdrive.iqmodeld.metadata import build_metadata_record
+  from iqpilot.system.camerad.cameras.nv12_info import get_nv12_info
 
   args = _arg_parser().parse_args(argv)
   model_w, model_h = args.model_size

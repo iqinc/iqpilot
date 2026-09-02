@@ -7,6 +7,10 @@ venv/
 # perpetually dirty and sends the updater into an apply/restart loop that kills
 # ble-transportd (and comma.service) every few minutes.
 /.iqpilot/
+/.iqpilot-package-lock-sha256
+/gi
+/k3_log.txt
+/iqpilot/system/loggerd/encoder/v4l_decode
 .ci_cache
 .env
 .clang-format
@@ -21,6 +25,11 @@ http-client.private.env.json
 a.out
 .hypothesis
 .cache/
+
+/iqdbc
+/msgq
+/openpilot
+/tinygrad
 
 /docs_site/
 
@@ -46,6 +55,7 @@ a.out
 !artifacts/runtime/ble/rootfs/usr/local/venv/**/*.so
 artifacts/iqpilot_private/
 artifacts/iqpilot_*_private/python/iqpilot_private/**/*.cpython-*-darwin.so
+artifacts/test-results/
 *.a
 *.clb
 *.class
@@ -59,14 +69,14 @@ clcache
 compile_commands.json
 compare_runtime*.html
 
-selfdrive/pandad/pandad
-cereal/services.h
-cereal/gen
-cereal/messaging/bridge
-selfdrive/ui/translations/tmp
-selfdrive/car/tests/cars_dump
-system/camerad/camerad
-system/camerad/test/ae_gray_test
+iqpilot/selfdrive/pandad/pandad
+iqpilot/cereal/services.h
+iqpilot/cereal/gen
+iqpilot/cereal/messaging/bridge
+iqpilot/selfdrive/ui/translations/tmp
+iqpilot/selfdrive/car/tests/cars_dump
+iqpilot/system/camerad/camerad
+iqpilot/system/camerad/test/ae_gray_test
 
 .coverage*
 coverage.xml
@@ -79,13 +89,13 @@ flycheck_*
 cppcheck_report.txt
 comma*.sh
 
-selfdrive/modeld/models/*.pkl
-!selfdrive/modeld/models/driving_vision_tinygrad.pkl
-!selfdrive/modeld/models/driving_policy_tinygrad.pkl
-!selfdrive/modeld/models/dmonitoring_model_tinygrad.pkl
-!selfdrive/modeld/models/driving_vision_metadata.pkl
-!selfdrive/modeld/models/driving_policy_metadata.pkl
-!selfdrive/modeld/models/dmonitoring_model_metadata.pkl
+iqpilot/selfdrive/modeld/models/*.pkl
+!iqpilot/selfdrive/modeld/models/driving_vision_tinygrad.pkl
+!iqpilot/selfdrive/modeld/models/driving_policy_tinygrad.pkl
+!iqpilot/selfdrive/modeld/models/dmonitoring_model_tinygrad.pkl
+!iqpilot/selfdrive/modeld/models/driving_vision_metadata.pkl
+!iqpilot/selfdrive/modeld/models/driving_policy_metadata.pkl
+!iqpilot/selfdrive/modeld/models/dmonitoring_model_metadata.pkl
 iqpilot/modeld*/thneed/compile
 iqpilot/modeld*/models/*.thneed
 iqpilot/modeld*/models/*.pkl
@@ -124,10 +134,6 @@ Pipfile
 PLAN.md
 TASK.md
 
-### JetBrains ###
-!.idea/customTargets.xml
-!.idea/tools/*
-!.run/*
 /.antigravitycli/
 /artifacts/iqpilot_alc_private/python/iqpilot_private/konn3kt/iqlvbs/_iqcrypto.cpython-312-aarch64-linux-gnu.so
 /artifacts/iqpilot_alc_private/python/iqpilot_private/konn3kt/iqlvbs/alc_handshake.cpython-312-aarch64-linux-gnu.so
@@ -135,20 +141,22 @@ TASK.md
 /iqpilot/selfdrive/iqlocd/iqlocd
 /iqpilot/selfdrive/iqlocd/models/generated/car.cpp
 /iqpilot/selfdrive/iqlocd/models/generated/car.h
-/tools/scripts/debug/
+/iqpilot/tools/scripts/debug/
+/iqpilot/tools/scripts/plans/
 !scripts/iqpilot/iqos_usrlocal_larch64.tar.zst
 
 # pretty-build capture logs (model compile / mpc + dbc codegen stdout+stderr)
 *_tinygrad.pkl.log
 *_metadata.pkl.log
-selfdrive/controls/lib/*_mpc_lib/gen.log
-tools/cabana/dbc/*.json.log
+iqpilot/selfdrive/controls/lib/*_mpc_lib/gen.log
+iqpilot/tools/cabana/dbc/*.json.log
 iqpilot/selfdrive/iqlocd/models/generated/
 osmaps_build/
 
 # --- local scratch/debug + large model artifacts (never commit) ---
 /infinite_driver/
 /konn3kt_private/
+/.mull/
 /_pq*.py
 /bus_topo.py
 /cluster_bus.py
@@ -167,8 +175,7 @@ osmaps_build/
 /SUNNYPILOT_REMEDIATION_PLAN.md
 /prompt.md
 /iqos44_bluetooth_gamepad_spec.md
-tools/mac_egpu/*.pkl
-selfdrive/ui/tests/test_ui/nav_demo_report/
+iqpilot/selfdrive/ui/tests/test_ui/nav_demo_report/
 **/__pycache__/
 *.pyc
 *.mlpackage/
@@ -177,4 +184,11 @@ selfdrive/ui/tests/test_ui/nav_demo_report/
 # fetcher: closed-source precompiled component — ship only the obfuscated .so
 /iqpilot/models_private_src/fetcher.py
 
-/tools/iqmacvisiond/macos/dist/
+# build output: a signed .app is a 233-file sealed bundle, never track a subset
+iqpilot/tools/iqmacd/macos/dist/IQ eMac.app/
+iqpilot/tools/iqmacd/macos/dist/.stage/
+iqpilot/tools/iqmacd/macos/dist/.DS_Store
+
+iqpilot/tools/iqmacd/macos/dist/
+
+iqpilot/tools/scripts/iqemac/clips/README.md
