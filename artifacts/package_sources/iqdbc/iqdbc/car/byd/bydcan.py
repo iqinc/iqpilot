@@ -3,9 +3,17 @@
 
 # Measured off the stock camera while it was actively steering (route 0000007b--88dd577c32):
 # every engaged 0x1E2 carries +500/-500 and byte5 = 0x64. 251/-252/0xFF came from Atto 3 notes.
-ANGLE_RATE_LIMIT_UPPER = 500
-ANGLE_RATE_LIMIT_LOWER = -500
+OEM_ANGLE_RATE_LIMIT = 500
 SET_ME_FF_VALUE = 0x64
+
+# This symmetric pair is the EPS authority ceiling, not a demand: the stock camera can hold it wide
+# open because its own angle command never asks for much torque, but openpilot's does, and the EPS
+# was measured saturating at +-470 against the +-500 ceiling while the wheel jittered. Other BYD
+# angle-mode ports ship the equivalent field at 200-300. Lowered to 300 so the EPS runs out of
+# authority before it can fight the driver or slam the wheel; raise back to OEM_ANGLE_RATE_LIMIT to
+# restore byte-exact stock frames.
+ANGLE_RATE_LIMIT_UPPER = 300
+ANGLE_RATE_LIMIT_LOWER = -300
 
 # 0x316 LKAS_STATE, in the order the stock camera walks them on an engage
 LKAS_STATE_IDLE = 1

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -87,9 +88,18 @@ class TestBydSteeringControl(unittest.TestCase):
       self.assertEqual(vals["ANGLE_RATE_LIMIT_UPPER"], bydcan.ANGLE_RATE_LIMIT_UPPER)
       self.assertEqual(vals["ANGLE_RATE_LIMIT_LOWER"], bydcan.ANGLE_RATE_LIMIT_LOWER)
 
+  def _oem_ceiling(self):
+    return unittest.mock.patch.multiple(
+      bydcan,
+      ANGLE_RATE_LIMIT_UPPER=bydcan.OEM_ANGLE_RATE_LIMIT,
+      ANGLE_RATE_LIMIT_LOWER=-bydcan.OEM_ANGLE_RATE_LIMIT,
+    )
+
   def test_matches_stock_camera_idle_frame(self):
-    # stock idle: f4 31 c8 .. .. 64 (47625 samples); only the angle bytes differ
-    _, dat, _ = bydcan.create_steering_control(self.packer, 0.0, False)
+    # stock idle: f4 31 c8 .. .. 64 (47625 samples); only the angle bytes differ. Checked with the
+    # OEM ceiling so the frame stays provably stock-shaped independent of the shipped ceiling.
+    with self._oem_ceiling():
+      _, dat, _ = bydcan.create_steering_control(self.packer, 0.0, False)
     self.assertEqual(bytes(dat[:3]), bytes.fromhex("f431c8"),
                      f"idle 0x1E2 diverges from stock: {bytes(dat[:3]).hex(' ')} != f4 31 c8")
     self.assertEqual(dat[5], 0x64)
@@ -99,15 +109,18 @@ class TestBydSteeringControl(unittest.TestCase):
     # dashcam mode (route 0000007b--88dd577c32): f4 31 e8 01 00 64 9f ee at +0.1 deg.
     # Only COUNTER/CHECKSUM (byte 6 high nibble, byte 7) may differ.
     OEM = bytes.fromhex("f431e8010064")
-    _, dat, _ = bydcan.create_steering_control(self.packer, 0.1, True)
+    with self._oem_ceiling():
+      _, dat, _ = bydcan.create_steering_control(self.packer, 0.1, True)
     self.assertEqual(bytes(dat[:6]), OEM,
                      f"0x1E2 diverges from stock: {bytes(dat[:6]).hex(' ')} != {OEM.hex(' ')}")
     self.assertEqual(dat[6] & 0x0F, 0x0F)
 
-  def test_rate_limits_and_set_me_match_stock(self):
-    # 251/-252/0xFF came from the Atto 3 notes; this car's camera sends 500/-500/0x64
-    self.assertEqual(bydcan.ANGLE_RATE_LIMIT_UPPER, 500)
-    self.assertEqual(bydcan.ANGLE_RATE_LIMIT_LOWER, -500)
+  def test_authority_ceiling_is_symmetric_and_within_stock(self):
+    # The ceiling caps how hard the EPS may push, so it must never exceed what stock authorises,
+    # and it must stay symmetric or the EPS gets more authority one way than the other.
+    self.assertEqual(bydcan.ANGLE_RATE_LIMIT_LOWER, -bydcan.ANGLE_RATE_LIMIT_UPPER)
+    self.assertLessEqual(bydcan.ANGLE_RATE_LIMIT_UPPER, bydcan.OEM_ANGLE_RATE_LIMIT)
+    self.assertGreater(bydcan.ANGLE_RATE_LIMIT_UPPER, 0)
     self.assertEqual(bydcan.SET_ME_FF_VALUE, 0x64)
     _, dat, _ = bydcan.create_steering_control(self.packer, 0.0, True)
     self.assertEqual(_unpack(DBC_NAME, "STEERING_MODULE_ADAS", dat)["SET_ME_FF"], 0x64)
