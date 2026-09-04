@@ -6,14 +6,12 @@
 OEM_ANGLE_RATE_LIMIT = 500
 SET_ME_FF_VALUE = 0x64
 
-# This symmetric pair is the EPS authority ceiling, not a demand: the stock camera can hold it wide
-# open because its own angle command never asks for much torque, but openpilot's does, and the EPS
-# was measured saturating at +-470 against the +-500 ceiling while the wheel jittered. Other BYD
-# angle-mode ports ship the equivalent field at 200-300. Lowered to 300 so the EPS runs out of
-# authority before it can fight the driver or slam the wheel; raise back to OEM_ANGLE_RATE_LIMIT to
-# restore byte-exact stock frames.
-ANGLE_RATE_LIMIT_UPPER = 300
-ANGLE_RATE_LIMIT_LOWER = -300
+# Must stay at the OEM value. Tried at 300 (other BYD angle-mode ports ship the equivalent field at
+# 200-300) to see whether it was an authority ceiling worth lowering: the car did not steer at all.
+# Stock sends 500 in every one of 47625+ captured frames, idle and engaged alike, so the EPS treats
+# any other value as no authority rather than as a softer limit.
+ANGLE_RATE_LIMIT_UPPER = OEM_ANGLE_RATE_LIMIT
+ANGLE_RATE_LIMIT_LOWER = -OEM_ANGLE_RATE_LIMIT
 
 # 0x316 LKAS_STATE, in the order the stock camera walks them on an engage
 LKAS_STATE_IDLE = 1
