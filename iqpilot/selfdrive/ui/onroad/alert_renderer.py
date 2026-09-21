@@ -21,12 +21,17 @@ ALERT_PADDING = 28
 ALERT_BOTTOM_MARGIN = 286
 ALERT_BORDER_RADIUS = 32
 ALERT_ENTRY_DURATION = 0.36
+ALERT_SIDE_MARGIN = 236
+ALERT_MAP_GAP = 36
+ALERT_MAP_RESERVED_WIDTH = 456
 
 
 ALERT_HEIGHTS = {
-  AlertSize.small: 144,
-  AlertSize.mid: 200,
+  AlertSize.small: 176,
+  AlertSize.mid: 240,
 }
+
+_CALIBRATION_EVENTS = {"calibrationIncomplete", "calibrationRecalibrating"}
 
 SELFDRIVE_STATE_TIMEOUT = 5  # Seconds
 SELFDRIVE_UNRESPONSIVE_TIMEOUT = 10  # Seconds
@@ -45,6 +50,7 @@ class Alert:
   text2: str = ""
   size: int = 0
   status: int = 0
+  event_name: str = ""
 
 
 # Pre-defined alert instances
@@ -80,6 +86,7 @@ class AlertRenderer(Widget):
     self._visible_alert: Alert | None = None
     self._dismissed_at: float | None = None
     self._dismiss_progress = 1.0
+    self._maps_visible = False
 
     # font size is set dynamically
     self._full_text1_label = Label("", font_size=0, font_weight=FontWeight.BOLD, text_alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
@@ -122,7 +129,21 @@ class AlertRenderer(Widget):
       return None
 
     # Return current alert
-    return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw, status=ss.alertStatus.raw)
+    return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw,
+                 status=ss.alertStatus.raw, event_name=event_name)
+
+  def set_maps_visible(self, visible: bool) -> None:
+    self._maps_visible = visible
+
+  def has_tile(self, sm: messaging.SubMaster) -> bool:
+    alert = self.get_alert(sm)
+    return alert is not None and alert.size != AlertSize.full
+
+  @staticmethod
+  def _animation_key(alert: Alert) -> tuple:
+    if alert.event_name in _CALIBRATION_EVENTS:
+      return ("calibration", alert.size, alert.status)
+    return (alert.event_name, alert.text1, alert.text2, alert.size, alert.status)
 
   def _render(self, rect: rl.Rectangle):
     alert = self.get_alert(ui_state.sm)
@@ -132,7 +153,7 @@ class AlertRenderer(Widget):
 
     now = time.monotonic()
     if alert is not None:
-      key = (alert.text1, alert.text2, alert.size, alert.status)
+      key = self._animation_key(alert)
       if key != self._alert_key or self._dismissed_at is not None:
         self._appeared_at = now
       self._alert_key = key
@@ -178,9 +199,13 @@ class AlertRenderer(Widget):
       return rect
 
     height = ALERT_HEIGHTS.get(size, 240)
-    width = min(860, rect.width - 1000)
-    return rl.Rectangle(rect.x + (rect.width - width) / 2,
-                        rect.y + rect.height - height - ALERT_BOTTOM_MARGIN, width, height)
+    left = rect.x + ALERT_SIDE_MARGIN
+    right = rect.x + rect.width - ALERT_SIDE_MARGIN
+    maps_visible = getattr(self, "_maps_visible", getattr(self, "navigation_visible", False))
+    if maps_visible:
+      right = min(right, rect.x + rect.width - ALERT_MAP_RESERVED_WIDTH - ALERT_MAP_GAP)
+    width = max(1, right - left)
+    return rl.Rectangle(left, rect.y + rect.height - height - ALERT_BOTTOM_MARGIN, width, height)
 
   @staticmethod
   def _entry_rect(rect: rl.Rectangle, progress: float) -> rl.Rectangle:
@@ -212,10 +237,10 @@ class AlertRenderer(Widget):
     if alert.size != AlertSize.full:
       left = rect.x + 112
       width = rect.width - 128
-      title_size = 52
+      title_size = 58
       title_width = measure_text_cached(self.font_bold, alert.text1, title_size).x
       title_size = min(title_size, title_size * width / max(1, title_width))
-      subtitle_size = 30
+      subtitle_size = 34
       subtitle_width = measure_text_cached(self.font_regular, alert.text2, subtitle_size).x
       subtitle_size = min(subtitle_size, subtitle_size * width / max(1, subtitle_width))
       height = title_size + (subtitle_size + 12 if alert.text2 else 0)

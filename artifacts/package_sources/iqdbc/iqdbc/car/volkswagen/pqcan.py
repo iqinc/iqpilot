@@ -99,7 +99,7 @@ def acc_hud_status_value(main_switch_on, acc_faulted, longActive, longOverride):
   return hud_status
 
 
-def create_acc_accel_control(packer, bus, acc_type, accel, acc_control, stopping, starting, esp_hold, comfortBand, jerkLimit, eBrakeActive, sng_active=False, msg_name="ACC_System"):
+def create_acc_accel_control(packer, bus, acc_type, accel, acc_control, stopping, starting, esp_hold, comfortBand, jerkLimit, eBrakeActive, sng_active=False):
   commands = []
   acc_enabled = acc_control == 1 and not sng_active
 
@@ -117,7 +117,7 @@ def create_acc_accel_control(packer, bus, acc_type, accel, acc_control, stopping
     "ACS_ADR_Schub": 0,
   }
 
-  commands.append(packer.make_can_msg(msg_name, bus, values))
+  commands.append(packer.make_can_msg("ACC_System", bus, values))
 
   return commands
 
@@ -138,7 +138,7 @@ def create_blinker_control(packer, bus, leftBlinker, rightBlinker):
   return packer.make_can_msg("Blinkmodi_02", bus, values)
 
 
-def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive, msg_name="ACC_GRA_Anzeige"):
+def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive):
   priodisp = 0 if fcw_alert else 0 if (acc_hud_status == 4 or decel) else 2 if (acc_hud_status in (3, 2) or leadVisible) else 0
   leadDistanceBars = distanceBars + 1 if distanceBars in (1, 2, 3) else 2
   values = {
@@ -153,7 +153,7 @@ def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance,
     "ACA_ACC_Verz": decel,
   }
 
-  return packer.make_can_msg(msg_name, bus, values)
+  return packer.make_can_msg("ACC_GRA_Anzeige", bus, values)
 
 def filter_motor2(packer, bus, motor2_stock, gra_active=False):
   values = dict(motor2_stock)

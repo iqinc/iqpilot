@@ -6,7 +6,7 @@ import pytest
 
 from iqpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer, AlertSize
 from iqpilot.selfdrive.ui.onroad import alert_renderer
-from iqpilot.ui.onroad import hud_renderer
+from iqpilot.ui.onroad import hud_overlays, hud_renderer
 
 
 @pytest.mark.parametrize('alert_size', [0, AlertSize.small, AlertSize.mid, AlertSize.full])
@@ -38,8 +38,30 @@ def test_banner_remains_compact_without_navigation():
   renderer = SimpleNamespace(navigation_visible=False)
   rect = rl.Rectangle(30, 30, 2100, 1020)
   banner = AlertRenderer._get_alert_rect(renderer, rect, AlertSize.small)
-  assert banner.width == 860
+  assert banner.width == 1628
   assert banner.x + banner.width / 2 == rect.x + rect.width / 2
+
+
+def test_map_banner_is_wide_but_stops_before_map():
+  renderer = SimpleNamespace(navigation_visible=True)
+  rect = rl.Rectangle(30, 30, 2100, 1020)
+  banner = AlertRenderer._get_alert_rect(renderer, rect, AlertSize.mid)
+  assert banner.width == 1372
+  assert banner.x + banner.width == rect.x + rect.width - 456 - 36
+
+
+def test_calibration_percent_updates_share_one_animation_key():
+  first = alert_renderer.Alert(text1="Calibrating: 12%", size=AlertSize.mid,
+                               event_name="calibrationIncomplete")
+  second = alert_renderer.Alert(text1="Calibrating: 13%", size=AlertSize.mid,
+                                event_name="calibrationIncomplete")
+  assert AlertRenderer._animation_key(first) == AlertRenderer._animation_key(second)
+
+
+def test_other_alert_text_changes_still_animate():
+  first = alert_renderer.Alert(text1="First", size=AlertSize.mid, event_name="other")
+  second = alert_renderer.Alert(text1="Second", size=AlertSize.mid, event_name="other")
+  assert AlertRenderer._animation_key(first) != AlertRenderer._animation_key(second)
 
 
 @pytest.mark.parametrize('navigation_visible', [False, True])
@@ -61,3 +83,11 @@ def test_long_alert_text_fits_compact_card(monkeypatch):
   for _, text, position, size, _, _ in drawn:
     assert position.x >= rect.x
     assert position.x + len(text) * size <= rect.x + rect.width
+
+
+def test_long_road_name_is_ellipsized_inside_available_width(monkeypatch):
+  monkeypatch.setattr(hud_overlays.canvas, "span", lambda _font, text, _size: rl.Vector2(len(text) * 10, 20))
+  clipped = hud_overlays.clip_to_width(None, "A very long road name that must be clipped", 18, 120)
+  assert clipped.endswith("...")
+  assert len(clipped) * 10 <= 120
+  assert hud_overlays.clip_to_width(None, "road", 18, 20) == ""

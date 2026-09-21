@@ -39,6 +39,13 @@ def test_controller_frames_match_configured_safety(candidate, alpha_long, monkey
       assert safety.safety_tx_hook(packet), rejection
 
 
+def seed_camera_frames(CS):
+  CS.lfa = {"STEER_REQ": 1, "LKA_MODE": 2, "LKA_ICON": 1, "TORQUE_REQUEST": 0, "LKA_ACTIVE": 0,
+            "HAS_LANE_SAFETY": 0, "VALUE63": 0, "VALUE64": 0, "COUNTER": 0}
+  CS.mdps = {"LKA_ACTIVE": 0, "LFA2_ACTIVE": 0, "STEERING_COL_TORQUE": 0.0}
+  CS.steer_touch_2af = {"TOUCH_DETECT": 0, "TOUCH1": 0, "TOUCH2": 0, "CHECKSUM_": 0}
+
+
 def test_ev6_camera_scc_has_one_lfa_sender(monkeypatch, tmp_path):
   monkeypatch.setenv("PARAMS_ROOT", str(tmp_path))
   fingerprint = gen_empty_fingerprint()
@@ -54,7 +61,10 @@ def test_ev6_camera_scc_has_one_lfa_sender(monkeypatch, tmp_path):
   control.latActive = True
   control.actuators.torque = 0.01
 
+  seed_camera_frames(interface.CS)
+
   for _ in range(20):
     _, can_sends = interface.apply(control.as_reader(), structs.IQCarControl())
     assert [(address, bus) for address, _, bus in can_sends if address == 0x12A] == [(0x12A, 0)]
-    assert all(address not in (0xEA, 0x2AF) for address, _, _ in can_sends)
+    assert [(address, bus) for address, _, bus in can_sends if address == 0xEA] == [(0xEA, 2)]
+    assert all(bus == 2 for address, _, bus in can_sends if address == 0x2AF)

@@ -20,15 +20,12 @@
 #define MSG_PQ_SAFETY_1         0x6A0U   // RX by OP
 #define MSG_PQ_DEBUG_LA         0x6A1U   // TX by panda, internal safety state debug
 #define MSG_IQ                  0x6A1U   // TX by OP
-#define MSG_IQ_PQ_ACC_CMD       0x6A2U   // TX by OP, ACC_System contents for a synthesized module
-#define MSG_IQ_PQ_ACC_HUD       0x6A3U   // TX by OP, ACC_GRA_Anzeige contents for a synthesized module
 
 static bool volkswagen_pq_alc_module_present = false;
 static bool volkswagen_pq_acc_tsk_ready = false;
 static bool volkswagen_pq_lowline = false;
 static bool volkswagen_pq_acc_fts_epb = false;
 static bool volkswagen_pq_sng_ecd = false;
-static bool volkswagen_pq_moduleless = false;
 
 static uint32_t volkswagen_pq_get_checksum(const CANPacket_t *msg) {
   return (uint32_t)msg->data[(msg->addr == MSG_MOTOR_5) ? 7 : 0];
@@ -84,15 +81,6 @@ static safety_config volkswagen_pq_init(uint16_t param) {
                                                 {MSG_APD_1, 1, 8, .check_relay = false}, {MSG_IQ, 1, 8, .check_relay = false},
                                                 {MSG_SNG_1, 1, 8, .check_relay = false}};
 
-  // The panda synthesizes ACC_System and ACC_GRA_Anzeige itself, so openpilot must not also
-  // transmit them; it ships their contents on the private pair instead.
-  static const CanMsg VOLKSWAGEN_PQ_MODULELESS_TX_MSGS[] = {{MSG_HCA_1, 0, 5, .check_relay = true}, {MSG_LDW_1, 0, 8, .check_relay = true},
-                                                {MSG_IQ_PQ_ACC_CMD, 1, 8, .check_relay = false}, {MSG_IQ_PQ_ACC_HUD, 1, 8, .check_relay = false},
-                                                {MSG_GRA_NEU, 1, 4, .check_relay = false}, {MSG_GRA_NEU, 2, 4, .check_relay = true},
-                                                {MSG_BLINKMODI_02, 0, 8, .check_relay = false}, {MSG_MOTOR_3, 1, 8, .check_relay = false},
-                                                {MSG_APD_1, 1, 8, .check_relay = false}, {MSG_IQ, 1, 8, .check_relay = false},
-                                                {MSG_SNG_1, 1, 8, .check_relay = false}};
-
   static RxCheck volkswagen_pq_rx_checks[] = {
     {.msg = {{MSG_LENKHILFE_3, 1, 6, 100U, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},
     {.msg = {{MSG_BREMSE_1, 1, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},
@@ -109,7 +97,6 @@ static safety_config volkswagen_pq_init(uint16_t param) {
   vw_iq_no_cam = GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_NO_CAM_BUS);
   volkswagen_pq_acc_fts_epb = GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_ACC_FTS_EPB);
   volkswagen_pq_sng_ecd = GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_SNG_ECD);
-  volkswagen_pq_moduleless = GET_FLAG(param, FLAG_VOLKSWAGEN_PQ_MODULELESS);
   volkswagen_pq_acc_tsk_ready = false;
 
 #ifdef ALLOW_DEBUG
@@ -118,11 +105,7 @@ static safety_config volkswagen_pq_init(uint16_t param) {
 #else
   SAFETY_UNUSED(param);
 #endif
-  pq_moduleless_configure(volkswagen_pq_moduleless && volkswagen_longitudinal,
-                          volkswagen_pq_lowline ? 1U : 0U);
-
-  safety_config ret = (volkswagen_longitudinal && volkswagen_pq_moduleless) ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_MODULELESS_TX_MSGS) : \
-                      volkswagen_longitudinal  ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_LONG_TX_MSGS) : \
+  safety_config ret = volkswagen_longitudinal ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_LONG_TX_MSGS) : \
                       volkswagen_pq_lowline    ? BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_STOCK_TX_MSGS_BUS1) : \
                                                  BUILD_SAFETY_CFG(volkswagen_pq_rx_checks, VOLKSWAGEN_PQ_STOCK_TX_MSGS);
   if (!volkswagen_pq_alc_module_present) {
@@ -246,18 +229,11 @@ static bool volkswagen_pq_tx_hook(const CANPacket_t *msg) {
     }
   }
 
-  if ((msg->addr == MSG_ACC_SYSTEM) || (msg->addr == MSG_IQ_PQ_ACC_CMD)) {
+  if (msg->addr == MSG_ACC_SYSTEM) {
     int desired_accel = ((((msg->data[4] & 0x7U) << 8) | msg->data[3]) * 5U) - 7220U;
     if (volkswagen_iq_long_accel_check(desired_accel)) {
       tx = false;
-    } else if (msg->addr == MSG_IQ_PQ_ACC_CMD) {
-      pq_moduleless_set_acc_payload(msg->data);
-    } else {
     }
-  }
-
-  if (msg->addr == MSG_IQ_PQ_ACC_HUD) {
-    pq_moduleless_set_hud_payload(msg->data);
   }
 
   if ((msg->addr == MSG_GRA_NEU) && !controls_allowed) {

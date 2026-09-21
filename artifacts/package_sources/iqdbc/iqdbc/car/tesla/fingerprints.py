@@ -27,6 +27,7 @@ FW_VERSIONS = {
   },
   CAR.TESLA_MODEL_Y: {
     (Ecu.eps, 0x730, None): [
+      b'\x01\x0113\x04\x00\x01\x00\x00\x01\x01\x00\x00\x00\x00\x00\x00\xff\xff',
       b'TeM3_E014p10_0.0.0 (16),Y002.18.00',
       b'TeM3_E014p10_0.0.0 (16),YP002.18.00',
       b'TeM3_E014p10_0.0.0 (24),Y002.21.2',
@@ -44,6 +45,7 @@ FW_VERSIONS = {
       b'TeMYG4_Legacy3Y_0.0.0 (6),Y4003.04.0',
       b'TeMYG4_Main_0.0.0 (77),Y4003.05.4',
       b'TeMYG4_Main_0.0.0 (78),Y4003.06.0',
+      b'TeMYG4_Main_0.0.0 (78),Y4OC.E80.003.07.0',
       b'TeMYG4_Main_0.0.0 (87),Y4003.09.3',
     ],
   },

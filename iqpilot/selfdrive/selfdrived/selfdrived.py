@@ -236,7 +236,12 @@ class SelfdriveD(GapButtonActions):
     nav_state = self.sm['iqNavState']
     nav_events: list[int] = []
     if getattr(nav_state, 'active', False):
-      if self.nav_exit_lane_change and \
+      if self.nav_exit_lane_change and getattr(nav_state, 'shouldSendLaneChangeDesire', False):
+        if getattr(nav_state, 'navLaneChangeDesireDirection', 0) == 1:
+          nav_events.append(custom.IQOnroadEvent.EventName.navExitLeft)
+        elif getattr(nav_state, 'navLaneChangeDesireDirection', 0) == 2:
+          nav_events.append(custom.IQOnroadEvent.EventName.navExitRight)
+      elif self.nav_exit_lane_change and \
           getattr(nav_state, 'nextManeuverValid', False) and \
           getattr(nav_state, 'nextManeuverType', custom.IQNavState.ManeuverType.none) == custom.IQNavState.ManeuverType.exit and \
           0.0 < float(getattr(nav_state, 'nextManeuverDistance', 0.0)) <= NAV_EXIT_COMMIT_DISTANCE:

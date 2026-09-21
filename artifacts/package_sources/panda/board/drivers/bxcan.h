@@ -176,9 +176,6 @@ void can_rx(uint8_t can_number) {
 
     safety_rx_invalid += safety_rx_hook(&to_push) ? 0U : 1U;
     ignition_can_hook(&to_push);
-#if !defined(PANDA_JUNGLE) && !defined(PANDA_BODY)
-    pq_moduleless_rx_hook(&to_push);
-#endif
 
     led_set(LED_BLUE, true);
     rx_buffer_overflow += can_push(&can_rx_q, &to_push) ? 0U : 1U;

@@ -210,6 +210,16 @@ def _write_meta(model_packet, outputs: dict[str, np.ndarray], memory: DrivePacke
   model_packet.confidence = _confidence_bucket(outputs, memory, meta_layout, frame_id)
 
 
+def fill_stop_point(model_packet, outputs: dict[str, np.ndarray]) -> None:
+  distance, probability = outputs.get("stop_point_m"), outputs.get("stop_point_prob")
+  if distance is None or probability is None:
+    return
+  stop_point = model_packet.stopPoint
+  stop_point.distance = float(np.asarray(distance).reshape(-1)[0])
+  stop_point.probability = float(np.asarray(probability).reshape(-1)[0])
+  stop_point.valid = True
+
+
 def populate_drive_messages(primary_msg: capnp._DynamicStructBuilder, extended_msg: capnp._DynamicStructBuilder,
                             outputs: dict[str, np.ndarray], action: log.ModelDataV2.Action,
                             memory: DrivePacketMemory, vipc_frame_id: int, vipc_frame_id_extra: int,
@@ -235,6 +245,7 @@ def populate_drive_messages(primary_msg: capnp._DynamicStructBuilder, extended_m
   model_packet.timestampEof = timestamp_eof
   model_packet.modelExecutionTime = model_execution_time
   model_packet.action = action
+  fill_stop_point(model_packet, outputs)
 
   _write_plan_family(model_packet, driving_packet, outputs)
   _write_temporal_pose(model_packet, outputs)

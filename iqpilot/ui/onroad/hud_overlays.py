@@ -109,12 +109,21 @@ class IQSpeedOverlay:
                   34, SECONDARY_TEXT)
 
 def clip_to_width(font, words: str, size: int, limit: float) -> str:
+  if not words or limit <= 0:
+    return ""
   if canvas.span(font, words, size).x <= limit:
     return words
-  trimmed = words
-  while len(trimmed) > 3 and canvas.span(font, trimmed + "...", size).x > limit:
-    trimmed = trimmed[:-1]
-  return trimmed + "..."
+  ellipsis = "..."
+  if canvas.span(font, ellipsis, size).x > limit:
+    return ""
+  low, high = 0, len(words)
+  while low < high:
+    middle = (low + high + 1) // 2
+    if canvas.span(font, words[:middle] + ellipsis, size).x <= limit:
+      low = middle
+    else:
+      high = middle - 1
+  return words[:low].rstrip() + ellipsis
 
 
 class RoadNameBanner(Widget):
@@ -139,6 +148,8 @@ class RoadNameBanner(Widget):
     if not self.road_name or not ui_state.road_name_toggle:
       return
     label = clip_to_width(self._face, self.road_name, self.TYPE_SIZE, rect.width - self.MARGIN)
+    if not label:
+      return
     extent = canvas.span(self._face, label, self.TYPE_SIZE)
     height = extent.y + 26
     top = min(TorqueBar.resting_bottom(rect, self.TORQUE_SCALE) + self.GAP,
@@ -156,6 +167,8 @@ class RoadNameRenderer(RoadNameBanner):
     if width <= 0:
       return
     label = clip_to_width(self._face, self.road_name, 32, width)
+    if not label:
+      return
     extent = canvas.span(self._face, label, 32)
     x = rect.x + (rect.width - extent.x) / 2
     y = rect.y + rect.height - 52

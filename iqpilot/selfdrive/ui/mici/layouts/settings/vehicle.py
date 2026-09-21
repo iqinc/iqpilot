@@ -6,6 +6,7 @@ import unicodedata
 
 import pyray as rl
 
+from iqpilot.cereal import car
 from iqpilot.selfdrive.car.vehicle_catalog import load_catalog
 from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl
 from iqpilot.selfdrive.ui.ui_state import ui_state
@@ -81,6 +82,8 @@ class VehicleLayoutMici(NavScroller):
     self._vw_smooth_steer = BigParamControl(tr("smooth steering"), "EnableSmoothSteer")
     self._tesla_vtb = BigParamControl(tr("virtual torque blending"), "IQTeslaTorqueBlend")
     self._tesla_fsd_visualization = BigParamControl(tr("FSD visuals"), "IQTeslaFsdVisualization")
+    self._hkg_reduced_feedback = BigParamControl(tr("reduced steering feedback (beta)"), "IQHkgReducedTorqueFeedback",
+                                                toggle_callback=self._on_hkg_reduced_feedback)
 
     self._brand_widgets = {
       "toyota": [self._toyota_long],
@@ -88,6 +91,7 @@ class VehicleLayoutMici(NavScroller):
       "volkswagen": [self._vw_pq_hca, self._vw_lateral, self._vw_mqb_acc_resume, self._vw_mqb_steering_lockout,
                      self._vw_curvature_controller, self._vw_smooth_steer],
       "tesla": [self._tesla_vtb, self._tesla_fsd_visualization],
+      "hyundai": [self._hkg_reduced_feedback],
     }
     self._all_brand_widgets = [w for ws in self._brand_widgets.values() for w in ws]
 
@@ -188,6 +192,10 @@ class VehicleLayoutMici(NavScroller):
       ui_state.params.put_bool("AlphaLongitudinalEnabled", False)
     ui_state.params.put_bool("OnroadCycleRequested", True)
 
+  def _on_hkg_reduced_feedback(self, checked: bool):
+    if checked:
+      ui_state.params.put_bool("NeuralNetworkFeedForward", False)
+
   def _refresh(self):
     self._vehicle_btn.set_value(self._vehicle_status())
 
@@ -208,15 +216,21 @@ class VehicleLayoutMici(NavScroller):
         show = show and supports_lateral_when_faulted
       elif w in (self._vw_curvature_controller, self._vw_smooth_steer):
         show = show and is_curvature_car
+      elif w is self._hkg_reduced_feedback:
+        show = (show and ui_state.CP is not None and
+                ui_state.CP.steerControlType == car.CarParams.SteerControlType.torque and
+                ui_state.CP.lateralTuning.which() == "torque")
       w.set_visible(show)
       if show:
         w.refresh()
-    for w in (self._toyota_long, self._subaru_snag, self._subaru_manual, self._tesla_vtb, self._tesla_fsd_visualization):
+    for w in (self._toyota_long, self._subaru_snag, self._subaru_manual, self._tesla_vtb, self._tesla_fsd_visualization,
+              self._hkg_reduced_feedback):
       w.set_enabled(offroad)
 
   def _update_state(self):
     super()._update_state()
     self._vehicle_btn.set_value(self._vehicle_status())
+    self._hkg_reduced_feedback.set_enabled(ui_state.is_offroad())
 
   def show_event(self):
     super().show_event()

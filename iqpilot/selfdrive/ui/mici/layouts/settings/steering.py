@@ -127,7 +127,8 @@ class SteeringLayoutMici(NavScroller):
       ui_state.params.put_bool("AolUnifiedEngagementMode", True)
 
   def _on_nnff_toggled(self, checked: bool):
-    return None
+    if checked and ui_state.CP is not None and ui_state.CP.brand == "hyundai":
+      ui_state.params.put_bool("IQHkgReducedTorqueFeedback", False)
 
   def _refresh(self):
     offroad = ui_state.is_offroad()

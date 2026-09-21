@@ -302,7 +302,6 @@ class VolkswagenSafetyFlags(IntFlag):
   PQ_ACC_FTS_EPB = 256
   PQ_SNG_ECD = 512
   MLB_NO_ECAN = 1024
-  PQ_MODULELESS = 2048
 
 
 class VolkswagenFlags(IntFlag):
@@ -336,7 +335,6 @@ class VolkswagenFlagsIQ(IntFlag):
   IQ_PQ_TIMEBOMB = 1 << 20
   IQ_MLB_NO_ECAN = 1 << 21
   IQ_MLB_NO_HCA_EPS = 1 << 22
-  IQ_PQ_MODULELESS = 1 << 23       # ACC-coded PQ with no ACC module: panda synthesizes it
 
 
 RADAR_DISABLE_STATE = {"error": False}

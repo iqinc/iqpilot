@@ -94,6 +94,10 @@ class AugmentedRoadView(CameraView):
     # Render the base camera view
     super()._render(camera_rect)
 
+    maps_visible = self._hud_renderer.nav_map_panel.maps_enabled()
+    self.alert_renderer.set_maps_visible(maps_visible)
+    self._hud_renderer.set_event_tile_visible(self.alert_renderer.has_tile(ui_state.sm))
+
     # Draw all UI overlays
     self.model_renderer.render(camera_rect)
     self.environment_renderer.render(camera_rect)

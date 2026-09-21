@@ -2,7 +2,7 @@
 from iqpilot.cereal import car, custom
 from iqpilot.common.gps import get_gps_location_service
 from iqpilot.common.params import Params
-from iqpilot.common.realtime import Priority, config_realtime_process
+from iqpilot.common.realtime import CycleCollector, Priority, config_realtime_process
 from iqpilot.common.swaglog import cloudlog
 from iqpilot.selfdrive.controls.lib.ldw import LaneDepartureWarning
 from iqpilot.selfdrive.controls.lib.longitudinal_planner import LongitudinalPlanner
@@ -33,9 +33,11 @@ def main():
   sm = messaging.SubMaster(['carControl', 'carState', 'controlsState', 'vehicleParameters', 'radarState', 'modelV2', 'selfdriveState',
                             'iqLiveLocation', 'iqLiveData', 'iqNavState', 'iqCarState', 'iqConstructionZone', gps_location_service],
                            poll='modelV2')
+  collector = CycleCollector()
 
   while True:
     sm.update()
+    collector.tick()
     if sm.updated['modelV2']:
       longitudinal_planner.update(sm)
       longitudinal_planner.publish(sm, pm)

@@ -378,5 +378,3 @@ bool is_speed_valid(uint32_t speed, const uint32_t *all_speeds, uint8_t len) {
   }
   return ret;
 }
-
-#include "iqdbc/safety/pq_moduleless.h"

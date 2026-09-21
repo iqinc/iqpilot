@@ -600,6 +600,12 @@ def _refresh_big_catalog() -> None:
   threading.Thread(target=worker, daemon=True).start()
 
 
+def _request_full_model_refresh() -> None:
+  ui_state.params.put("ModelManager_LastSyncTime", "0")
+  ui_state.params.put_bool("ModelManager_RefreshRequest", True)
+  _refresh_big_catalog()
+
+
 class ModelsLayout(Widget):
   def __init__(self):
     super().__init__()
@@ -861,6 +867,7 @@ class ModelsLayout(Widget):
     return PickerItem(bundle.ref, {'display_name': bundle.displayName, 'short_name': bundle.internalName})
 
   def _get_folders(self, _favorites=None):
+    self.model_manager = ui_state.sm["iqModelManager"]
     bundles = list(self.model_manager.availableBundles or get_cached_model_bundles(ui_state.params))
     bundles.sort(key=lambda bundle: bundle.index, reverse=True)
 
@@ -879,8 +886,7 @@ class ModelsLayout(Widget):
     ]
 
   def _handle_current_model_clicked(self):
-    _refresh_big_catalog()
-    ui_state.params.put("ModelManager_LastSyncTime", 0)
+    _request_full_model_refresh()
     folders_list = self._get_folders()
 
     active_ref = self.model_manager.activeBundle.ref if self._has_active_bundle_param() and self.model_manager.activeBundle else "Default"

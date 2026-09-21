@@ -148,6 +148,22 @@ def test_faulted_lateral_mode_does_not_force_disable_guidance():
   assert not selfdrive.events_iq.has(EventNameIQ.alcDisengaged)
 
 
+def test_guidance_keeps_steering_when_long_drops_for_faulted_cruise():
+  guidance, selfdrive = make_engaged_guidance(False)
+  selfdrive.enabled_prev = True
+  faulted = make_vw_car_state(cruise_available=False, cruise_fault_lateral=True)
+
+  selfdrive.events.clear()
+  selfdrive.events_iq.clear()
+  selfdrive.events.add(EventName.pcmDisable)
+  guidance.update(faulted)
+
+  assert not selfdrive.events.has(EventName.pcmDisable)
+  assert not selfdrive.events_iq.has(EventNameIQ.alcDisengaged)
+  assert guidance.state_machine.state == GuidanceState.enabled
+  assert guidance.active
+
+
 def test_main_switch_rising_edge_arms_guidance_during_faulted_cruise():
   selfdrive = make_selfdrive(0, brand="volkswagen", main_cruise_allowed=True)
   selfdrive.CS_prev = make_vw_car_state(cruise_available=False, cruise_fault_lateral=False)

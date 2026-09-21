@@ -6,6 +6,7 @@ from pathlib import Path
 _RUNTIME_ARTIFACT_PATTERNS = (
   re.compile(r"egpu_.+_amd_(?:tinygrad|policy|policy_oob|model_oob)\.pkl$"),
   re.compile(r"emac_warp_\d+x\d+_tinygrad\.pkl$"),
+  re.compile(r".+_usbemac\.pkl$"),
   re.compile(r".+\.onnx$"),
 )
 

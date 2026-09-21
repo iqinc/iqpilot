@@ -291,8 +291,16 @@ class LongitudinalMpc:
     if not valid_model_lead:
       return self.process_lead_legacy(radar_lead)
 
-    x_lead_traj = float(radar_lead.dRel) + (x_model - x_model[0])
-    v_lead_traj = float(radar_lead.vLead) + (v_model - v_model[0])
+    pulling_away = radar_lead.vRel > LEAD_PULLAWAY_VREL and radar_lead.aLeadK > LEAD_PULLAWAY_ABRAKE
+    displacement = x_model - x_model[0]
+    v_delta = v_model - v_model[0]
+    if not pulling_away:
+      # the model predicts a stopped or braking lead driving off again; until radar confirms it the plan would aim through the lead
+      displacement = np.minimum(displacement, max(float(radar_lead.vLead), 0.0) * LEAD_T_IDXS_MODEL)
+      v_delta = np.minimum(v_delta, 0.0)
+
+    x_lead_traj = float(radar_lead.dRel) + displacement
+    v_lead_traj = float(radar_lead.vLead) + v_delta
 
     v_lead_0 = v_lead_traj[0]
     min_x_lead = MIN_X_LEAD_FACTOR * (v_ego + v_lead_0) * (v_ego - v_lead_0) / (-ACCEL_MIN * 2)
@@ -301,7 +309,7 @@ class LongitudinalMpc:
 
     x_lead_mpc = np.maximum.accumulate(np.interp(T_IDXS, LEAD_T_IDXS_MODEL, x_lead_traj))
     v_lead_mpc = np.interp(T_IDXS, LEAD_T_IDXS_MODEL, v_lead_traj)
-    if radar_lead.status and radar_lead.vRel > LEAD_PULLAWAY_VREL and radar_lead.aLeadK > LEAD_PULLAWAY_ABRAKE:
+    if pulling_away:
       radar_velocity_floor = np.full_like(T_IDXS, float(radar_lead.vLead))
       radar_distance_floor = float(radar_lead.dRel) + float(radar_lead.vLead) * T_IDXS
       v_lead_mpc = np.maximum(v_lead_mpc, radar_velocity_floor)

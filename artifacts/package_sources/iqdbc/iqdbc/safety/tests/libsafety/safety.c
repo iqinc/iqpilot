@@ -12,17 +12,8 @@ uint32_t microsecond_timer_get(void) {
 #include <stdbool.h>
 #include "iqdbc/safety/can.h"
 
-#define CAN_SENT_CAPTURE 2048
-static CANPacket_t can_sent[CAN_SENT_CAPTURE];
-static int can_sent_count = 0;
-
 void can_send(CANPacket_t *to_push, uint8_t bus_number, bool skip_tx_hook) {
-  (void)skip_tx_hook;
-  if (can_sent_count < CAN_SENT_CAPTURE) {
-    can_sent[can_sent_count] = *to_push;
-    can_sent[can_sent_count].bus = bus_number;
-  }
-  can_sent_count++;
+  (void)to_push; (void)bus_number; (void)skip_tx_hook;
 }
 
 void can_set_checksum(CANPacket_t *packet) {
@@ -30,69 +21,6 @@ void can_set_checksum(CANPacket_t *packet) {
 }
 
 #include "iqdbc/safety/safety.h"
-#include "iqdbc/safety/pq_moduleless.h"
-
-void pq_moduleless_test_reset(void) {
-  pq_ml_reset();
-  pq_ml_ignition = false;
-  can_sent_count = 0;
-}
-
-void pq_moduleless_ignition(bool ignition) {
-  pq_moduleless_ignition_tick(ignition);
-}
-
-void pq_moduleless_rx(CANPacket_t *msg) {
-  pq_moduleless_rx_hook(msg);
-}
-
-bool get_pq_moduleless_armed(void) {
-  return pq_moduleless_armed;
-}
-
-bool get_pq_moduleless_emitting(void) {
-  return pq_moduleless_emitting;
-}
-
-int get_pq_moduleless_tx_bus(void) {
-  return (int)pq_moduleless_tx_bus;
-}
-
-int get_pq_moduleless_acc_age(void) {
-  return (int)pq_ml_acc_age;
-}
-
-int get_pq_moduleless_hud_age(void) {
-  return (int)pq_ml_hud_age;
-}
-
-int get_pq_moduleless_acc_byte(int i) {
-  return (int)pq_ml_acc_payload[i];
-}
-
-int get_pq_moduleless_hud_byte(int i) {
-  return (int)pq_ml_hud_payload[i];
-}
-
-int get_can_sent_count(void) {
-  return can_sent_count;
-}
-
-void reset_can_sent(void) {
-  can_sent_count = 0;
-}
-
-int get_can_sent_addr(int i) {
-  return (int)can_sent[i].addr;
-}
-
-int get_can_sent_bus(int i) {
-  return (int)can_sent[i].bus;
-}
-
-int get_can_sent_byte(int i, int b) {
-  return (int)can_sent[i].data[b];
-}
 
 void safety_tick_current_safety_config() {
   safety_tick(&current_safety_config);
@@ -374,9 +302,6 @@ int get_gas_interceptor_prev(void){
 }
 
 void init_tests(void){
-  pq_ml_acc_age = PQ_ML_CMD_TIMEOUT;
-  pq_ml_hud_age = PQ_ML_CMD_TIMEOUT;
-  can_sent_count = 0;
   safety_mode_cnt = 2U;  // avoid ignoring relay_malfunction logic
   alternative_experience = 0;
   current_safety_param_iq = 0;

@@ -53,7 +53,6 @@ class CarState(CarStateBase):
     self.acc_radar_regelabw = 0.0
     self.acc_radar_aendgrad = 0.0
     self.acc_radar_sta_adr = 0
-    self.tsk_available = False
     self.acc_radar_fehler = False
     self.acc_radar_v_wunsch = 0.0
     self.acc_radar_sta_acc = 0
@@ -400,7 +399,7 @@ class CarState(CarStateBase):
       self.esp_hold_confirmation = bool(pt_cp.vl["ESP_21"]["ESP_Haltebestaetigung"])
     else:
       self.esp_hold_confirmation = pt_cp.vl["ESC_50"]["Motion_State"] == 3
-    ret.cruiseState.standstill = self.CP.pcmCruise and self.esp_hold_confirmation
+    ret.cruiseState.standstill = (self.CP.pcmCruise or self.CP.openpilotLongitudinalControl) and self.esp_hold_confirmation
 
     if self.CP.pcmCruise:
       ret.cruiseState.speed = float(int(round(acc_values.get("ACC_Wunschgeschw_02", 0)))) * CV.KPH_TO_MS
@@ -569,7 +568,6 @@ class CarState(CarStateBase):
     cruise_main_switch = bool(pt_cp.vl["Motor_5"]["MO5_GRA_Hauptsch"])
     self.cruise_main_switch = cruise_main_switch
     MO2_StaGRA = pt_cp.vl["Motor_2"]["MO2_Sta_GRA"] in (1, 2)
-    self.tsk_available = bool(pt_cp.vl["Motor_2"]["MO2_Status_TSK"])
     ACS_StaADR = False if cc_only else ext_cp.vl["ACC_System"]["ACS_Sta_ADR"] == 1
     cruiseActive = MO2_StaGRA or ACS_StaADR
     self.epb_freigabe_ver = bool(aux_cp.vl["EPB_1"]["EP1_Freigabe_Ver"]) if sng_ecd_enabled and not cc_only else False

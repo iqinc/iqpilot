@@ -17,6 +17,13 @@ from iqpilot.ui.onroad.hud_overlays import ChevronMetrics
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
+# the head is trained against a 7% positive rate, so it reports ~0.08 at a real stop and never
+# exceeds 0.024 on held-out highway frames; 0.5 gated out every stop the model actually found
+STOP_POINT_MIN_PROBABILITY = 0.30
+STOP_POINT_HALF_WIDTH = 1.0
+STOP_POINT_MAX_OFFSET = 4.0
+STOP_POINT_DEPTH = 0.45
+STOP_POINT_COLOR = (255, 90, 60)
 
 _VT_LABEL = custom.IQVehicleTracks.Track.Label
 VEHICLE_TRACK_LABELS = (_VT_LABEL.car, _VT_LABEL.motorcycle, _VT_LABEL.bus, _VT_LABEL.truck)
@@ -193,6 +200,7 @@ class ModelRenderer(ModelRendererHelpers, Widget):
     # Draw elements
     self._draw_lane_lines()
     self._draw_path(sm)
+    self._draw_stop_point(model)
 
     if self._ambient_dots:
       self._update_vision_dots(sm)
@@ -459,6 +467,41 @@ class ModelRenderer(ModelRendererHelpers, Widget):
       r = dot.radius
       dest = rl.Rectangle(cx, cy, r * 2.0, r * 2.0)
       rl.draw_texture_pro(self._lead_orb, src, dest, rl.Vector2(r, r), 0.0, rl.Color(255, 255, 255, 90))
+
+  def _draw_stop_point(self, model):
+    stop_point = getattr(model, 'stopPoint', None)
+    if stop_point is None or not stop_point.valid or stop_point.probability < STOP_POINT_MIN_PROBABILITY:
+      return
+
+    points = self._path.raw_points
+    if points.shape[0] < 2:
+      return
+
+    distance = float(stop_point.distance)
+    # the plan collapses to a couple of metres once the car is stopped, so gating on its reach
+    # hides the stop exactly when the model is surest of it; np.interp clamps past the last point
+    if not 0.0 < distance <= MAX_DRAW_DISTANCE:
+      return
+
+    # np.interp needs an increasing x, and once the car halts the plan collapses and its lateral
+    # values run to tens of metres; both would place the stop well off to the side of the road
+    forward = points[:, 0]
+    if np.all(np.diff(forward) > 0):
+      centre_y = float(np.interp(distance, forward, points[:, 1]))
+      centre_z = float(np.interp(distance, forward, points[:, 2]))
+    else:
+      centre_y, centre_z = 0.0, float(points[0, 2])
+    centre_y = float(np.clip(centre_y, -STOP_POINT_MAX_OFFSET, STOP_POINT_MAX_OFFSET))
+    centre_z += self._path_offset_z
+    near, far = distance, distance + STOP_POINT_DEPTH
+    corners = [self._map_to_screen(x, centre_y + offset, centre_z)
+               for x, offset in ((near, -STOP_POINT_HALF_WIDTH), (near, STOP_POINT_HALF_WIDTH),
+                                 (far, STOP_POINT_HALF_WIDTH), (far, -STOP_POINT_HALF_WIDTH))]
+    if any(corner is None for corner in corners):
+      return
+
+    alpha = int(np.clip(stop_point.probability, 0.0, 1.0) * 200)
+    draw_polygon(self._rect, np.array(corners, dtype=np.float32), rl.Color(*STOP_POINT_COLOR, alpha))
 
   def _draw_lead_indicator(self):
     layers = LEAD_LINE_LAYERS.get(ui_state.status, LEAD_LINE_LAYERS[UIStatus.DISENGAGED])

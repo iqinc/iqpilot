@@ -134,3 +134,23 @@ class TestExperimentalLeadMpc:
 
   def test_model_time_shape_matches_expected_horizon(self):
     assert LEAD_T_IDXS_MODEL.shape == (6,)
+
+  @staticmethod
+  def stopped_radar_lead(v_rel=-4.8, a_lead=-0.1):
+    return SimpleNamespace(status=True, dRel=6.2, vLead=0.1, aLeadK=a_lead, aLeadTau=1.5, vRel=v_rel, modelProb=1.0, radar=True)
+
+  def test_stopped_lead_is_not_predicted_to_drive_off(self):
+    model_lead = self.model_lead(prob=1.0, x=[8.2, 8.9, 11.4, 16.0, 22.7, 31.6], v=[0.2, 0.7, 1.8, 2.9, 3.9, 4.8])
+    lead_xv = self.mpc(v_ego=3.9).process_lead(model_lead, self.stopped_radar_lead())
+
+    assert lead_xv[0, 0] == pytest.approx(6.2)
+    assert lead_xv[-1, 0] <= 6.2 + 0.1 * 10.0 + 1e-6
+    assert np.all(lead_xv[:, 1] <= 0.1 + 1e-6)
+
+  def test_radar_confirmed_pullaway_keeps_model_acceleration(self):
+    model_lead = self.model_lead(prob=1.0, x=[8.0, 12.0, 20.0, 32.0, 48.0, 68.0], v=[1.0, 3.0, 5.0, 7.0, 9.0, 11.0])
+    radar_lead = SimpleNamespace(status=True, dRel=8.0, vLead=3.0, aLeadK=1.0, aLeadTau=1.5, vRel=2.0, modelProb=1.0, radar=True)
+    lead_xv = self.mpc(v_ego=1.0).process_lead(model_lead, radar_lead)
+
+    assert lead_xv[-1, 0] == pytest.approx(68.0)
+    assert lead_xv[-1, 1] == pytest.approx(13.0)

@@ -98,6 +98,18 @@ ensure_base() {
   set_attr strings/0x409/product "IQ.Pilot"
   set_attr configs/c.1/MaxPower 250
   set_attr configs/c.1/strings/0x409/configuration "IQ.Pilot"
+  enable_os_desc
+}
+
+# MS OS descriptors let Windows bind WinUSB to the NutCracker bulk interface with no driver install.
+# Windows caches a "no OS descriptors" answer per VID/PID/bcdDevice, so bcdDevice changes with this.
+enable_os_desc() {
+  [ -d "$GADGET/os_desc" ] || return 0
+  set_attr bcdDevice 0x0501
+  set_attr os_desc/b_vendor_code 0xcd
+  set_attr os_desc/qw_sign MSFT100
+  set_attr os_desc/use 1
+  [ -L "$GADGET/os_desc/c.1" ] || sudo ln -s "$GADGET/configs/c.1" "$GADGET/os_desc/c.1" 2>/dev/null || true
 }
 
 add_adb() {

@@ -36,15 +36,6 @@
 #define SAFETY_VOLKSWAGEN_MEB 34U
 
 #define GET_BIT(msg, b) ((bool)!!(((msg)->data[((b) / 8U)] >> ((b) % 8U)) & 0x1U))
-
-extern bool pq_moduleless_armed;
-extern bool pq_moduleless_emitting;
-extern uint8_t pq_moduleless_tx_bus;
-void pq_moduleless_configure(bool enabled, uint8_t tx_bus);
-void pq_moduleless_set_acc_payload(const uint8_t *data);
-void pq_moduleless_set_hud_payload(const uint8_t *data);
-void pq_moduleless_ignition_tick(bool ignition);
-void pq_moduleless_rx_hook(const CANPacket_t *msg);
 #define GET_FLAG(value, mask) (((value) & (mask)) == (mask))
 
 #define BUILD_SAFETY_CFG(rx, tx) ((safety_config){(rx), (sizeof((rx)) / sizeof((rx)[0])), \

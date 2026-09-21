@@ -43,7 +43,7 @@ def make_car_state(**overrides):
   return SimpleNamespace(**base)
 
 
-def test_pcm_disable_suppressed_during_cruise_fault_lateral_mode():
+def test_pcm_disable_emitted_during_cruise_fault_lateral_mode():
   cp = SimpleNamespace(
     brand="volkswagen",
     openpilotLongitudinalControl=False,
@@ -58,7 +58,8 @@ def test_pcm_disable_suppressed_during_cruise_fault_lateral_mode():
 
   out = events.update(cs, cs_prev, SimpleNamespace(actuators=SimpleNamespace(accel=0.0)))
 
-  assert not out.has(EventName.pcmDisable)
+  assert out.has(EventName.pcmDisable)
+  assert out.has(EventName.cruiseFaultLateralAllowed)
 
 
 def test_cruise_fault_lateral_mode_replaces_acc_faulted_alert():

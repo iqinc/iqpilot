@@ -1,5 +1,4 @@
 #include "iqdbc/safety/safety.h"
-#include "iqdbc/safety/pq_moduleless.h"
 
 // this file is checked by cppcheck
 
@@ -16,6 +15,3 @@ SAFETY_UNUSED(set_safety_hooks);
 SAFETY_UNUSED(aol_heartbeat_engaged_check);
 SAFETY_UNUSED(aol_set_alternative_experience);
 SAFETY_UNUSED(get_acc_main_on_mismatches);
-
-SAFETY_UNUSED(pq_moduleless_ignition_tick);
-SAFETY_UNUSED(pq_moduleless_rx_hook);

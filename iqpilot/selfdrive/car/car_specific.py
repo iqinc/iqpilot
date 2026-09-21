@@ -166,7 +166,7 @@ class CarSpecificEvents:
     if pcm_enable:
       if CS.cruiseState.enabled and not CS_prev.cruiseState.enabled and not CS.blockPcmEnable:
         events.add(EventName.pcmEnable)
-      elif not CS.cruiseState.enabled and not getattr(CS, 'cruiseFaultLateralMode', False):
+      elif not CS.cruiseState.enabled:
         events.add(EventName.pcmDisable)
 
     return events

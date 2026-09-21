@@ -17,24 +17,9 @@ import os
 iqpilot_path = os.path.join(os.path.dirname(__file__), '..', '..', '..')
 sys.path.insert(0, iqpilot_path)
 try:
-  from iqpilot.common.params import Params, UnknownKeyName
+  from iqpilot.common.params import Params
 except ImportError:
   pass
-
-
-def _param_armed(params, key: str) -> bool:
-  # iqdbc pins ahead of IQ.Pilot, so a key this component reads may not exist in the installed
-  # build yet; an unknown key means the feature simply is not available.
-  try:
-    return params.get_bool(key)
-  except UnknownKeyName:
-    return False
-
-
-def _moduleless_acc_available(params, flags, fingerprint) -> bool:
-  return (_param_armed(params, "VwPqModulelessAcc") and
-          bool(flags & VolkswagenFlagsIQ.IQ_CC_ONLY_NO_RADAR) and
-          0x38A in fingerprint[1])
 
 try:
   from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
@@ -91,12 +76,6 @@ class CarInterface(CarInterfaceBase):
       cc_only_flags = VolkswagenFlagsIQ.IQ_CC_ONLY | VolkswagenFlagsIQ.IQ_CC_ONLY_NO_RADAR
       if ret.flags & cc_only_flags:
         safety_configs[0].safetyParam |= VolkswagenSafetyFlags.PQ_NO_CAM_BUS.value
-
-      # The car is coded for ACC but its module is gone, so the panda synthesizes it. Armed by
-      # the param, but only on a car whose ACC-capable stalk says the coding is really there.
-      if _moduleless_acc_available(_params, ret.flags, fingerprint):
-        ret.flags |= VolkswagenFlagsIQ.IQ_PQ_MODULELESS.value
-        safety_configs[0].safetyParam |= VolkswagenSafetyFlags.PQ_MODULELESS.value
       if (ret.flags & cc_only_flags) and not fingerprint[0]:
         ret.flags |= VolkswagenFlagsIQ.IQ_PQ_LOWLINE.value
         safety_configs[0].safetyParam |= VolkswagenSafetyFlags.PQ_LOWLINE.value

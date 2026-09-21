@@ -38,6 +38,13 @@ class TeslaCarDocsHW4(CarDocs):
   footnotes: list[Enum] = field(default_factory=lambda: [Footnote.HW_TYPE, Footnote.SETUP])
 
 @dataclass
+class TeslaCarDocsHW4Gen2(CarDocs):
+  package: str = "All"
+  car_parts: CarParts = field(default_factory=CarParts.common([CarHarness.tesla_c]))
+  footnotes: list[Enum] = field(default_factory=lambda: [Footnote.HW_TYPE, Footnote.SETUP])
+
+
+@dataclass
 class TeslaCarHW4ModelSXDocs(TeslaCarDocsHW4):
   support_type: SupportType = SupportType.COMMUNITY
   support_link: str = "community"
@@ -62,6 +69,7 @@ class CAR(Platforms):
     [
       TeslaCarDocsHW3("Tesla Model Y (with HW3) 2020-23"),
       TeslaCarDocsHW4("Tesla Model Y (with HW4) 2024-25"),
+      TeslaCarDocsHW4Gen2("Tesla Model Y (with HW4) 2026"),
     ],
     CarSpecs(mass=2072., wheelbase=2.890, steerRatio=12.0),
     {Bus.party: 'tesla_model3_party', Bus.radar: 'tesla_radar_continental_generated', Bus.adas: 'tesla_model3_vehicle'},
@@ -116,8 +124,29 @@ LEGACY_DAS_STEERING_FW = {
 #
 # Only the model code identifies the vehicle: 1 and 2 are shared across models (Model 3 and
 # Model Y both ship TeM3_ and TeMYG4_ firmware) and 3 is only monotone within one lineage.
+#
+# HW4 gen2 inserts a hardware generation between the trim and the series:
+# TeMYG4_Main_0.0.0 (78),Y4OC.E80.003.07.0
+#                        44_55_gggg_666666
 FW_PATTERN = re.compile(rb'^Te[A-Z0-9]+_[A-Za-z0-9_]+_0\.0\.0 \(\d+\),' +
-                        rb'(?P<model>E4|E|Y4|Y|XP)[A-Z]{0,2}(?P<series>\d{3})\.(?P<version>\d+(?:\.\d+)*)$')
+                        rb'(?P<model>E4|E|Y4|Y|XP)[A-Z]{0,2}(?:\.(?P<gen>[A-Z]\d{2})\.)?' +
+                        rb'(?P<series>\d{3})\.(?P<version>\d+(?:\.\d+)*)$')
+
+# The EPS on a 2026+ Model Y answers 0xF181 with a binary application software id instead of an
+# ASCII version string, so it can only ever be matched exactly.
+HW4_GEN2_FW_PREFIX = b'\x01\x01'
+
+
+def is_ascii_version_fw(fw: bytes) -> bool:
+  return not fw.startswith(HW4_GEN2_FW_PREFIX)
+
+
+def is_hw4_gen2_fw(fw: bytes) -> bool:
+  if fw.startswith(HW4_GEN2_FW_PREFIX):
+    return True
+
+  match = FW_PATTERN.match(fw)
+  return match is not None and match.group('gen') is not None
 
 
 def get_platform_codes(fw_versions: list[bytes] | set[bytes]) -> set[tuple[bytes, bytes, tuple[int, ...]]]:
@@ -144,6 +173,8 @@ def _das_steering_cutoffs() -> dict[tuple[str, bytes, bytes], tuple[tuple[int, .
     known_legacy = LEGACY_DAS_STEERING_FW.get(platform, [])
     for fws in ecus.values():
       for fw in fws:
+        if is_hw4_gen2_fw(fw):
+          continue
         for model, series, version in get_platform_codes([fw]):
           (legacy if fw in known_legacy else modern)[(platform, model, series)].add(version)
 
@@ -157,6 +188,11 @@ def is_legacy_das_steering(candidate: str, fw: bytes) -> bool:
   on legacy software can force the platform with CarPlatformBundle."""
   if fw in LEGACY_DAS_STEERING_FW.get(candidate, []):
     return True
+
+  # HW4 gen2 shipped long after the 3-bit DAS_steeringControlType and shares a series with
+  # firmware that predates it, so it must not be compared against that series' cutoff
+  if is_hw4_gen2_fw(fw):
+    return False
 
   codes = get_platform_codes([fw])
   if not len(codes):
@@ -197,7 +233,13 @@ FW_QUERY_CONFIG = FwQueryConfig(
       [StdQueries.TESTER_PRESENT_REQUEST, StdQueries.SUPPLIER_SOFTWARE_VERSION_REQUEST],
       [StdQueries.TESTER_PRESENT_RESPONSE, StdQueries.SUPPLIER_SOFTWARE_VERSION_RESPONSE],
       bus=0,
-    )
+    ),
+    # the HW4 gen2 (2026+ Model Y) EPS doesn't answer 0xF195, only the binary application software id at 0xF181
+    Request(
+      [StdQueries.TESTER_PRESENT_REQUEST, StdQueries.UDS_VERSION_REQUEST],
+      [StdQueries.TESTER_PRESENT_RESPONSE, StdQueries.UDS_VERSION_RESPONSE],
+      bus=0,
+    ),
   ],
   match_fw_to_car_fuzzy=match_fw_to_car_fuzzy,
 )
@@ -251,12 +293,17 @@ class CarControllerParams:
 class TeslaSafetyFlags(IntFlag):
   LONG_CONTROL = 1
   LEGACY_DAS_STEERING = 2
+  HW4_GEN2 = 4
 
 
 class TeslaFlags(IntFlag):
   LONG_CONTROL = 1
   LEGACY_DAS_STEERING = 2
   MISSING_DAS_SETTINGS = 4
+  # 2026+ Model Y (Juniper): DAS_status moved from 0x39b to 0x399 and UI_warning (0x311) is gone
+  HW4_GEN2 = 8
+  # blinkers and the seatbelt buckle are only on the VEHICLE bus, which needs its CAN lines tapped
+  HW4_GEN2_VEHICLE_BUS = 16
 
 
 DBC = CAR.create_dbc_map()

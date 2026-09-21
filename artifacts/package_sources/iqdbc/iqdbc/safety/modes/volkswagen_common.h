@@ -20,8 +20,6 @@ extern const uint16_t FLAG_VOLKSWAGEN_PQ_SNG_ECD;
 const uint16_t FLAG_VOLKSWAGEN_PQ_SNG_ECD = 512;
 extern const uint16_t FLAG_VOLKSWAGEN_MLB_NO_ECAN;
 const uint16_t FLAG_VOLKSWAGEN_MLB_NO_ECAN = 1024;
-extern const uint16_t FLAG_VOLKSWAGEN_PQ_MODULELESS;
-const uint16_t FLAG_VOLKSWAGEN_PQ_MODULELESS = 2048;
 
 static uint8_t volkswagen_crc8_lut_8h2f[256]; // Static lookup table for CRC8 poly 0x2F, aka 8H2F/AUTOSAR
 

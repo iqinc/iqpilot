@@ -1,4 +1,3 @@
-import os
 import threading
 import time
 from datetime import datetime
@@ -35,10 +34,3 @@ def log_issue_limited(key: str, tag: str, message: str, interval_sec: float = 1.
     _last_log_times[key] = now
 
   log_issue(tag, message)
-
-
-def clear_issue_debug_log() -> None:
-  try:
-    os.remove(DEBUG_PATH)
-  except OSError:
-    pass

@@ -1,11 +1,13 @@
 import numpy as np
 from iqdbc.can import CANPacker
 from iqdbc.car import Bus, DT_CTRL, make_tester_present_msg, structs
+from iqdbc.car.carlog import carlog
 from iqdbc.car.lateral import apply_driver_steer_torque_limits, apply_std_steer_angle_limits, common_fault_avoidance
 from iqdbc.car.common.conversions import Conversions as CV
 from iqdbc.car.hyundai import hyundaicanfd, hyundaican
 from iqdbc.car.hyundai.carstate import CarState
 from iqdbc.car.hyundai.hyundaicanfd import CanBus
+from iqdbc.car.hyundai.stopping import CanfdStopping
 from iqdbc.car.hyundai.values import HyundaiFlags, Buttons, CarControllerParams, CAR, CAN_GEARS, HyundaiExtFlags
 from iqdbc.car.interfaces import CarControllerBase
 from iqdbc.car.vehicle_model import VehicleModel
@@ -141,6 +143,7 @@ class CarController(CarControllerBase):
     self.angle_limit_counter = 0
 
     self.accel_last = 0
+    self.accel_value_last = 0.0
     self.apply_torque_last = 0
     self.car_fingerprint = CP.carFingerprint
     self.last_button_frame = 0
@@ -184,16 +187,24 @@ class CarController(CarControllerBase):
 
     self.activeCarrot = 0
     self.camera_scc_params = Params().get_int("HyundaiCameraSCC")
+    self.canfd_stopping = CanfdStopping() if Params().get_bool("CanfdStopRetry") else None
     self.is_ldws_car = Params().get_bool("IsLdwsCar")
     self.enable_corner_radar = 0
 
     self.steerDeltaUpOrg = self.steerDeltaUp = self.steerDeltaUpLC = self.params.STEER_DELTA_UP
     self.steerDeltaDownOrg = self.steerDeltaDown = self.steerDeltaDownLC = self.params.STEER_DELTA_DOWN
 
+  def _update_canfd_stop_retry(self, params):
+    enabled = params.get_bool("CanfdStopRetry")
+    if enabled != (self.canfd_stopping is not None):
+      self.canfd_stopping = CanfdStopping() if enabled else None
+      carlog.warning({"event": "canfd_stop_retry_setting", "enabled": enabled})
+
   def update(self, CC, CC_IQ, CS, now_nanos):
 
     if self.frame % 50 == 0:
       params = Params()
+      self._update_canfd_stop_retry(params)
       self.max_angle_frames = params.get_int("MaxAngleFrames")
       steerMax = params.get_int("CustomSteerMax")
       steerDeltaUp = params.get_int("CustomSteerDeltaUp")
@@ -454,10 +465,16 @@ class CarController(CarControllerBase):
       hda2 = self.CP.flags & HyundaiFlags.CANFD_HDA2
       hda2_long = hda2 and self.CP.openpilotLongitudinalControl
       # steering control
-      can_sends.extend(hyundaicanfd.create_steering_messages(
-        self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque,
-        apply_angle, self.lkas_max_torque, angle_control,
-      ))
+      if camera_scc:
+        can_sends.extend(hyundaicanfd.create_steering_messages_camera_scc(
+          self.frame, self.packer, self.CP, self.CAN, CC, apply_steer_req, apply_torque,
+          CS, apply_angle, self.lkas_max_torque, angle_control,
+        ))
+      else:
+        can_sends.extend(hyundaicanfd.create_steering_messages(
+          self.packer, self.CP, self.CAN, CC.enabled, apply_steer_req, apply_torque,
+          apply_angle, self.lkas_max_torque, angle_control,
+        ))
 
       # prevent LFA from activating on HDA2 by sending "no lane lines detected" to ADAS ECU
       if self.frame % 5 == 0 and hda2 and not camera_scc:
@@ -487,14 +504,17 @@ class CarController(CarControllerBase):
             can_sends.extend(hyundaicanfd.create_fca_warning_light(self.CP, self.packer, self.CAN, self.frame))
         if self.frame % 2 == 0:
           if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
-            msg = hyundaicanfd.create_acc_control_scc2(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
-                                                             set_speed_in_units, hud_control, self.hyundai_jerk, CS)
+            msg, self.accel_value_last = hyundaicanfd.create_acc_control_scc2(
+              self.packer, self.CAN, CC.enabled, self.accel_value_last, accel, stopping, CC.cruiseControl.override,
+              set_speed_in_units, hud_control, self.hyundai_jerk, CS, self.canfd_stopping,
+            )
             if msg is not None:
               can_sends.append(msg)
             can_sends.extend(hyundaicanfd.create_tcs_messages(self.packer, self.CAN, CS)) # for sorento SCC radar...
           else:
-            can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping, CC.cruiseControl.override,
-                                                             set_speed_in_units, hud_control, self.hyundai_jerk.jerk_u, self.hyundai_jerk.jerk_l, CS))
+            can_sends.append(hyundaicanfd.create_acc_control(self.packer, self.CAN, CC.enabled, self.accel_last, accel, stopping,
+                                                             CC.cruiseControl.override, set_speed_in_units, hud_control,
+                                                             self.hyundai_jerk.jerk_u, self.hyundai_jerk.jerk_l, CS, self.canfd_stopping))
           self.accel_last = accel
       else:
         # button presses

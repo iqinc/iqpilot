@@ -711,3 +711,40 @@ def test_navigation_mapbox_limit_requires_confirmation_before_override(set_speed
   system.sm["carState"].buttonEvents = []
   assert system.step(72, increase=True) == pytest.approx(60)
   assert system.step(73, increase=True, new_gesture=True) == pytest.approx(73)
+
+
+@pytest.mark.parametrize("status, minimum_backoff", [(401, 3000.0), (None, 15.0)])
+def test_mapbox_failure_backs_off_instead_of_retrying_every_second(monkeypatch, status, minimum_backoff):
+  import iqpilot.selfdrive.controls.lib.speed_limit_controller as slc_module
+
+  class InlineExecutor:
+    def submit(self, fn):
+      result = fn()
+      return SimpleNamespace(result=lambda: result, add_done_callback=lambda callback: callback(SimpleNamespace(result=lambda: result)))
+
+  calls = []
+
+  def get(*_args, **_kwargs):
+    calls.append(1)
+    error = slc_module.requests.HTTPError("rejected") if status else slc_module.requests.ConnectionError("down")
+    error.response = SimpleNamespace(status_code=status) if status else None
+    raise error
+
+  monkeypatch.setattr(slc_module, "is_url_pingable", lambda _url: True)
+  controller = SpeedLimitController(FakeParams())
+  controller.executor = InlineExecutor()
+  controller.session = SimpleNamespace(get=get)
+  controller.gps_valid = True
+  controller.mapbox_token = "token"
+  controller.gps_position = {"latitude": 40.0, "longitude": -73.0, "bearing": 0.0}
+  sm = {"carState": SimpleNamespace(steeringAngleDeg=0.0), "vehicleParameters": SimpleNamespace(angleOffsetDeg=0.0)}
+
+  for _ in range(200):
+    controller.get_mapbox_speed_limit(datetime(2026, 9, 20), False, 25.0, sm)
+  assert len(calls) == 1
+  assert controller.mapbox_backoff_until - slc_module.time.monotonic() > minimum_backoff
+
+  controller.mapbox_token = "replacement"
+  controller.segment_distance = 0.0
+  controller.get_mapbox_speed_limit(datetime(2026, 9, 20), False, 25.0, sm)
+  assert len(calls) == 2

@@ -20,16 +20,12 @@ MSG_ACC_GRA_ANZEIGE = 0x56A   # TX by OP, ACC HUD
 MSG_LDW_1 = 0x5BE             # TX by OP, Lane line recognition and text alerts
 MSG_BLINKMODI_02 = 0x0AA      # TX by OP, turn signal control
 MSG_APD_1 = 0x3D6             # TX by OP, CarParams
-MSG_SNG_1 = 0x3D7             # TX by OP, stop and go handoff
 MSG_IQ = 0x6A1                # TX by OP
-MSG_IQ_PQ_ACC_CMD = 0x6A2     # TX by OP, ACC_System contents for a synthesized module
-MSG_IQ_PQ_ACC_HUD = 0x6A3     # TX by OP, ACC_GRA_Anzeige contents for a synthesized module
 
 
 class TestVolkswagenPqSafetyBase(common.CarSafetyTest):
   cruise_engaged = False
   tsk_status = False
-  KEEPER_ENABLED = False
 
   RELAY_MALFUNCTION_ADDRS = {0: (MSG_HCA_1, MSG_LDW_1)}
 
@@ -157,9 +153,6 @@ class TestVolkswagenPqLongSafety(TestVolkswagenPqSafetyBase, common.Longitudinal
     safety_param = VolkswagenSafetyFlags.LONG_CONTROL | VolkswagenSafetyFlags.ALLOW_LONG_ACCEL_WITH_GAS_PRESSED
     self.safety.set_safety_hooks(CarParams.SafetyModel.volkswagenPq, safety_param)
     self.safety.init_tests()
-
-  def test_keeper_configured(self):
-    self.assertEqual(self.KEEPER_ENABLED, self.safety.get_pq_moduleless_armed())
 
   # stock cruise controls are entirely bypassed under openpilot longitudinal control
   def test_disable_control_allowed_from_cruise(self):
@@ -295,59 +288,6 @@ class TestVolkswagenPqNoCamSafety(TestVolkswagenPqStockSafety):
     self.safety = libsafety_py.libsafety
     self.safety.set_safety_hooks(CarParams.SafetyModel.volkswagenPq, VolkswagenSafetyFlags.PQ_NO_CAM_BUS)
     self.safety.init_tests()
-
-
-class TestVolkswagenPqModulelessSafety(TestVolkswagenPqLongSafety):
-  """Radarless PQ cars coded for ACC: the panda synthesizes the ACC module, openpilot only
-  ships its contents on the private pair."""
-  TX_MSGS = [[MSG_HCA_1, 0], [MSG_LDW_1, 0], [MSG_IQ_PQ_ACC_CMD, 1], [MSG_IQ_PQ_ACC_HUD, 1],
-             [MSG_GRA_NEU, 1], [MSG_GRA_NEU, 2], [MSG_BLINKMODI_02, 0], [MSG_MOTOR_3, 1],
-             [MSG_APD_1, 1], [MSG_IQ, 1], [MSG_SNG_1, 1]]
-  FWD_BLACKLISTED_ADDRS = {0: [MSG_GRA_NEU], 2: [MSG_HCA_1, MSG_LDW_1]}
-  RELAY_MALFUNCTION_ADDRS = {0: (MSG_HCA_1, MSG_LDW_1), 2: (MSG_GRA_NEU,)}
-  KEEPER_ENABLED = True
-
-  def setUp(self):
-    self.packer = CANPackerSafety("vw_pq")
-    self.safety = libsafety_py.libsafety
-    safety_param = (VolkswagenSafetyFlags.LONG_CONTROL | VolkswagenSafetyFlags.ALLOW_LONG_ACCEL_WITH_GAS_PRESSED |
-                    VolkswagenSafetyFlags.PQ_MODULELESS)
-    self.safety.set_safety_hooks(CarParams.SafetyModel.volkswagenPq, safety_param)
-    self.safety.init_tests()
-
-  def _accel_msg(self, accel):
-    values = {"ACS_Sollbeschl": accel}
-    return self.packer.make_can_msg_safety("IQ_PQ_ACC_CMD", 1, values)
-
-  def _hud_msg(self, sta_acc=0):
-    values = {"ACA_StaACC": sta_acc}
-    return self.packer.make_can_msg_safety("IQ_PQ_ACC_HUD", 1, values)
-
-  def test_keeper_tx_bus(self):
-    self.assertEqual(0, self.safety.get_pq_moduleless_tx_bus())
-
-  def test_oem_acc_messages_not_transmittable(self):
-    for addr, name in ((MSG_ACC_SYSTEM, "ACC_System"), (MSG_ACC_GRA_ANZEIGE, "ACC_GRA_Anzeige")):
-      for bus in range(3):
-        msg = self.packer.make_can_msg_safety(name, bus, {})
-        self.assertFalse(self._tx(msg), f"{name} on bus {bus} should not be transmittable")
-
-  def test_accel_forwarded_to_keeper_only_when_allowed(self):
-    self.safety.set_controls_allowed(True)
-    self.safety.pq_moduleless_test_reset()
-    self.assertTrue(self._tx(self._accel_msg(0.5)))
-    self.assertEqual(0, self.safety.get_pq_moduleless_acc_age())
-
-    self.safety.set_controls_allowed(False)
-    self.safety.pq_moduleless_test_reset()
-    self.assertFalse(self._tx(self._accel_msg(0.5)))
-    self.assertNotEqual(0, self.safety.get_pq_moduleless_acc_age(),
-                        "a blocked accel command must not reach the keeper")
-
-  def test_hud_forwarded_to_keeper(self):
-    self.safety.pq_moduleless_test_reset()
-    self.assertTrue(self._tx(self._hud_msg()))
-    self.assertEqual(0, self.safety.get_pq_moduleless_hud_age())
 
 
 if __name__ == "__main__":

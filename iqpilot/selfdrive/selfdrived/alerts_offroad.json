@@ -50,11 +50,6 @@
     "severity": 1,
     "_comment": "Set extra field to lateral or longitudinal."
   },
-  "Offroad_TiciSupport": {
-    "text": "<b>Unsupported branch!</b> - The current version of <b><u>%1</u></b> is not marked as compatible with the Comma Three (3|tici). Please go to <b>[Device > Software]</b> and install a supported branch such as <b><u>release</u></b> or <b><u>beta</u></b> for the comma three.",
-    "severity": 1,
-    "_comment": "Set extra field to the current branch name."
-  },
   "Offroad_EgpuNotDetected": {
     "text": "eGPU dock not detected. Check USB and 12V connections.",
     "severity": 0

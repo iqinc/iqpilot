@@ -94,3 +94,48 @@ def test_too_far_does_not_trigger():
   cs = DummyCarState(rightBlindspot=False)
   nav = DummyNavState(nextManeuverDistance=900.0)
   assert _run(dh, cs, nav) == log.Desire.none
+
+
+class RequestedNavState(DummyNavState):
+  def __init__(self, direction=int(NavDirection.right), **kwargs):
+    super().__init__(nextManeuverType=int(ManeuverType.continueStraight), nextManeuverDistance=120.0, **kwargs)
+    self.shouldSendLaneChangeDesire = True
+    self.navLaneChangeDesireDirection = direction
+
+
+def test_requested_lane_change_waits_for_nudge_even_with_bsm():
+  dh = _make_dh(enabled=True, enable_bsm=True)
+  cs = DummyCarState(rightBlindspot=False, steeringPressed=False)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+  assert dh.lane_change_state == LaneChangeState.preLaneChange
+  assert dh.lane_change_direction == LaneChangeDirection.right
+
+
+def test_requested_lane_change_starts_on_matching_nudge():
+  dh = _make_dh(enabled=True, enable_bsm=False)
+  cs = DummyCarState(steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.laneChangeRight
+
+
+def test_requested_lane_change_ignores_opposite_nudge():
+  dh = _make_dh(enabled=True, enable_bsm=False)
+  cs = DummyCarState(steeringPressed=True, steeringTorque=1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+
+
+def test_requested_lane_change_blocked_by_blindspot():
+  dh = _make_dh(enabled=True, enable_bsm=True)
+  cs = DummyCarState(rightBlindspot=True, steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+
+
+def test_requested_lane_change_needs_feature_enabled():
+  dh = _make_dh(enabled=False, enable_bsm=False)
+  cs = DummyCarState(steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+
+
+def test_requested_lane_change_never_below_lane_change_speed():
+  dh = _make_dh(enabled=True, enable_bsm=False)
+  cs = DummyCarState(vEgo=7.0, steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none

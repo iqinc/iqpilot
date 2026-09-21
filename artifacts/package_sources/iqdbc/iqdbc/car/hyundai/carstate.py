@@ -122,6 +122,7 @@ class CarState(CarStateBase):
     self.tcs = None
     self.mdps = None
     self.steer_touch_2af = None
+    self.canfdSccHoldActive = False
     self.cruise_buttons_msg = None
     self.cam_0x362 = None
     self.cam_0x2a4 = None
@@ -634,6 +635,7 @@ class CarState(CarStateBase):
       self.main_enabled = True
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
     ret.cruiseState.available = self.main_enabled and self.controls_ready_count >= READY_COUNT_OK #cp.vl["TCS"]["ACCEnable"] == 0
+    self.canfdSccHoldActive = cp.vl["ESP_STATUS"]["AUTO_HOLD"] == 1
     if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
       self.MainMode_ACC = cp_cam.vl["SCC_CONTROL"]["MainMode_ACC"] == 1
       self.ACCMode = cp_cam.vl["SCC_CONTROL"]["ACCMode"]

@@ -424,7 +424,6 @@ int set_safety_hooks(uint16_t mode, uint16_t param) {
   };
 
   // reset state set by safety mode
-  pq_moduleless_configure(false, 0U);
   safety_mode_cnt = 0U;
   relay_malfunction = false;
   gas_pressed = false;

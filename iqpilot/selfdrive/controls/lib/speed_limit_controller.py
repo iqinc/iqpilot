@@ -362,6 +362,9 @@ class SpeedLimitController:
     self._offset_cache = {}
     self._offset_cache_t = 0.0
     self._last_mapbox_log_t = 0.0
+    self.mapbox_backoff_token = ""
+    self.mapbox_backoff_until = 0.0
+    self.mapbox_consecutive_failures = 0
     self._last_mapbox_diag_t = 0.0
     self._last_mapbox_diag_message = None
 
@@ -504,6 +507,13 @@ class SpeedLimitController:
     cloudlog.info(message)
     k3_slc_log(message)
 
+  def _back_off_mapbox(self, status) -> None:
+    if status in (401, 403, 429):
+      self.mapbox_backoff_until = time.monotonic() + 3600.0
+      return
+    self.mapbox_consecutive_failures += 1
+    self.mapbox_backoff_until = time.monotonic() + min(600.0, 10.0 * (2 ** min(self.mapbox_consecutive_failures, 6)))
+
   def get_mapbox_speed_limit(self, now, time_validated, v_ego, sm):
     if requests is None or self.session is None:
       self._log_mapbox_diag("SLC Mapbox skipped: requests session unavailable")
@@ -521,6 +531,14 @@ class SpeedLimitController:
     if v_ego < 1:
       return
 
+    if self.mapbox_token != self.mapbox_backoff_token:
+      self.mapbox_backoff_token = self.mapbox_token
+      self.mapbox_backoff_until = 0.0
+      self.mapbox_consecutive_failures = 0
+    if time.monotonic() < self.mapbox_backoff_until:
+      self.mapbox_limit = 0.0
+      return
+
     if self.segment_distance > 0:
       self.segment_distance -= v_ego * DT_MDL
       return
@@ -536,7 +554,7 @@ class SpeedLimitController:
 
         if not is_url_pingable(self.mapbox_host):
           self._log_mapbox_diag("SLC Mapbox skipped: host not pingable", force=True)
-          self.segment_distance = 1000
+          self._back_off_mapbox(None)
           return None
 
         if time_validated:
@@ -577,8 +595,10 @@ class SpeedLimitController:
         response = self.session.get(url, params=mapbox_params, timeout=10)
         response.raise_for_status()
         successful = True
+        self.mapbox_consecutive_failures = 0
         return response.json()
       except Exception as exception:
+        self._back_off_mapbox(getattr(getattr(exception, "response", None), "status_code", None))
         now_mono = time.monotonic()
         if now_mono - self._last_mapbox_log_t >= 5.0:
           self._last_mapbox_log_t = now_mono

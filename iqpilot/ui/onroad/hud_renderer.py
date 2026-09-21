@@ -58,11 +58,15 @@ class IQHudRenderer(HudRenderer):
     self.speed_renderer = IQSpeedOverlay()
     self.soft_warning_renderer = SoftWarningRenderer()
     self._torque_bar = TorqueBar(scale=3.0, always=True)
+    self._event_tile_visible = False
     self.report_buttons = ReportButtons()
     optional_private_ui.get()
     self._last_displayed_limit: int | None = None
     self._limit_pulse_started = float("-inf")
     self._limit_change_direction = 0
+
+  def set_event_tile_visible(self, visible: bool) -> None:
+    self._event_tile_visible = visible
 
   def _update_state(self) -> None:
     super()._update_state()
@@ -144,7 +148,10 @@ class IQHudRenderer(HudRenderer):
       self._exp_button.render(mode_rect)
 
     torque_rect = rect
-    if ui_state.torque_bar:
+    if set_visible := getattr(self._torque_bar, "set_visible", None):
+      set_visible(ui_state.torque_bar and not self._event_tile_visible)
+      self._torque_bar.render(torque_rect)
+    elif ui_state.torque_bar:
       self._torque_bar.render(torque_rect)
 
     self.developer_ui.render(rect)

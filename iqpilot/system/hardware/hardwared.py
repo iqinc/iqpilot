@@ -30,7 +30,7 @@ from iqpilot.system.loggerd.config import get_available_percent
 from iqpilot.common.swaglog import cloudlog
 from iqpilot.system.hardware.power_monitoring import PowerMonitoring, VBATT_LOW_POWER_EXIT
 from iqpilot.system.hardware.fan_controller import FanController
-from iqpilot.system.version import terms_version, training_version, get_build_metadata
+from iqpilot.system.version import terms_version, training_version
 
 ThermalStatus = log.DeviceState.ThermalStatus
 NetworkType = log.DeviceState.NetworkType
@@ -63,7 +63,6 @@ THERMAL_BANDS = OrderedDict({
 OFFROAD_DANGER_TEMP = 75
 
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
-ALLOWED_TICI_BRANCHES = {"release-new", "release-tici", "master-mici", "beta", "beta-pq", "release-prebuilt"}
 
 
 class CanStartupRecovery:
@@ -224,9 +223,6 @@ def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_tex
   prev_offroad_states[offroad_alert] = (show_alert, extra_text)
   set_offroad_alert(offroad_alert, show_alert, extra_text)
 
-
-def is_supported_tici_branch(build_metadata) -> bool:
-  return build_metadata.channel_type == "tici" or build_metadata.channel in ALLOWED_TICI_BRANCHES
 
 def touch_thread(end_event):
   count = 0
@@ -580,16 +576,6 @@ def hardware_thread(end_event, hw_queue, memory_queue) -> None:
 
     startup_conditions["not_always_offroad"] = (not offroad_mode) or force_onroad_active
     onroad_conditions["not_always_offroad"] = (not offroad_mode) or force_onroad_active
-
-    # if an unsupported device and branch is detected, going onroad is blocked
-    # only allow going onroad when:
-    # - TIZI, or
-    # - TICI and channel_type is "tici"
-    build_metadata = get_build_metadata()
-    is_unsupported_combo = TICI and HARDWARE.get_device_type() == "tici" and not is_supported_tici_branch(build_metadata)
-    startup_conditions["not_tici"] = not is_unsupported_combo
-    onroad_conditions["not_tici"] = not is_unsupported_combo
-    set_offroad_alert("Offroad_TiciSupport", is_unsupported_combo, extra_text=build_metadata.channel)
 
     # if the temperature enters the danger zone, go offroad to cool down
     onroad_conditions["device_temp_good"] = thermal_status < ThermalStatus.danger

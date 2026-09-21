@@ -138,7 +138,6 @@ static void tick_handler(void) {
   static uint32_t controls_allowed_countdown = 0;
   static uint8_t prev_harness_status = HARNESS_STATUS_NC;
   static uint8_t loop_counter = 0U;
-  static bool pq_ignition_prev = false;
   static bool relay_malfunction_prev = false;
 
   if (TICK_TIMER->SR != 0U) {
@@ -151,12 +150,6 @@ static void tick_handler(void) {
     tick_sample_pending = true;  // ADC sampling deferred to thread context (see tick_sample_poll)
     simple_watchdog_kick();
     sound_tick();
-    const bool pq_ignition = harness_check_ignition() || ignition_can;
-    if (pq_ignition && !pq_ignition_prev && (power_save_status == POWER_SAVE_STATUS_ENABLED)) {
-      set_power_save_state(POWER_SAVE_STATUS_DISABLED);
-    }
-    pq_ignition_prev = pq_ignition;
-    pq_moduleless_ignition_tick(pq_ignition);
 
     if (relay_malfunction_prev != relay_malfunction) {
       if (relay_malfunction) {

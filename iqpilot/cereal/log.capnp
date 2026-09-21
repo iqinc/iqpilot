@@ -1146,6 +1146,7 @@ struct ModelDataV2 {
   modelExecutionTime @15 :Float32;
   rawPredictions @16 :Data;
   big @27 :Bool;
+  stopPoint @28 :StopPoint;
 
   # predicted future position, orientation, etc..
   position @4 :XYZTData;
@@ -1285,6 +1286,13 @@ struct ModelDataV2 {
         planOrientationV1 @1;
       }
     }
+  }
+
+  # where the model intends to stop; absent on models without the stop-point head
+  struct StopPoint {
+    valid @0 :Bool;
+    distance @1 :Float32;
+    probability @2 :Float32;
   }
 }
 

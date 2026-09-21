@@ -104,45 +104,49 @@ class IQFilterEngine:
 
 
 class IQModeEngine:
+  ENTER_EVIDENCE: dict[str, float] = {'blended': 6.0, 'acc': 40.0}
+  MIN_DWELL_FRAMES: dict[str, int] = {'blended': 40, 'acc': 10}
+  EMERGENCY_HOLD_FRAMES = 40
+
   def __init__(self):
     self._state: ModeType = 'acc'
-    self._scores = {'acc': 1.0, 'blended': 0.0}
-    self._switching_timer = 0
+    self._pending: ModeType | None = None
+    self._evidence = 0.0
     self._mode_age = 0
-    self._forced_takeover = False
+    self._emergency_hold = 0
+
+  def _switch(self, mode: ModeType) -> None:
+    self._state = mode
+    self._mode_age = 0
+    self._pending = None
+    self._evidence = 0.0
 
   def request(self, mode: ModeType, urgency: float = 1.0, emergency: bool = False) -> None:
     if emergency:
-      self._forced_takeover = True
-      self._state = mode
-      self._switching_timer = 15
-      self._mode_age = 0
+      self._emergency_hold = self.EMERGENCY_HOLD_FRAMES
+      if mode != self._state:
+        self._switch(mode)
       return
 
-    self._scores[mode] = min(1.0, self._scores[mode] + 0.1 * urgency)
-    for key in self._scores:
-      if key != mode:
-        self._scores[key] = max(0.0, self._scores[key] - 0.05)
-
-    if self._mode_age < 10 and not self._forced_takeover:
+    if mode == self._state:
+      self._pending = None
+      self._evidence = 0.0
       return
 
-    threshold = 0.6 if mode != self._state else 0.3
-    if self._scores[mode] > threshold and mode != self._state and self._switching_timer == 0:
-      self._switching_timer = 15
-      self._state = mode
-      self._mode_age = 0
+    if mode != self._pending:
+      self._pending = mode
+      self._evidence = 0.0
+    self._evidence += urgency
+
+    if self._emergency_hold > 0 or self._mode_age < self.MIN_DWELL_FRAMES[self._state]:
+      return
+    if self._evidence >= self.ENTER_EVIDENCE[mode]:
+      self._switch(mode)
 
   def update(self) -> None:
-    if self._switching_timer > 0:
-      self._switching_timer -= 1
-
     self._mode_age += 1
-    if self._forced_takeover and self._mode_age > 20:
-      self._forced_takeover = False
-
-    for key in self._scores:
-      self._scores[key] *= 0.98
+    if self._emergency_hold > 0:
+      self._emergency_hold -= 1
 
   def get_mode(self) -> ModeType:
     return self._state

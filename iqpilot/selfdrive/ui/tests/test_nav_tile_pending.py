@@ -23,6 +23,7 @@ def provider(tmp_path, monkeypatch):
   obj._pending_tiles = {}
   obj._inflight = set()
   obj._lock = threading.Lock()
+  obj._retry = nav.TileRetryGate()
   obj._generation = 0
   obj._cache_disabled = False
   obj._provider_disabled = False
@@ -188,6 +189,7 @@ def test_zoom_fallback_cannot_expand_original_texture_budget(provider, monkeypat
 def test_pending_image_ownership_across_generation_change(provider_class, monkeypatch):
   obj = provider_class.__new__(provider_class)
   obj._lock = threading.Lock()
+  obj._retry = nav.TileRetryGate()
   obj._generation = 4
   obj._pending_tiles = {}
   unloaded = []
@@ -218,6 +220,7 @@ def test_pruning_keeps_visible_tiles_and_reuses_pool(provider_class, monkeypatch
 def test_offline_upload_batch_is_preserved(monkeypatch):
   obj = nav.OsmOfflineProvider.__new__(nav.OsmOfflineProvider)
   obj._lock = threading.Lock()
+  obj._retry = nav.TileRetryGate()
   obj._pending_tiles = {key: key for key in range(8)}
   obj._textures = {}
   uploaded = []

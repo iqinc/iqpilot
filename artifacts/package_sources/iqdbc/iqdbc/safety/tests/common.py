@@ -923,8 +923,7 @@ class SafetyTest(SafetyTestBase):
             if attr.startswith('TestSubaruPreglobal') and current_test.startswith('TestSubaruPreglobal'):
               continue
             volkswagen_pq = {'TestVolkswagenPqSafety', 'TestVolkswagenPqStockSafety', 'TestVolkswagenPqLongSafety',
-                             'TestVolkswagenPqLowlineSafety', 'TestVolkswagenPqNoCamSafety',
-                             'TestVolkswagenPqModulelessSafety'}
+                             'TestVolkswagenPqLowlineSafety', 'TestVolkswagenPqNoCamSafety'}
             if {attr, current_test}.issubset(volkswagen_pq):
               continue
             if {attr, current_test}.issubset({'TestGmCameraSafety', 'TestGmCameraLongitudinalSafety', 'TestGmAscmSafety',

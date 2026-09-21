@@ -42,6 +42,11 @@ E2E_MODEL_SPEED_INTENT_BP = [-0.5, 0.0]
 _A_TOTAL_MAX_V = [1.7, 3.2]
 _A_TOTAL_MAX_BP = [20., 40.]
 
+MODE_BLEND_MAX_TIME = 3.0
+MODE_BLEND_JERK_UP = 1.0
+MODE_BLEND_JERK_DOWN = 2.5
+MODE_BLEND_BRAKE_PASS = -1.0
+
 def get_max_accel(v_ego):
   return np.interp(v_ego, A_CRUISE_MAX_BP, A_CRUISE_MAX_VALS)
 
@@ -88,6 +93,14 @@ def get_e2e_accel(v_ego, v_cruise, model_v, a_target, should_stop):
   return float(np.interp(min(accel_intent, speed_intent), [0.0, 1.0], [a_target, accel]))
 
 
+def limit_mode_transition(a_target, a_prev, dt):
+  upper = a_prev + MODE_BLEND_JERK_UP * dt
+  if a_target <= MODE_BLEND_BRAKE_PASS:
+    return min(a_target, upper)
+  lower = a_prev - MODE_BLEND_JERK_DOWN * dt
+  return float(np.clip(a_target, lower, upper))
+
+
 def get_accel_candidates(e2e, has_lead, mpc_candidate, cruise_candidate, e2e_candidate):
   candidates = []
   if not e2e or has_lead:
@@ -114,6 +127,8 @@ class LongitudinalPlanner(LongitudinalPlannerIQ):
     self.output_a_target = 0.0
     self.output_should_stop = False
     self.launch_armed = False
+    self.prev_e2e = False
+    self.mode_blend_timer = 0.0
     try:
       self.exp_speed_conv = Params().get_bool("expSpeedConv")
     except UnknownKeyName:
@@ -248,6 +263,17 @@ class LongitudinalPlanner(LongitudinalPlannerIQ):
     self.output_should_stop = any(should_stop for _, _, should_stop in candidates)
 
     self.output_should_stop = self.output_should_stop or self.forcing_stop
+
+    if e2e != self.prev_e2e:
+      self.mode_blend_timer = MODE_BLEND_MAX_TIME
+    self.prev_e2e = e2e
+    if reset_state or self.fcw or self.output_should_stop:
+      self.mode_blend_timer = 0.0
+    if self.mode_blend_timer > 0.0:
+      limited_a_target = limit_mode_transition(output_a_target, a_prev, self.dt)
+      self.mode_blend_timer = 0.0 if limited_a_target == output_a_target else max(self.mode_blend_timer - self.dt, 0.0)
+      output_a_target = limited_a_target
+
     self.output_a_target = np.clip(output_a_target, ACCEL_MIN, ACCEL_MAX)
 
     self.a_desired = float(self.output_a_target)

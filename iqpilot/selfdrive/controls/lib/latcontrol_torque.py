@@ -505,7 +505,13 @@ class LatControlTorque(LatControl):
     self.torque_params = CP.lateralTuning.torque.as_builder()
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.lateral_accel_from_torque = CI.lateral_accel_from_torque()
-    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, rate=1/self.dt)
+    params = Params()
+    self.hkg_reduced_torque_feedback = (CP.brand == "hyundai" and
+                                        params.get_bool("IQHkgReducedTorqueFeedback") and
+                                        not params.get_bool("NeuralNetworkFeedForward"))
+    p_gains = [gain * 0.8 for gain in KP_INTERP] if self.hkg_reduced_torque_feedback else KP_INTERP
+    self.friction_scale = 0.7 if self.hkg_reduced_torque_feedback else 1.0
+    self.pid = PIDController([INTERP_SPEEDS, p_gains], KI, rate=1/self.dt)
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)
@@ -558,7 +564,8 @@ class LatControlTorque(LatControl):
     gravity_adjusted_future_lateral_accel = future_desired_lateral_accel - roll_compensation
     ff = gravity_adjusted_future_lateral_accel
     ff -= self.torque_params.latAccelOffset
-    ff += get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
+    ff += self.friction_scale * get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone,
+                                            FRICTION_THRESHOLD, self.torque_params)
 
     if not active:
       output_torque = 0.0

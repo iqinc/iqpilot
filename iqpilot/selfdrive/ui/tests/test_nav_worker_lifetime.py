@@ -114,3 +114,92 @@ def test_day_mode_change_keeps_old_response_out_of_new_style(tmp_path, monkeypat
     finish.set()
     worker.join(5)
     provider.release()
+
+
+@pytest.mark.parametrize('provider_class', [nav.MapboxTileProvider, nav.OsmOfflineProvider])
+def test_failed_tile_is_not_refetched_every_frame(provider_class, tmp_path, monkeypatch):
+  monkeypatch.setattr(nav, 'TILE_CACHE_ROOT', tmp_path)
+  provider = provider_class()
+  tile = (15, 0, 0)
+  attempts = []
+  monkeypatch.setattr(provider, '_visible_tile_keys', lambda *args: (15, 1, 0, 0, [tile]))
+  if provider_class is nav.MapboxTileProvider:
+    def get(*args, **kwargs):
+      attempts.append(tile)
+      raise nav.requests.ConnectionError()
+
+    monkeypatch.setattr(provider, '_token', lambda: 'token')
+    monkeypatch.setattr(provider._session, 'get', get)
+  else:
+    def load_blob(*args):
+      attempts.append(tile)
+
+    monkeypatch.setattr(provider, '_refresh_source', lambda *args: None)
+    monkeypatch.setattr(provider, '_load_blob', load_blob)
+    monkeypatch.setattr(provider, '_source_tile_for_request', lambda value: (value, 0))
+    provider._status = 'offline_ready'
+
+  try:
+    deadline = time.monotonic() + .5
+    while time.monotonic() < deadline:
+      provider.update(0, 0, 15, 100, 100)
+      time.sleep(.005)
+    assert len(attempts) == 1
+    assert provider._retry.blocked(tile)
+  finally:
+    provider.release()
+  assert not provider._retry.blocked(tile)
+
+
+def test_tile_retry_gate_backs_off_and_stays_bounded(monkeypatch):
+  now = [100.0]
+  monkeypatch.setattr(nav.time, 'monotonic', lambda: now[0])
+  gate = nav.TileRetryGate(base_s=2.0, max_s=10.0, limit=4)
+  tile = (15, 1, 1)
+  for expected in (2.0, 4.0, 8.0, 10.0, 10.0):
+    gate.failed(tile)
+    now[0] += expected - .01
+    assert gate.blocked(tile)
+    now[0] += .02
+    assert not gate.blocked(tile)
+  gate.loaded(tile)
+  gate.failed(tile)
+  now[0] += 2.01
+  assert not gate.blocked(tile)
+  for index in range(20):
+    gate.failed((15, index, 0))
+  assert len(gate._entries) == 4
+
+
+def test_rejected_token_stops_tile_fetches(tmp_path, monkeypatch):
+  monkeypatch.setattr(nav, 'TILE_CACHE_ROOT', tmp_path)
+  provider = nav.MapboxTileProvider()
+  tiles = [(15, x, 0) for x in range(6)]
+  requested = []
+
+  def get(*args, **kwargs):
+    requested.append(kwargs['params']['access_token'])
+    response = nav.requests.Response()
+    response.status_code = 401
+    return response
+
+  monkeypatch.setattr(provider, '_visible_tile_keys', lambda *args: (15, 1, 0, 0, tiles))
+  monkeypatch.setattr(provider, '_token', lambda: 'dead')
+  monkeypatch.setattr(provider._session, 'get', get)
+  try:
+    deadline = time.monotonic() + .5
+    while time.monotonic() < deadline:
+      provider.update(0, 0, 15, 100, 100)
+      time.sleep(.005)
+    assert 0 < len(requested) <= 2 * nav.MAX_INFLIGHT_TILES
+    assert provider.status() == 'token_missing'
+    before = len(requested)
+    monkeypatch.setattr(provider, '_token', lambda: 'fresh')
+    provider._retry.clear()
+    provider.update(0, 0, 15, 100, 100)
+    deadline = time.monotonic() + 2
+    while 'fresh' not in requested and time.monotonic() < deadline:
+      time.sleep(.005)
+    assert len(requested) > before and requested[-1] == 'fresh'
+  finally:
+    provider.release()

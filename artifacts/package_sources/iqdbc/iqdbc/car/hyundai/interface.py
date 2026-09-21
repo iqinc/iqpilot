@@ -110,6 +110,9 @@ class CarInterface(CarInterfaceBase):
         if 0x1cf not in fingerprint[CAN.ECAN]:
           ret.flags |= HyundaiFlags.CANFD_ALT_BUTTONS.value
           print("$$$CANFD ALT_BUTTONS")
+        # bus 0 and bus 2 fingerprint identically through the closed relay, so a camera-SCC
+        # HDA1 car cannot be detected from the fingerprint. Without this the SCC rx check moves
+        # to bus 0, openpilot longitudinal is refused, and the car faults with a CAN error.
         if not ret.flags & HyundaiFlags.RADAR_SCC:
           ret.flags |= HyundaiFlags.CANFD_CAMERA_SCC.value
         #if not ret.flags & HyundaiFlags.RADAR_SCC:
