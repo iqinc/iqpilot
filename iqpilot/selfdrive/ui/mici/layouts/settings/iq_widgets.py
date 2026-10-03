@@ -3,41 +3,23 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 """
 
 from iqpilot.common.params import Params, UnknownKeyName
-from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigMultiToggle, BigToggle, BigParamControl
+from iqpilot.common.ui_settings import LONGITUDINAL_MODE_VALUES
+from iqpilot.selfdrive.longitudinal_settings import (
+  LONGITUDINAL_MODE_DYNAMIC,
+  LONGITUDINAL_MODE_PILOT,
+  LONGITUDINAL_MODE_STOCK,
+  PERSONALITY_VALUES,
+  apply_longitudinal_mode,
+  get_follow_distance_state,
+  get_longitudinal_mode,
+  longitudinal_mode_needs_cycle,
+  set_valid_personality,
+)
+from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigMultiToggle
+from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.ui.lib.multilang import tr
-
-
-class SafeParamControl(BigParamControl):
-  """BigParamControl that tolerates a param missing from the COMPILED params registry.
-
-  A key added to params_keys.h only exists at runtime once params_pyx.so is rebuilt; a
-  .py-only / stale prebuilt deploy leaves get_bool/put_bool raising UnknownKeyName, which
-  would crash the UI on construction. Default to `default_on` for display and no-op the
-  write instead of crashing — mirrors the plannerd defensive read in long_mpc.py.
-  """
-
-  def __init__(self, text: str, param: str, default_on: bool = True, toggle_callback=None):
-    self._default_on = default_on
-    BigToggle.__init__(self, text, "", toggle_callback=toggle_callback)
-    self.param = param
-    self.params = Params()
-    self.set_checked(self._safe_get())
-
-  def _safe_get(self) -> bool:
-    try:
-      return self.params.get_bool(self.param)
-    except UnknownKeyName:
-      return self._default_on
-
-  def refresh(self):
-    self.set_checked(self._safe_get())
-
-  def _handle_mouse_release(self, mouse_pos):
-    BigToggle._handle_mouse_release(self, mouse_pos)
-    try:
-      self.params.put_bool(self.param, self._checked)
-    except UnknownKeyName:
-      pass
+from iqpilot.system.ui.lib.application import gui_app
+from iqpilot.selfdrive.ui.mici.widgets.stock_dialog import BigConfirmationDialog
 
 
 class MappedParamToggle(BigMultiToggle):
@@ -48,7 +30,8 @@ class MappedParamToggle(BigMultiToggle):
   """
   PILL_LIMIT = 4
 
-  def __init__(self, text: str, param: str, options: list[str], values: list | None = None):
+  def __init__(self, text: str, param: str, options: list[str], values: list | None = None, *, value_only: bool = False):
+    self._force_value_only = value_only
     super().__init__(text, options)
     self._param = param
     self._values = values if values is not None else list(range(len(options)))
@@ -56,7 +39,7 @@ class MappedParamToggle(BigMultiToggle):
     self.refresh()
 
   def _value_only(self) -> bool:
-    return len(self._options) > self.PILL_LIMIT
+    return self._force_value_only or len(self._options) > self.PILL_LIMIT
 
   def _width_hint(self) -> int:
     if self._value_only():
@@ -90,56 +73,98 @@ class MappedParamToggle(BigMultiToggle):
       pass
 
 
-class IQModeSelector(BigMultiToggle):
-  """Longitudinal mode selector: Stock ACC / IQ.Chill / IQ.Dynamic / IQ.Pilot.
-
-  A single tap cycles to the next mode and applies the matching param combo immediately.
-  """
-  OPTIONS = ["Stock ACC", "IQ.Chill", "IQ.Dynamic", "IQ.Pilot"]
-  PERSONALITY_RELAXED = 2
+class FollowDistanceSelector(BigMultiToggle):
+  OPTIONS = ["relaxed", "standard", "aggressive"]
+  VALUES = tuple(reversed(PERSONALITY_VALUES))
 
   def __init__(self):
     self._display_options = [tr(option) for option in self.OPTIONS]
-    super().__init__(tr("IQ Mode"), self._display_options)
+    super().__init__(tr("Follow Distance"), self._display_options)
     self._params = Params()
     self.refresh()
 
-  def _index(self) -> int:
-    p = self._params
-    if not p.get_bool("AlphaLongitudinalEnabled"):
-      return 0
-    if not p.get_bool("ExperimentalMode"):
-      return 1
-    return 2 if p.get_bool("IQDynamicMode") else 3
-
-  def is_dynamic(self) -> bool:
-    return self._index() == 2
-
   def refresh(self):
-    self.set_value(self._display_options[self._index()])
-
-  def _apply(self, idx: int):
-    p = self._params
-    if idx == 0:
-      p.put_bool("AlphaLongitudinalEnabled", False)
-      p.put_bool("ExperimentalMode", False)
-      p.put_bool("IQDynamicMode", False)
-    elif idx == 1:
-      p.put_bool("AlphaLongitudinalEnabled", True)
-      p.put_bool("ExperimentalMode", False)
-      p.put_bool("IQDynamicMode", False)
-      p.put("LongitudinalPersonality", self.PERSONALITY_RELAXED)
-    elif idx == 2:
-      p.put_bool("AlphaLongitudinalEnabled", True)
-      p.put_bool("ExperimentalMode", True)
-      p.put_bool("IQDynamicMode", True)
-    else:
-      p.put_bool("AlphaLongitudinalEnabled", True)
-      p.put_bool("ExperimentalMode", True)
-      p.put_bool("IQDynamicMode", False)
-    p.put_bool("OnroadCycleRequested", True)
+    selection, enabled = get_follow_distance_state(self._params)
+    if selection is None:
+      selection = self._params.get("LongitudinalPersonality", return_default=True)
+    self.set_value(self._display_options[self.VALUES.index(selection)])
+    self.set_enabled(enabled)
 
   def _handle_mouse_release(self, mouse_pos):
-    nxt = (self._index() + 1) % len(self.OPTIONS)
-    self._apply(nxt)
-    self.set_value(self._display_options[nxt])
+    if get_longitudinal_mode(self._params) != LONGITUDINAL_MODE_PILOT:
+      return
+    BigButton._handle_mouse_release(self, mouse_pos)
+    selection, _ = get_follow_distance_state(self._params)
+    if selection is None:
+      self.refresh()
+      return
+    next_selection = self.VALUES[(self.VALUES.index(selection) + 1) % len(self.VALUES)]
+    set_valid_personality(self._params, next_selection)
+    self.set_value(self._display_options[self.VALUES.index(next_selection)])
+
+
+class IQModeSelector(BigMultiToggle):
+  OPTIONS = ["Stock ACC", "IQ.Chill", "IQ.Pilot"]
+
+  def __init__(self, mode_callback=None):
+    self._display_options = [tr(option) for option in self.OPTIONS]
+    super().__init__(tr("IQ Mode"), self._display_options)
+    self._params = Params()
+    self._mode_callback = mode_callback
+    self._mode = LONGITUDINAL_MODE_STOCK
+    self._iq_modes_available = False
+    self.refresh()
+    self.set_enabled(lambda: self._next() != self._mode)
+
+  def _index(self) -> int:
+    mode = get_longitudinal_mode(self._params)
+    return LONGITUDINAL_MODE_PILOT if mode == LONGITUDINAL_MODE_DYNAMIC else mode
+
+  def _toyota_factory_long_forced(self) -> bool:
+    cp = ui_state.CP
+    return bool(cp is not None and cp.brand == "toyota" and self._params.get_bool("IQToyotaFactoryLong"))
+
+  def _read_iq_modes_available(self) -> bool:
+    cp = ui_state.CP
+    alpha_available = bool(cp is not None and cp.alphaLongitudinalAvailable)
+    return alpha_available or self._params.get_bool("AlphaLongitudinalEnabled") or self._toyota_factory_long_forced()
+
+  def _next(self) -> int:
+    if not self._iq_modes_available:
+      return self._mode
+    order = LONGITUDINAL_MODE_VALUES[1:] if ui_state.is_onroad() else LONGITUDINAL_MODE_VALUES
+    if self._mode not in order:
+      return order[0]
+    return order[(order.index(self._mode) + 1) % len(order)]
+
+  def refresh(self):
+    self._mode = self._index()
+    self._iq_modes_available = self._read_iq_modes_available()
+    self.set_value(self._display_options[LONGITUDINAL_MODE_VALUES.index(self._mode)])
+
+  def _apply(self, idx: int):
+    previous = self._mode
+    toyota_forced = self._toyota_factory_long_forced()
+    apply_longitudinal_mode(self._params, idx)
+    if idx != LONGITUDINAL_MODE_STOCK and toyota_forced:
+      self._params.put_bool("IQToyotaFactoryLong", False)
+    if longitudinal_mode_needs_cycle(previous, idx) or (idx != LONGITUDINAL_MODE_STOCK and toyota_forced):
+      self._params.put_bool("OnroadCycleRequested", True)
+
+  def _handle_mouse_release(self, mouse_pos):
+    nxt = self._next()
+    if nxt == self._mode:
+      return
+    def apply():
+      self._apply(nxt)
+      if nxt == LONGITUDINAL_MODE_PILOT:
+        self._params.put_bool("ExperimentalModeConfirmed", True)
+      self.refresh()
+      if self._mode_callback:
+        self._mode_callback()
+
+    if nxt == LONGITUDINAL_MODE_PILOT and not self._params.get_bool("ExperimentalModeConfirmed"):
+      gui_app.push_widget(BigConfirmationDialog(tr("enable IQ.Pilot"),
+                                               gui_app.texture("icons_mici/experimental_mode_mici.png", 60, 60), apply))
+    else:
+      apply()

@@ -91,30 +91,6 @@ bool open_find_signal_result(UiState *state, const std::string &path) {
   return true;
 }
 
-void draw_open_route_popup(AppSession *session, UiState *state) {
-  if (!app_begin_popup_modal("Open Route")) {
-    return;
-  }
-  ImGui::TextUnformatted("Load a route into the current layout.");
-  ImGui::Separator();
-  input_text_string("Route", &state->route_buffer);
-  input_text_string("Data Dir", &state->data_dir_buffer);
-  ImGui::Spacing();
-  switch (draw_modal_action_row("Load")) {
-    case ModalAction::Primary:
-      reload_session(session, state, state->route_buffer, state->data_dir_buffer);
-      ImGui::CloseCurrentPopup();
-      break;
-    case ModalAction::Secondary:
-      sync_route_buffers(state, *session);
-      ImGui::CloseCurrentPopup();
-      break;
-    case ModalAction::None:
-      break;
-  }
-  ImGui::EndPopup();
-}
-
 void draw_stream_popup(AppSession *session, UiState *state) {
   if (!app_begin_popup_modal("Live Stream")) {
     return;
@@ -204,6 +180,10 @@ void draw_preferences_popup(AppSession *session, UiState *state) {
   if (!app_begin_popup_modal("Preferences")) {
     return;
   }
+  bool dark = jot_dark_mode();
+  if (ImGui::Checkbox("Dark mode", &dark)) set_jot_dark_mode(dark);
+  if (!jot_theme_error().empty()) ImGui::TextWrapped("%s", jot_theme_error().c_str());
+  ImGui::Spacing();
   if (session->map_data) {
     const MapCacheStats map_cache = session->map_data->cacheStats();
     const MapCacheStats download_cache = directory_cache_stats(Path::download_cache_root());
@@ -647,6 +627,7 @@ void poll_async_route_load(AppSession *session, UiState *state) {
     return;
   }
   apply_route_data(session, state, std::move(loaded_route));
+  remember_route(*session, state);
   state->status_text = session->route_name.empty() ? "Ready" : "Loaded route " + session->route_name;
 }
 
@@ -664,6 +645,7 @@ bool reload_session(AppSession *session, UiState *state, const std::string &rout
       start_async_route_load(session, state);
     } else {
       rebuild_session_route_data(session, state);
+      remember_route(*session, state);
       state->status_text = "Loaded route " + route_name;
     }
     sync_route_buffers(state, *session);

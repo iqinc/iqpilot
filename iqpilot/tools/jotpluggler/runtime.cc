@@ -432,16 +432,6 @@ struct StreamPoller::Impl {
     }
   }
 
-  void set_error_text(std::string text) {
-    std::lock_guard<std::mutex> lock(mutex);
-    error_text = std::move(text);
-  }
-
-  void clear_error_text() {
-    std::lock_guard<std::mutex> lock(mutex);
-    error_text.clear();
-  }
-
   void stop() {
     running.store(false);
     paused.store(false);

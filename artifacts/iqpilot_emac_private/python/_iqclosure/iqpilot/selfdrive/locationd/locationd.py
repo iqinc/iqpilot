@@ -15,7 +15,7 @@ from iqpilot.common.swaglog import cloudlog
 from iqpilot.selfdrive.locationd.calibration_helpers import get_calibrated_rpy
 from iqpilot.selfdrive.locationd.helpers import rotate_std
 from iqpilot.selfdrive.locationd.models.pose_kf import PoseKalman, States
-from iqpilot.selfdrive.locationd.models.constants import ObservationKind
+from iqpilot.selfdrive.iqlocd.models.constants import ObservationKind
 
 ACCEL_SANITY_CHECK = 100.0  # m/s^2
 ROTATION_SANITY_CHECK = 10.0  # rad/s

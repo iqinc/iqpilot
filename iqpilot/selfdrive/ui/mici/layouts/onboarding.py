@@ -36,6 +36,8 @@ class DriverCameraSetupDialog(DriverCameraDialog):
     self.driver_state_renderer.set_force_active(True)
 
   def _render(self, rect):
+    if self._camera_view is None:
+      return -1
     rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     self._camera_view._render(rect)
 
@@ -59,7 +61,28 @@ class DriverCameraSetupDialog(DriverCameraDialog):
     return -1
 
 
-class TrainingGuidePreDMTutorial(SetupTermsPage):
+class DriverMonitoringTermsPage(SetupTermsPage):
+  @property
+  def _content_height(self):
+    return self._dm_label.rect.y + self._dm_label.rect.height - self._scroll_panel.get_offset()
+
+  def _render_content(self, scroll_offset):
+    self._title_header.render(rl.Rectangle(
+      self._rect.x + 16,
+      self._rect.y + 16 + scroll_offset,
+      self._title_header.rect.width,
+      self._title_header.rect.height,
+    ))
+
+    self._dm_label.render(rl.Rectangle(
+      self._rect.x + 16,
+      self._title_header.rect.y + self._title_header.rect.height + 16,
+      self._rect.width - 32,
+      self._dm_label.get_content_height(int(self._rect.width - 32)),
+    ))
+
+
+class TrainingGuidePreDMTutorial(DriverMonitoringTermsPage):
   def __init__(self, continue_callback):
     super().__init__(continue_callback, continue_text=tr("continue"))
     self._title_header = TermsHeader("driver monitoring setup", gui_app.texture("icons_mici/setup/green_dm.png", 60, 60))
@@ -73,50 +96,12 @@ class TrainingGuidePreDMTutorial(SetupTermsPage):
     # Get driver monitoring model ready for next step
     ui_state.params.put_bool("IsDriverViewEnabled", True)
 
-  @property
-  def _content_height(self):
-    return self._dm_label.rect.y + self._dm_label.rect.height - self._scroll_panel.get_offset()
 
-  def _render_content(self, scroll_offset):
-    self._title_header.render(rl.Rectangle(
-      self._rect.x + 16,
-      self._rect.y + 16 + scroll_offset,
-      self._title_header.rect.width,
-      self._title_header.rect.height,
-    ))
-
-    self._dm_label.render(rl.Rectangle(
-      self._rect.x + 16,
-      self._title_header.rect.y + self._title_header.rect.height + 16,
-      self._rect.width - 32,
-      self._dm_label.get_content_height(int(self._rect.width - 32)),
-    ))
-
-
-class DMBadFaceDetected(SetupTermsPage):
+class DMBadFaceDetected(DriverMonitoringTermsPage):
   def __init__(self, continue_callback, back_callback):
     super().__init__(continue_callback, back_callback, continue_text=tr("power off"))
     self._title_header = TermsHeader("make sure comma four can see your face", gui_app.texture("icons_mici/setup/orange_dm.png", 60, 60))
     self._dm_label = UnifiedLabel(tr("Re-mount if your face is occluded or driver monitoring has difficulty tracking your face."), 42, FontWeight.ROMAN)
-
-  @property
-  def _content_height(self):
-    return self._dm_label.rect.y + self._dm_label.rect.height - self._scroll_panel.get_offset()
-
-  def _render_content(self, scroll_offset):
-    self._title_header.render(rl.Rectangle(
-      self._rect.x + 16,
-      self._rect.y + 16 + scroll_offset,
-      self._title_header.rect.width,
-      self._title_header.rect.height,
-    ))
-
-    self._dm_label.render(rl.Rectangle(
-      self._rect.x + 16,
-      self._title_header.rect.y + self._title_header.rect.height + 16,
-      self._rect.width - 32,
-      self._dm_label.get_content_height(int(self._rect.width - 32)),
-    ))
 
 
 class TrainingGuideDMTutorial(Widget):
@@ -149,11 +134,12 @@ class TrainingGuideDMTutorial(Widget):
     def inactivity_callback():
       ui_state.params.put_bool("IsDriverViewEnabled", False)
 
-    device.add_interactive_timeout_callback(inactivity_callback)
+    self._inactivity_callback = inactivity_callback
 
   def _show_bad_face_page(self):
     self._bad_face_page.show_event()
     self.hide_event()
+    device.set_override_interactive_timeout(300)
     self._should_show_bad_face_page = True
 
   def _hide_bad_face_page(self):
@@ -168,13 +154,24 @@ class TrainingGuideDMTutorial(Widget):
     self._no_camera_elapsed_sec = 0.0
 
     device.set_offroad_brightness(100)
+    device.add_interactive_timeout_callback(self._inactivity_callback)
+
+  def hide_event(self):
+    super().hide_event()
+    self._dialog.hide_event()
+    device.remove_interactive_timeout_callback(self._inactivity_callback)
+    device.set_offroad_brightness(None)
+    if self._should_show_bad_face_page:
+      self._bad_face_page.hide_event()
 
   def _update_state(self):
     super()._update_state()
+    if self._should_show_bad_face_page:
+      return
     if device.awake and not ui_state.params.get_bool("IsDriverViewEnabled"):
       ui_state.params.put_bool_nonblocking("IsDriverViewEnabled", True)
 
-    has_camera_frame = self._dialog._camera_view.frame is not None
+    has_camera_frame = self._dialog._camera_view is not None and self._dialog._camera_view.frame is not None
     if has_camera_frame:
       self._no_camera_elapsed_sec = 0.0
     else:
@@ -254,7 +251,7 @@ class TrainingGuideDMTutorial(Widget):
       ring_color,
     )
 
-    has_camera_frame = self._dialog._camera_view.frame is not None
+    has_camera_frame = self._dialog._camera_view is not None and self._dialog._camera_view.frame is not None
     show_no_camera_bypass = self._allow_no_camera_bypass and not has_camera_frame
     if has_camera_frame or show_no_camera_bypass:
       self._back_button.render(rl.Rectangle(
@@ -284,7 +281,7 @@ class TrainingGuideDMTutorial(Widget):
     rl.draw_rectangle_rounded_lines_ex(self._rect, 0.2 * 1.02, 10, 50, rl.BLACK)
 
 
-class TrainingGuideRecordFront(SetupTermsPage):
+class TrainingGuideRecordFront(DriverMonitoringTermsPage):
   def __init__(self, continue_callback):
     def on_back():
       ui_state.params.put_bool("RecordFront", False)
@@ -304,25 +301,6 @@ class TrainingGuideRecordFront(SetupTermsPage):
     super().show_event()
     # Disable driver monitoring model after last step
     ui_state.params.put_bool("IsDriverViewEnabled", False)
-
-  @property
-  def _content_height(self):
-    return self._dm_label.rect.y + self._dm_label.rect.height - self._scroll_panel.get_offset()
-
-  def _render_content(self, scroll_offset):
-    self._title_header.render(rl.Rectangle(
-      self._rect.x + 16,
-      self._rect.y + 16 + scroll_offset,
-      self._title_header.rect.width,
-      self._title_header.rect.height,
-    ))
-
-    self._dm_label.render(rl.Rectangle(
-      self._rect.x + 16,
-      self._title_header.rect.y + self._title_header.rect.height + 16,
-      self._rect.width - 32,
-      self._dm_label.get_content_height(int(self._rect.width - 32)),
-    ))
 
 
 class TrainingGuideAttentionNotice(SetupTermsPage):
@@ -377,14 +355,18 @@ class TrainingGuide(Widget):
   def show_event(self):
     super().show_event()
     device.set_override_interactive_timeout(300)
+    self._steps[self._step].show_event()
 
   def hide_event(self):
     super().hide_event()
+    self._steps[self._step].hide_event()
     device.set_override_interactive_timeout(None)
 
   def _advance_step(self):
+    self._steps[self._step].hide_event()
     if self._step < len(self._steps) - 1:
       self._step += 1
+      device.set_override_interactive_timeout(300)
       self._steps[self._step].show_event()
     else:
       self._step = 0
@@ -488,20 +470,35 @@ class OnboardingWindow(Widget):
   def show_event(self):
     super().show_event()
     device.set_override_interactive_timeout(300)
+    self._active_page.show_event()
 
   def hide_event(self):
     super().hide_event()
+    self._active_page.hide_event()
     device.set_override_interactive_timeout(None)
+
+  @property
+  def _active_page(self):
+    return {
+      OnboardingState.TERMS: self._terms,
+      OnboardingState.ONBOARDING: self._training_guide,
+      OnboardingState.DECLINE: self._decline_page,
+    }[self._state]
+
+  def _set_state(self, state):
+    self._active_page.hide_event()
+    self._state = state
+    self._active_page.show_event()
 
   @property
   def completed(self) -> bool:
     return self._accepted_terms and self._training_done
 
   def _on_terms_declined(self):
-    self._state = OnboardingState.DECLINE
+    self._set_state(OnboardingState.DECLINE)
 
   def _on_decline_back(self):
-    self._state = OnboardingState.TERMS
+    self._set_state(OnboardingState.TERMS)
 
   def close(self):
     ui_state.params.put_bool("IsDriverViewEnabled", False)
@@ -510,7 +507,7 @@ class OnboardingWindow(Widget):
   def _on_terms_accepted(self):
     ui_state.params.put("HasAcceptedTerms", terms_version)
     if not self._training_done:
-      self._state = OnboardingState.ONBOARDING
+      self._set_state(OnboardingState.ONBOARDING)
     else:
       self.close()
 

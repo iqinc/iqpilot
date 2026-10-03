@@ -5,7 +5,7 @@ import time
 import pyray as rl
 
 from iqpilot.system.hardware import TICI
-from iqpilot.common.realtime import Priority, config_realtime_process, set_core_affinity
+from iqpilot.common.realtime import CycleCollector, Priority, config_realtime_process, set_core_affinity
 from iqpilot.system.ui.lib.application import gui_app
 from iqpilot.selfdrive.ui.layouts.main import MainLayout
 from iqpilot.selfdrive.ui.mici.layouts.main import MiciMainLayout
@@ -14,6 +14,7 @@ from iqpilot.selfdrive.ui.ui_state import ui_state
 _FPS_OVERRIDE = os.getenv("FPS")
 UI_OFFROAD_FPS = int(os.getenv("UI_OFFROAD_FPS", _FPS_OVERRIDE or "60"))
 UI_ONROAD_FPS = int(os.getenv("UI_ONROAD_FPS", _FPS_OVERRIDE or "60"))
+UI_GC_INTERVAL_S = float(os.getenv("UI_GC_INTERVAL_S", "30"))
 
 
 def main():
@@ -45,6 +46,8 @@ def main():
       libc_trim = None
   last_trim = time.monotonic()
 
+  collector = CycleCollector(UI_GC_INTERVAL_S)
+
   for should_render in gui_app.render():
     ui_state.update()
     gui_app.set_target_fps(UI_ONROAD_FPS if ui_state.started else UI_OFFROAD_FPS)
@@ -58,6 +61,8 @@ def main():
           set_core_affinity(list(cores))
         except OSError:
           pass
+
+      collector.tick()
 
       if libc_trim is not None and time.monotonic() - last_trim > 300.0:
         last_trim = time.monotonic()

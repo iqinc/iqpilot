@@ -5,11 +5,10 @@ from typing import Any
 from iqpilot.cereal import custom
 from iqdbc.car import structs
 
-_FIELDS = '__dataclass_fields__'  # copy of dataclasses._FIELDS
+_FIELDS = '__dataclass_fields__'
 
 
 def is_dataclass(obj):
-  """Similar to dataclasses.is_dataclass without instance type check checking"""
   return hasattr(obj, _FIELDS)
 
 
@@ -18,7 +17,7 @@ def _asdictref_inner(obj) -> dict[str, Any] | Any:
     return _asdictref_inner(obj.value)
   elif is_dataclass(obj):
     ret = {}
-    for field in getattr(obj, _FIELDS):  # similar to dataclasses.fields()
+    for field in getattr(obj, _FIELDS):
       ret[field] = _asdictref_inner(getattr(obj, field))
     return ret
   elif isinstance(obj, (tuple, list)):
@@ -30,10 +29,6 @@ def _asdictref_inner(obj) -> dict[str, Any] | Any:
 
 
 def asdictref(obj) -> dict[str, Any]:
-  """
-  Similar to dataclasses.asdict without recursive type checking and copy.deepcopy
-  Note that the resulting dict will contain references to the original struct as a result
-  """
   if not is_dataclass(obj):
     raise TypeError("asdictref() should be called on dataclass instances")
 
@@ -54,9 +49,6 @@ def convert_to_capnp(struct: structs.IQCarParams | structs.IQCarState) -> capnp.
 
 
 def convert_iq_car_control(struct: capnp.lib.capnp._DynamicStructReader) -> structs.IQCarControl:
-  # NOTE: Avoid `to_dict()` here; it can throw on fuzzed messages when capnp
-  # tries to resolve unknown/invalid union-like internals. Explicit mapping is
-  # stable and keeps this conversion deterministic for tests.
   struct_dataclass = structs.IQCarControl()
 
   aol = struct.aol
@@ -186,8 +178,6 @@ def convert_iq_car_control_compact(struct: capnp.lib.capnp._DynamicStructReader,
 
   struct_dataclass.angleOffsetDeg = struct.angleOffsetDeg
 
-  # VW PQ "Blend IQ.Pilot + Stock ACC Radar" intent must survive the conversion or the RadarHandler
-  # never sees the engage/cancel/passthrough request.
   struct_dataclass.radarBlendActive = bool(getattr(struct, "radarBlendActive", False))
   struct_dataclass.radarEngageReq = bool(getattr(struct, "radarEngageReq", False))
   struct_dataclass.radarCancelReq = bool(getattr(struct, "radarCancelReq", False))

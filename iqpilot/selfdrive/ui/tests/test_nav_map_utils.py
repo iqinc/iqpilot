@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 from iqpilot.ui.onroad.nav_map_utils import (
-  build_mapbox_static_url,
   build_mapbox_tile_url,
   choose_nav_camera,
   mercator_world_px,
@@ -49,13 +48,6 @@ def test_choose_nav_camera_looks_ahead_of_vehicle():
 
   assert center_lon > -87.6393
   assert 16.0 <= zoom <= 17.8
-
-
-def test_build_mapbox_static_url_contains_expected_components():
-  url = build_mapbox_static_url(41.8826, -87.6393, 16.2, 90.0, 420, 420)
-
-  assert "navigation-night-v1/static/" in url
-  assert "-87.639300,41.882600,16.20,90.0,0/420x420@2x" in url
 
 
 def test_build_mapbox_tile_url_contains_expected_components():

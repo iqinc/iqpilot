@@ -1,4 +1,3 @@
-import os
 import sqlite3
 import json
 
@@ -117,12 +116,3 @@ def test_day_variant_selection(tmp_path, monkeypatch):
   _write_mbtiles(region / "tiles" / "offline_day.mbtiles")
   assert offline_tiles.find_offline_mbtiles_path(41.7, -88.0, day=True) == region / "tiles" / "offline_day.mbtiles"
   assert offline_tiles.find_offline_mbtiles_path(41.7, -88.0, day=False) == night
-
-
-def test_solar_elevation_day_night():
-  from iqpilot.ui.onroad.nav_map_utils import solar_elevation_deg
-  # Chicago 2026-07-11: 18:00 UTC (1pm CDT) is day; 06:00 UTC (1am CDT) is night
-  noon_utc = 1783792800.0  # 2026-07-11 18:00:00 UTC
-  night_utc = noon_utc - 12 * 3600
-  assert solar_elevation_deg(41.88, -87.63, noon_utc) > 30.0
-  assert solar_elevation_deg(41.88, -87.63, night_utc) < -10.0

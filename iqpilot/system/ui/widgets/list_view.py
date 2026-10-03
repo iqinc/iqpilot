@@ -483,10 +483,6 @@ class ListItem(Widget):
 
 
 # Factory functions
-def simple_item(title: str | Callable[[], str], callback: Callable | None = None) -> ListItem:
-  return ListItem(title=title, callback=callback)
-
-
 def toggle_item(title: str | Callable[[], str], description: str | Callable[[], str] | None = None, initial_state: bool = False,
                 callback: Callable | None = None, icon: str = "", enabled: bool | Callable[[], bool] = True) -> ListItem:
   action = ToggleAction(initial_state=initial_state, enabled=enabled, callback=callback)

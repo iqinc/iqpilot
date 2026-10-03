@@ -4,7 +4,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 from __future__ import annotations
 
 import hashlib
-import math
 import os
 import pickle
 import re
@@ -17,12 +16,7 @@ from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import CUSTOM_MODEL_
 from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import ModelRunner
 from iqpilot.selfdrive.iqmodeld.models.split_model_constants import SplitModelConstants
 from iqpilot.selfdrive.iqmodeld.parser import PhaseParser
-
-
-def _tinygrad_imports():
-    from tinygrad.tensor import Tensor
-    from tinygrad.device import Device
-    return Tensor, Device
+from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.supercombo_runtime import TinygradSupercomboRuntime
 
 
 def _captured_queue_depth(warp_jit: Any) -> int | None:
@@ -67,7 +61,7 @@ def _is_jit_arg_mismatch(err: BaseException) -> bool:
     return "args mismatch in JIT" in str(err)
 
 
-class TinygradSupercomboRunner(ModelRunner):
+class TinygradSupercomboRunner(TinygradSupercomboRuntime, ModelRunner):
     uses_opencl_warp: bool = False
 
     def __init__(self):
@@ -236,16 +230,6 @@ class TinygradSupercomboRunner(ModelRunner):
 
         return "; unable to schedule automatic re-download"
 
-    def _frame_tensor(self, key: str, buf):
-        Tensor, Device = _tinygrad_imports()
-        arr = np.frombuffer(buf.data, dtype=np.uint8)
-        ck = (key, arr.ctypes.data)
-        t = self._blob_cache.get(ck)
-        if t is None:
-            t = Tensor.from_blob(arr.ctypes.data, (arr.size,), dtype='uint8', device=Device.DEFAULT)
-            self._blob_cache[ck] = t
-        return t
-
     @property
     def vision_input_names(self) -> list[str]:
         return ['img', 'big_img']
@@ -255,85 +239,20 @@ class TinygradSupercomboRunner(ModelRunner):
         return dict(self._ish)
 
     @property
+    def input_dtypes(self) -> dict:
+        from iqpilot.selfdrive.iqmodeld.temporal_state import spec_from_meta
+        return {name: dtype for name, (_, dtype) in spec_from_meta(self._meta).items()}
+
+    @property
     def output_slices(self) -> SliceDict:
         return dict(self._slices)
 
+    @property
+    def reasoning_metadata(self) -> dict:
+        return dict(self._meta)
+
     def prepare_inputs(self, imgs_cl, numpy_inputs, frames):
         raise RuntimeError("supercombo runner has no OpenCL path; use run_fused()")
-
-    def _ensure_queues(self, cam_w: int, cam_h: int) -> None:
-        if self._queues is not None and self._cam == (cam_w, cam_h):
-            return
-        if (cam_w, cam_h) not in self._warp_jits:
-            raise RuntimeError(f"no warp JIT for {cam_w}x{cam_h}; have {sorted(self._warp_jits)}")
-
-        Tensor, Device = _tinygrad_imports()
-        fs = self._frame_skip
-        img = self._ish['img']
-        n_frames = img[1] // 6
-        img_buf = (fs * (n_frames - 1) + 1, 6, img[2], img[3])
-        fb = self._ish['features_buffer']
-        dp = self._ish['desire_pulse']
-        tc = self._ish['traffic_convention']
-        at = self._ish['action_t']
-
-        zeros_u8 = lambda s: Tensor(np.zeros(s, dtype=np.uint8), device=Device.DEFAULT).contiguous().realize()
-        zeros_f32 = lambda s: Tensor(np.zeros(s, dtype=np.float32), device=Device.DEFAULT).contiguous().realize()
-
-        shapes = {'desire': (dp[2],), 'traffic_convention': tuple(tc), 'action_t': tuple(at), 'prev_feat': (fb[0], fb[2])}
-        sizes = [math.prod(s) for s in shapes.values()]
-        packed = np.zeros(sum(sizes), dtype=np.float32)
-        views = {k: v.reshape(s) for (k, s), v in zip(shapes.items(), np.split(packed, np.cumsum(sizes[:-1])), strict=True)}
-
-        self._npy = {'tfm': np.zeros((3, 3), dtype=np.float32), 'big_tfm': np.zeros((3, 3), dtype=np.float32), **views}
-        self._queues = {
-            'img_q':     zeros_u8(img_buf),
-            'big_img_q': zeros_u8(img_buf),
-            'feat_q':    zeros_f32((fs * fb[1], fb[0], fb[2])),
-            'desire_q':  zeros_f32((fs * dp[1], dp[0], dp[2])),
-            'tfm':       Tensor(self._npy['tfm'], device='NPY'),
-            'big_tfm':   Tensor(self._npy['big_tfm'], device='NPY'),
-            'packed_npy_inputs': Tensor(packed, device='NPY'),
-        }
-        self._cam = (cam_w, cam_h)
-
-    def run_fused(self, bufs: dict, transforms: dict[str, np.ndarray], numpy_inputs: NumpyDict) -> NumpyDict:
-        Tensor, Device = _tinygrad_imports()
-        main_buf = bufs['img']
-        self._ensure_queues(main_buf.width, main_buf.height)
-        assert self._queues is not None and self._npy is not None
-
-        self._npy['tfm'][:] = transforms['img']
-        self._npy['big_tfm'][:] = transforms['big_img']
-
-        desire_key = next((k for k in numpy_inputs if k.startswith('desire')), None)
-        cur = numpy_inputs[desire_key].copy() if desire_key is not None else np.zeros_like(self._prev_desire)
-        cur[0] = 0
-        self._npy['desire'][:] = np.where(cur - self._prev_desire > .99, cur, 0)
-        self._prev_desire[:] = cur
-        if 'traffic_convention' in numpy_inputs:
-            self._npy['traffic_convention'][:] = numpy_inputs['traffic_convention']
-        if 'action_t' in numpy_inputs:
-            self._npy['action_t'][:] = numpy_inputs['action_t']
-
-        frame = self._frame_tensor('img', bufs['img'])
-        big_frame = self._frame_tensor('big_img', bufs['big_img'])
-
-        warp = self._warp_jits[self._cam]
-        try:
-            warped = warp(tfm=self._queues['tfm'], big_tfm=self._queues['big_tfm'], frame=frame, big_frame=big_frame)
-            out, = self._run_policy(warped=warped, img_q=self._queues['img_q'], big_img_q=self._queues['big_img_q'],
-                                    feat_q=self._queues['feat_q'], desire_q=self._queues['desire_q'],
-                                    packed_npy_inputs=self._queues['packed_npy_inputs'])
-        except Exception as err:
-            self._handle_runtime_jit_mismatch(err)
-            raise
-        flat = out.numpy().flatten()
-
-        self._npy['prev_feat'][:] = flat[self._hidden_slice].reshape(self._npy['prev_feat'].shape)
-
-        sliced = {k: flat[np.newaxis, sl] for k, sl in self._slices.items()}
-        return self._parser.parse_vision_outputs(sliced)
 
     def _run_model(self) -> NumpyDict:
         raise RuntimeError("supercombo path goes through run_fused(), not _run_model()")

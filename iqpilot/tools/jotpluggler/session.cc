@@ -385,10 +385,10 @@ ImU32 route_chip_part_color(int part_index, bool explicit_part) {
   }};
   const std::array<int, 3> &base = BASE[static_cast<size_t>(std::clamp(part_index, 0, 3))];
   if (explicit_part) {
-    return ImGui::GetColorU32(color_rgb(base[0], base[1], base[2]));
+    return ImGui::GetColorU32(ui_color(base[0], base[1], base[2]));
   }
   const int gray = 144;
-  return ImGui::GetColorU32(color_rgb((base[0] + gray) / 2, (base[1] + gray) / 2, (base[2] + gray) / 2));
+  return ImGui::GetColorU32(ui_color((base[0] + gray) / 2, (base[1] + gray) / 2, (base[2] + gray) / 2));
 }
 
 bool draw_route_chip_text_button(const char *id,
@@ -405,7 +405,7 @@ bool draw_route_chip_text_button(const char *id,
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
     draw_list->AddRectFilled(ImVec2(pos.x - 5.0f, pos.y - 1.0f),
                              ImVec2(pos.x + size.x + 5.0f, pos.y + size.y + 2.0f),
-                             ImGui::GetColorU32(color_rgb(225, 231, 239, 0.95f)), 0.0f);
+                             ImGui::GetColorU32(ui_color(225, 231, 239, 0.95f)), 0.0f);
   }
   draw_list->AddText(pos, color, text.data(), text.data() + text.size());
   if (tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
@@ -433,11 +433,11 @@ void draw_route_copy_feedback(UiState *state, ImDrawList *draw_list, ImVec2 chip
   const ImVec2 bubble_min(chip_max.x - text_size.x - pad.x * 2.0f, chip_max.y + 7.0f);
   const ImVec2 bubble_max(chip_max.x, bubble_min.y + text_size.y + pad.y * 2.0f);
   draw_list->AddRectFilled(bubble_min, bubble_max,
-                           ImGui::GetColorU32(color_rgb(46, 125, 80, 0.96f * alpha)), 7.0f);
+                           ImGui::GetColorU32(ui_color(46, 125, 80, 0.96f * alpha)), 7.0f);
   draw_list->AddRect(bubble_min, bubble_max,
-                     ImGui::GetColorU32(color_rgb(35, 96, 61, 0.9f * alpha)), 7.0f, 0, 1.0f);
+                     ImGui::GetColorU32(ui_color(35, 96, 61, 0.9f * alpha)), 7.0f, 0, 1.0f);
   draw_list->AddText(ImVec2(std::floor(bubble_min.x + pad.x), std::floor(bubble_min.y + pad.y)),
-                     ImGui::GetColorU32(color_rgb(247, 251, 248, alpha)),
+                     ImGui::GetColorU32(ui_color(247, 251, 248, alpha)),
                      state->route_copy_feedback_text.c_str());
 }
 
@@ -528,9 +528,9 @@ void draw_route_id_chip(AppSession *session, UiState *state) {
   const ImVec2 chip_min(chip_x, chip_y);
   const ImVec2 chip_max(chip_x + chip_w, chip_y + chip_h);
   const float text_y = std::floor(chip_y + std::max(0.0f, (chip_h - ImGui::GetTextLineHeight()) * 0.5f));
-  const ImU32 chip_bg = ImGui::GetColorU32(color_rgb(247, 249, 252));
-  const ImU32 chip_border = ImGui::GetColorU32(color_rgb(184, 191, 200));
-  const ImU32 sep = ImGui::GetColorU32(color_rgb(162, 170, 178));
+  const ImU32 chip_bg = ImGui::GetColorU32(ui_color(247, 249, 252));
+  const ImU32 chip_border = ImGui::GetColorU32(ui_color(184, 191, 200));
+  const ImU32 sep = ImGui::GetColorU32(ui_color(162, 170, 178));
   draw_list->AddRectFilled(chip_min, chip_max, chip_bg, 0.0f);
   draw_list->AddRect(chip_min, chip_max, chip_border, 0.0f, 0, 1.0f);
 
@@ -613,7 +613,7 @@ void draw_route_id_chip(AppSession *session, UiState *state) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   }
   draw_list->AddCircleFilled(info_center, info_size * 0.5f,
-                             ImGui::GetColorU32(info_hovered ? color_rgb(220, 229, 240) : color_rgb(239, 243, 248)));
+                             ImGui::GetColorU32(info_hovered ? ui_color(220, 229, 240) : ui_color(239, 243, 248)));
   draw_list->AddCircle(info_center, info_size * 0.5f, chip_border, 20, 1.0f);
   const char *info_text = icon::INFO_CIRCLE;
   const ImVec2 info_text_size = ImGui::CalcTextSize(info_text);
@@ -712,6 +712,10 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
       if (ImGui::MenuItem("Open Route...")) {
         state->open_open_route = true;
       }
+      if (ImGui::MenuItem("Close Route", nullptr, false, !session->route_name.empty())) {
+        reload_session(session, state, "", "");
+        state->open_open_route = true;
+      }
       if (ImGui::MenuItem("Stream...")) {
         state->open_stream = true;
       }
@@ -759,6 +763,8 @@ float draw_main_menu_bar(AppSession *session, UiState *state) {
       }
       ImGui::EndMenu();
     }
+    if (ImGui::MenuItem("Open Route...")) state->open_open_route = true;
+    if (ImGui::MenuItem("Dark mode", nullptr, jot_dark_mode())) set_jot_dark_mode(!jot_dark_mode());
     ImGui::SameLine(0.0f, 8.0f);
     draw_route_id_chip(session, state);
     height = ImGui::GetWindowSize().y;

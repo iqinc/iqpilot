@@ -30,7 +30,7 @@ from iqpilot.system.loggerd.config import get_available_percent
 from iqpilot.common.swaglog import cloudlog
 from iqpilot.system.hardware.power_monitoring import PowerMonitoring, VBATT_LOW_POWER_EXIT
 from iqpilot.system.hardware.fan_controller import FanController
-from iqpilot.system.version import terms_version, training_version, get_build_metadata
+from iqpilot.system.version import terms_version, training_version
 
 ThermalStatus = log.DeviceState.ThermalStatus
 NetworkType = log.DeviceState.NetworkType
@@ -63,7 +63,6 @@ THERMAL_BANDS = OrderedDict({
 OFFROAD_DANGER_TEMP = 75
 
 prev_offroad_states: dict[str, tuple[bool, str | None]] = {}
-ALLOWED_TICI_BRANCHES = {"release-new", "release-tici", "master-mici", "beta", "beta-pq", "release-prebuilt"}
 
 
 class CanStartupRecovery:
@@ -225,9 +224,6 @@ def set_offroad_alert_if_changed(offroad_alert: str, show_alert: bool, extra_tex
   set_offroad_alert(offroad_alert, show_alert, extra_text)
 
 
-def is_supported_tici_branch(build_metadata) -> bool:
-  return build_metadata.channel_type == "tici" or build_metadata.channel in ALLOWED_TICI_BRANCHES
-
 def touch_thread(end_event):
   count = 0
 
@@ -338,7 +334,20 @@ def hw_state_thread(end_event, hw_queue):
     time.sleep(DT_HW)
 
 
-def hardware_thread(end_event, hw_queue) -> None:
+def memory_snapshot_thread(end_event, memory_queue) -> None:
+  while not end_event.is_set():
+    try:
+      memory_usage_percent = memory_queue.get(timeout=DT_HW)
+    except queue.Empty:
+      continue
+    try:
+      cloudlog.event("low_memory_snapshot", memory_usage_percent=memory_usage_percent,
+                     top_processes=get_top_memory_processes(), error=True)
+    except Exception:
+      cloudlog.exception("Error collecting low memory snapshot")
+
+
+def hardware_thread(end_event, hw_queue, memory_queue) -> None:
   pm = messaging.PubMaster(['deviceState', 'iqPerfTrace'])
   sm = messaging.SubMaster(["peripheralState", "gpsLocationExternal", "selfdriveState", "pandaStates", "carState", "egpuDockState"], poll="pandaStates")
   perf = PerfTraceEmitter("hardwared", pubmaster=pm)
@@ -437,6 +446,9 @@ def hardware_thread(end_event, hw_queue) -> None:
         onroad_conditions["ignition"] = False
         cloudlog.error("panda timed out onroad")
 
+    if params.get_bool("IQBenchIgnition"):
+      onroad_conditions["ignition"] = True
+
     # Run at 2Hz, plus either edge of ignition
     ign_edge = (started_ts is not None) != all(onroad_conditions.values())
     if (sm.frame % round(SERVICE_LIST['pandaStates'].frequency * DT_HW) != 0) and not ign_edge:
@@ -459,8 +471,10 @@ def hardware_thread(end_event, hw_queue) -> None:
     # get_top_memory_processes() costs ~500ms: must never run in the 2Hz publish loop
     if msg.deviceState.memoryUsagePercent > 95:
       if not low_memory_logged:
-        cloudlog.event("low_memory_snapshot", memory_usage_percent=msg.deviceState.memoryUsagePercent,
-                       top_processes=get_top_memory_processes(), error=True)
+        try:
+          memory_queue.put_nowait(msg.deviceState.memoryUsagePercent)
+        except queue.Full:
+          pass
         low_memory_logged = True
     else:
       low_memory_logged = False
@@ -468,7 +482,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     online_cpu_usage = [int(round(n)) for n in psutil.cpu_percent(percpu=True)]
     offline_cpu_usage = [0., ] * (len(msg.deviceState.cpuTempC) - len(online_cpu_usage))
     msg.deviceState.cpuUsagePercent = online_cpu_usage + offline_cpu_usage
-    if msg.deviceState.memoryUsagePercent > 85:
+    if msg.deviceState.memoryUsagePercent > 95:
       avg_cpu_usage = int(round(sum(online_cpu_usage) / max(1, len(online_cpu_usage))))
       perf.emit(
         "hardware_low_memory",
@@ -498,7 +512,7 @@ def hardware_thread(end_event, hw_queue) -> None:
     egpu_valid = sm.alive["egpuDockState"] and sm.valid["egpuDockState"]
     egpu_dock_status.update(started_ts is None, last_hw_state.usb_state, egpu_dock_flasher.failed,
                             params.get_bool("UsbGpuLoading"), params.get("UsbGpuActive"),
-                            params.get_bool("UsbGpuCompiled"),
+                            params.get_bool("UsbGpuReady"),
                             sm["egpuDockState"] if egpu_valid else None, set_offroad_alert_if_changed)
 
     msg.deviceState.screenBrightnessPercent = HARDWARE.get_screen_brightness()
@@ -552,26 +566,10 @@ def hardware_thread(end_event, hw_queue) -> None:
     # ensure device is fully booted
     startup_conditions["device_booted"] = startup_conditions.get("device_booted", False) or HARDWARE.booted()
 
-    # user-forced status (Always Offroad can be temporarily overridden)
+    # user-forced status
     offroad_mode = params.get_bool("IQAlwaysOffroad")
-    force_onroad_until = params.get("ForceOnroadUntil", return_default=True)
-    now = int(time.time())
-    force_onroad_active = offroad_mode and force_onroad_until > now
-    if force_onroad_until > 0 and (not offroad_mode or force_onroad_until <= now):
-      params.put("ForceOnroadUntil", 0)
-
-    startup_conditions["not_always_offroad"] = (not offroad_mode) or force_onroad_active
-    onroad_conditions["not_always_offroad"] = (not offroad_mode) or force_onroad_active
-
-    # if an unsupported device and branch is detected, going onroad is blocked
-    # only allow going onroad when:
-    # - TIZI, or
-    # - TICI and channel_type is "tici"
-    build_metadata = get_build_metadata()
-    is_unsupported_combo = TICI and HARDWARE.get_device_type() == "tici" and not is_supported_tici_branch(build_metadata)
-    startup_conditions["not_tici"] = not is_unsupported_combo
-    onroad_conditions["not_tici"] = not is_unsupported_combo
-    set_offroad_alert("Offroad_TiciSupport", is_unsupported_combo, extra_text=build_metadata.channel)
+    startup_conditions["not_always_offroad"] = not offroad_mode
+    onroad_conditions["not_always_offroad"] = not offroad_mode
 
     # if the temperature enters the danger zone, go offroad to cool down
     onroad_conditions["device_temp_good"] = thermal_status < ThermalStatus.danger
@@ -718,11 +716,13 @@ def hardware_thread(end_event, hw_queue) -> None:
 
 def main():
   hw_queue = queue.Queue(maxsize=1)
+  memory_queue = queue.Queue(maxsize=1)
   end_event = threading.Event()
 
   threads = [
     threading.Thread(target=hw_state_thread, args=(end_event, hw_queue)),
-    threading.Thread(target=hardware_thread, args=(end_event, hw_queue)),
+    threading.Thread(target=hardware_thread, args=(end_event, hw_queue, memory_queue)),
+    threading.Thread(target=memory_snapshot_thread, args=(end_event, memory_queue)),
   ]
 
   if TICI:

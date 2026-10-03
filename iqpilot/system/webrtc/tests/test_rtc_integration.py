@@ -9,6 +9,40 @@ from iqpilot.system.webrtc.session import StreamSession
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("cameras", [["road"], ["road", "wideRoad"], ["road", "driver", "wideRoad"]])
+async def test_each_negotiated_camera_receives_video(cameras):
+  if not os.environ.get("CI"):
+    return
+  answer_session = None
+  loop = asyncio.get_running_loop()
+  received = {camera: asyncio.Event() for camera in cameras}
+
+  async def connect(offer):
+    nonlocal answer_session
+    answer_session = StreamSession(offer.sdp, offer.video, [], [], [], debug_mode=True)
+    answer = await answer_session.get_answer()
+    mids = [track.mid() for track, _, _ in answer_session.stream._track_state]
+    assert len(set(mids)) == len(cameras)
+    answer_session.start()
+    return RTCSessionDescription(answer.sdp, answer.type)
+
+  builder = WebRTCOfferBuilder(connect, ice_servers=[])
+  for camera in cameras:
+    builder.offer_to_receive_video_stream(camera)
+  stream = builder.stream()
+  try:
+    await asyncio.wait_for(stream.start(), 10)
+    for camera, event in received.items():
+      stream.get_incoming_video_track(camera).on_frame(lambda *_, event=event: loop.call_soon_threadsafe(event.set))
+    await asyncio.wait_for(stream.wait_for_connection(), 10)
+    await asyncio.wait_for(asyncio.gather(*(event.wait() for event in received.values())), 10)
+  finally:
+    await stream.stop()
+    if answer_session is not None:
+      await answer_session.stop_async()
+
+
+@pytest.mark.asyncio
 async def test_native_video_audio_and_data_channel():
   if not os.environ.get("CI"):
     return

@@ -76,7 +76,6 @@ MM_MODEM_STATE_FAILED_REASON_SIM_MISSING = 2
 def affine_irq(val, action):
   irqs = get_irqs_for_action(action)
   if len(irqs) == 0:
-    print(f"No IRQs found for '{action}'")
     return
 
   for i in irqs:
@@ -516,7 +515,7 @@ class Tici(HardwareBase):
     try:
       pid = subprocess.check_output(["pgrep", "-f", "spi0"], encoding='utf8').strip()
       subprocess.call(["sudo", "chrt", "-f", "-p", "1", pid])
-      subprocess.call(["sudo", "taskset", "-pc", "3", pid])
+      subprocess.call(["sudo", "taskset", "-pc", "3", pid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except subprocess.CalledProcessException as e:
       print(str(e))
 
@@ -558,7 +557,7 @@ class Tici(HardwareBase):
     if self.get_device_type() in ("tici", "tizi"):
       if initial_eps_apn:
         subprocess.call(["mmcli", "-m", "any", f'--3gpp-set-initial-eps-bearer-settings=apn={initial_eps_apn}'])
-      else:
+      elif is_comma_profile:
         subprocess.call(["mmcli", "-m", "any", '--3gpp-set-initial-eps-bearer-settings=apn='])
 
       cmds += [

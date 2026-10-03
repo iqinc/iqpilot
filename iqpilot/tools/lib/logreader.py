@@ -419,11 +419,6 @@ class LogReader:
   def first(self, msg_type: str):
     return next(self.filter(msg_type), None)
 
-  @property
-  def time_series(self):
-    return msgs_to_time_series(self)
-
-
 if __name__ == "__main__":
   import codecs
 

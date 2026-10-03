@@ -44,10 +44,6 @@ class Paths:
       return '/data/media/0/realdata/'
 
   @staticmethod
-  def log_root_external() -> str:
-    return '/mnt/external_realdata/'
-
-  @staticmethod
   def swaglog_root() -> str:
     if PC:
       return os.path.join(Paths.comma_home(), "log")
@@ -87,13 +83,6 @@ class Paths:
       return str(Path(Paths.comma_home()) / "stats")
     else:
       return "/data/stats/"
-
-  @staticmethod
-  def stats_iq_root() -> str:
-    if PC:
-      return str(Path(Paths.comma_home()) / "stats")
-    else:
-      return "/data/stats_iq/"
 
   @staticmethod
   def config_root() -> str:

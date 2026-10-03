@@ -43,7 +43,7 @@ bool commentComplete(const std::string &line) {
   return false;
 }
 
-}  // namespace
+}
 
 DBCFile::DBCFile(const std::string &dbc_file_name) {
   std::ifstream file(dbc_file_name, std::ios::binary);

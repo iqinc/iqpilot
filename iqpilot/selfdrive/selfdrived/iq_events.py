@@ -1,5 +1,6 @@
 import iqpilot.cereal.messaging as messaging
 from iqpilot.cereal import log, car, custom
+from iqpilot.common.params import Params
 from iqpilot.common.constants import CV
 from iqpilot.common.atlas_alerts import EventBook as EventsBase, Tier as Priority, Tags as ET, AlertCard as Alert, \
   NoEntryCard as NoEntryAlert, HardDisableCard as ImmediateDisableAlert, ChimeCard as EngagementAlert, \
@@ -94,6 +95,24 @@ _CAMERA_LABELS = {
 }
 
 _POLICE_CHIMED_IDS: set[str] = set()
+_USA_REGION_CODES = frozenset(("US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"))
+
+
+def _configured_country_code() -> str:
+  try:
+    value = Params().get("OsmLocationName")
+  except Exception:
+    return ""
+  if isinstance(value, bytes):
+    value = value.decode("utf-8", "ignore")
+  return str(value or "").strip().upper()
+
+
+def _alpr_alert_labels(country_code: str) -> tuple[str, str]:
+  is_row = bool(country_code) and country_code not in _USA_REGION_CODES
+  if is_row:
+    return "Traffic / ALPR Camera", "Traffic / ALPR Camera Detected"
+  return "Flock / ALPR Camera", "Flock Camera Detected"
 
 
 def speed_camera_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
@@ -101,14 +120,17 @@ def speed_camera_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMas
   ctype = int(getattr(nav.cameraType, "raw", nav.cameraType))
   label = _CAMERA_LABELS.get(ctype, "Speed Camera")
   distance = float(nav.cameraDistance)
+  alpr_detected_label = "Flock Camera Detected"
+  if ctype == int(custom.IQNavState.CameraType.alpr):
+    label, alpr_detected_label = _alpr_alert_labels(_configured_country_code())
   # RF (BLE/WiFi) Flock detection is a live proximity hit with no meaningful
   # distance — flockd/navd flag it with distance 0 on the alpr camera type.
   if ctype == int(custom.IQNavState.CameraType.alpr) and distance <= 0.0:
     return Alert(
-      "Flock Camera Detected",
+      alpr_detected_label,
       "",
       AlertStatus.normal, AlertSize.small,
-      Priority.HIGH, VisualAlert.none, AudibleAlert.prompt, .2)
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .2)
   if metric:
     dist_str = f"{distance:.0f} m" if distance < 1000.0 else f"{distance / 1000.0:.1f} km"
   else:
@@ -134,7 +156,8 @@ def speed_camera_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMas
     f"{label} • {detail}",
     "",
     AlertStatus.normal, AlertSize.small,
-    Priority.HIGH, VisualAlert.none, audible, .2)
+    Priority.LOW if ctype == int(custom.IQNavState.CameraType.alpr) else Priority.HIGH,
+    VisualAlert.none, audible, .2)
 
 
 class IQEvents(EventsBase):
@@ -155,6 +178,14 @@ class IQEvents(EventsBase):
 EVENTS_IQ_TYPE = dict[int, dict[str, Alert | AlertCallbackType]]
 
 _GUIDANCE_EVENTS: EVENTS_IQ_TYPE = {
+  EventNameIQ.lateralEdgeBlocked: {
+    ET.WARNING: Alert(
+      "Lane Change Blocked",
+      "Road edge detected",
+      AlertStatus.userPrompt, AlertSize.mid,
+      Priority.LOW, VisualAlert.none, AudibleAlert.prompt, .1),
+  },
+
   EventNameIQ.speedLimitActive: {
     ET.WARNING: speed_limit_adjust_alert,
   },
@@ -189,22 +220,6 @@ _GUIDANCE_EVENTS: EVENTS_IQ_TYPE = {
       "Nudge the wheel right to change lanes",
       AlertStatus.userPrompt, AlertSize.mid,
       Priority.MID, VisualAlert.none, AudibleAlert.prompt, 1.5),
-  },
-
-  EventNameIQ.navTurnLeft: {
-    ET.WARNING: Alert(
-      "Navigation: Turning Left",
-      "",
-      AlertStatus.normal, AlertSize.small,
-      Priority.MID, VisualAlert.none, AudibleAlert.none, 1.5),
-  },
-
-  EventNameIQ.navTurnRight: {
-    ET.WARNING: Alert(
-      "Navigation: Turning Right",
-      "",
-      AlertStatus.normal, AlertSize.small,
-      Priority.MID, VisualAlert.none, AudibleAlert.none, 1.5),
   },
 
   EventNameIQ.modelTurnLeft: {

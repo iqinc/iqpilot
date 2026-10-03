@@ -33,9 +33,16 @@ def test_egpu_label_is_gpu():
   assert label == "GPU"
 
 
-def test_emac_wins_when_both_enabled():
-  label, _ = _resolve(IQEmacEnabled=True, IQEgpuEnabled=True,
-                      MacModelReachable=True, UsbGpuPresent=True)
+def test_present_dock_wins_over_emac():
+  assert _resolve(IQEmacEnabled=True, MacModelReachable=True,
+                  UsbGpuPresent=True, UsbGpuActive=True) == ("GPU", SourceState.ACTIVE)
+  assert _resolve(IQEmacEnabled=True, UsbGpuPresent=True, UsbGpuActive=True) == ("GPU", SourceState.ACTIVE)
+
+
+def test_emac_wins_without_consented_dock():
+  label, _ = _resolve(IQEmacEnabled=True, IQEgpuEnabled=True, MacModelReachable=True)
+  assert label == "MAC"
+  label, _ = _resolve(IQEmacEnabled=True, MacModelReachable=True, UsbGpuPresent=True, IQEgpuDisabled=True)
   assert label == "MAC"
 
 

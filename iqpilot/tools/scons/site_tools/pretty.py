@@ -116,9 +116,6 @@ def generate(env):
   env["RANLIBCOMSTR"] = _line("RANLIB")
   env["CYTHONCOMSTR"] = _line("CYTHON")
   env["COMPILATIONDB_COMSTR"] = _line("CDB")
-  env["QT3_MOCFROMHCOMSTR"] = _line("MOC")
-  env["QT3_MOCFROMCXXCOMSTR"] = _line("MOC")
-  env["QT3_UICCOMSTR"] = _line("UIC")
 
 
 def exists(env):

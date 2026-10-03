@@ -68,27 +68,6 @@ class CerealIncomingMessageProxy:
     self.pm.send(msg_type, msg)
 
 
-class AsyncTaskRunner:
-  def __init__(self):
-    self.task: asyncio.Task | None = None
-    self.logger = logging.getLogger("webrtcd")
-
-  def start(self):
-    if self.task is None:
-      self.task = asyncio.create_task(self.run())
-
-  async def stop(self):
-    if self.task is None:
-      return
-    if not self.task.done():
-      self.task.cancel()
-      try:
-        await self.task
-      except asyncio.CancelledError:
-        pass
-    self.task = None
-
-
 class CerealProxyRunner:
   def __init__(self, proxy: CerealOutgoingMessageProxy):
     self.proxy = proxy
@@ -165,6 +144,12 @@ def _new_stream_session(offer_sdp: str, body: StreamRequestBody, debug_mode: boo
 
 
 async def get_stream(request: 'web.Request'):
+  lock = request.app.setdefault('stream_lock', asyncio.Lock())
+  async with lock:
+    return await _get_stream(request)
+
+
+async def _get_stream(request: 'web.Request'):
   stream_dict, debug_mode = request.app['streams'], request.app['debug']
   logger = logging.getLogger("webrtcd")
   session: Any | None = None
@@ -208,6 +193,9 @@ async def get_stream(request: 'web.Request'):
     stream_dict[session.identifier] = session
 
     return web.json_response({"sdp": answer.sdp, "type": answer.type})
+  except asyncio.CancelledError:
+    await _cleanup_failed_session(session, logger)
+    raise
   except TimeoutError:
     await _cleanup_failed_session(session, logger)
     logger.exception("Timed out generating WebRTC answer")
@@ -255,6 +243,7 @@ def webrtcd_thread(host: str, port: int, debug: bool):
   app = web.Application()
 
   app['streams'] = dict()
+  app['stream_lock'] = asyncio.Lock()
   app['debug'] = debug
   app.on_shutdown.append(on_shutdown)
   app.router.add_post("/stream", get_stream)

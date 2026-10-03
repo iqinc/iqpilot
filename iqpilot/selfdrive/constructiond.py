@@ -1,15 +1,6 @@
 #!/usr/bin/env python3
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
-
-constructiond: work-zone detector for Speed Limit Assist.
-
-Samples the road camera at ~2 Hz and looks for work-zone orange (barrels, drums,
-diamond signs) in the NV12 chroma plane. Sunlit yellow lane paint renders with
-nearly identical hue to barrel orange on this camera, but its red chroma (V)
-saturates below ~168 while retroreflective barrel orange reaches 170-190, so the
-V floor is the load-bearing threshold — do not lower it without re-running the
-paint/barrel separation sweep on real footage.
 """
 from collections import deque
 
@@ -26,35 +17,24 @@ from iqpilot.common.swaglog import cloudlog
 State = custom.IQConstructionZone.State
 
 ANALYSIS_PERIOD = 0.5
-
-# fractions of the chroma plane; excludes sky and hood
 ROI_TOP, ROI_BOTTOM = 0.40, 0.94
 ROI_LEFT, ROI_RIGHT = 0.04, 0.96
 
-V_MIN = 170     # paint tops out ~168 in every DAYLIGHT condition sampled
+V_MIN = 170
 CB_MIN = 16
-HUE_LO, HUE_HI = 0.65, 2.0  # (V-128)/(128-U): yellow paint ~0.4, barrel orange ~0.7-1.5, red ~3.0
-
-# Daylight-only gate: retroreflective amber markers (guardrail chevrons, object
-# markers) blaze past V_MIN under headlights at night — 137px on one chevron on
-# real footage — and there is no night work-zone ground truth to tune against.
-# Night ROI mean luma measured ~36-38, validated daytime footage 84-98.
+HUE_LO, HUE_HI = 0.65, 2.0
 LUMA_MIN = 65.0
 
-# hits only accumulate at highway-approach speeds: brightly lit lots (truck
-# stops) can pass the luma gate at night with orange signage, and the clamp is
-# meaningless below it anyway. An already-active zone still holds while slowed.
-MIN_ENTER_SPEED = 13.4  # m/s (~30 mph)
+MIN_ENTER_SPEED = 13.4
 
 HIT_FRAC = 3.0e-4
-WASH_FRAC = 0.10  # more orange than this is scene lighting (sunset), not objects
+WASH_FRAC = 0.10
 ENTER_HITS = 3
-ENTER_WINDOW = 10  # analyses (~5 s)
-HOLD_SEC = 120.0   # barrel-free stretches inside a zone last minutes; hold through them
+ENTER_WINDOW = 10
+HOLD_SEC = 120.0
 
 
 def orange_fraction(buf) -> tuple[float, float]:
-  """Returns (hot-orange fraction, mean luma) of the road ROI."""
   h, w, stride, uv_off = buf.height, buf.width, buf.stride, buf.uv_offset
   ch, cw = h // 2, w // 2
   uv = buf.data[uv_off:uv_off + ch * stride].reshape(ch, stride)
@@ -127,7 +107,6 @@ def main():
     t0 = time.monotonic()
     buf = vipc.recv(200)
     if buf is None:
-      # no publish on camera stall: SLC sees us stale and releases the clamp
       continue
 
     cs = messaging.recv_one_or_none(car_state_sock)

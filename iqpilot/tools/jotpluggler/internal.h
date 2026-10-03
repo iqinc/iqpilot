@@ -163,3 +163,6 @@ void draw_sidebar_resizer(const UiMetrics &ui, UiState *state);
 void apply_stream_batch(AppSession *session, UiState *state, StreamExtractBatch batch);
 
 void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const std::filesystem::path *capture_path);
+
+void draw_open_route_popup(AppSession *session, UiState *state);
+void remember_route(const AppSession &session, UiState *state);

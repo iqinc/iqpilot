@@ -3,7 +3,9 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 */
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <stdexcept>
@@ -40,7 +42,8 @@ struct ModelDefinition {
 
 class StateEstimator {
 public:
-  StateEstimator(ModelDefinition model, Vector state, Matrix covariance) : model_(std::move(model)) {
+  StateEstimator(ModelDefinition model, Vector state, Matrix covariance, double max_rewind_age = 0.0)
+    : model_(std::move(model)), max_rewind_age_(max_rewind_age) {
     init_state(state, covariance, NAN);
   }
 
@@ -51,6 +54,8 @@ public:
     state_ = normalize(state);
     covariance_ = stabilize(covariance);
     time_ = time;
+    events_.clear();
+    snapshots_.assign(1, Snapshot{time_, state_, covariance_});
   }
 
   void predict(double time) {
@@ -79,13 +84,92 @@ public:
 
   std::optional<Estimate> predict_and_observe(double time, int kind, const std::vector<Vector> &measurements,
                                                const std::vector<Matrix> &noise = {}) {
-    if (!std::isnan(time_) && time < time_) return std::nullopt;
-    predict(time);
+    if (model_.measurements.find(kind) == model_.measurements.end()) throw std::invalid_argument("unknown observation kind");
+    std::vector<Matrix> resolved;
+    resolved.reserve(measurements.size());
+    for (size_t index = 0; index < measurements.size(); ++index) {
+      resolved.push_back(noise.empty() ? model_.observation_noise.at(kind) : noise.at(index));
+    }
+    Event event{time, kind, measurements, std::move(resolved), next_order_++};
+    if (!std::isnan(time_) && time < time_) {
+      if (max_rewind_age_ <= 0.0 || time_ - time > max_rewind_age_) return std::nullopt;
+      return rewind(event);
+    }
+    Estimate result = apply(event);
+    events_.push_back(std::move(event));
+    snapshots_.push_back(Snapshot{time_, state_, covariance_});
+    trim_history();
+    return result;
+  }
+
+  const Vector &state() const { return state_; }
+  const Matrix &covariance() const { return covariance_; }
+  double time() const { return time_; }
+
+private:
+  struct Event {
+    double time;
+    int kind;
+    std::vector<Vector> measurements;
+    std::vector<Matrix> noise;
+    uint64_t order;
+  };
+
+  struct Snapshot {
+    double time;
+    Vector state;
+    Matrix covariance;
+  };
+
+  Estimate rewind(const Event &late) {
+    size_t base = 0;
+    for (size_t index = 0; index < snapshots_.size(); ++index) {
+      if (std::isnan(snapshots_[index].time) || snapshots_[index].time <= late.time) base = index;
+    }
+    std::vector<Event> replay(events_.begin() + base, events_.end());
+    replay.push_back(late);
+    std::stable_sort(replay.begin(), replay.end(), [](const Event &a, const Event &b) {
+      return a.time < b.time || (a.time == b.time && a.order < b.order);
+    });
+    state_ = snapshots_[base].state;
+    covariance_ = snapshots_[base].covariance;
+    time_ = snapshots_[base].time;
+    events_.resize(base);
+    snapshots_.resize(base + 1);
+    std::optional<Estimate> result;
+    for (Event &event : replay) {
+      Estimate current = apply(event);
+      if (event.order == late.order) result = current;
+      events_.push_back(std::move(event));
+      snapshots_.push_back(Snapshot{time_, state_, covariance_});
+    }
+    trim_history();
+    return *result;
+  }
+
+  void trim_history() {
+    if (max_rewind_age_ <= 0.0 || std::isnan(time_)) {
+      events_.clear();
+      snapshots_.assign(1, Snapshot{time_, state_, covariance_});
+      return;
+    }
+    const double cutoff = time_ - max_rewind_age_;
+    size_t remove = 0;
+    while (remove < events_.size() && events_[remove].time < cutoff) ++remove;
+    if (remove > 0) {
+      events_.erase(events_.begin(), events_.begin() + remove);
+      snapshots_.erase(snapshots_.begin(), snapshots_.begin() + remove);
+    }
+  }
+
+  Estimate apply(const Event &event) {
+    predict(event.time);
+    const int kind = event.kind;
+    const std::vector<Vector> &measurements = event.measurements;
     auto measurement_function = model_.measurements.find(kind);
-    if (measurement_function == model_.measurements.end()) throw std::invalid_argument("unknown observation kind");
     std::vector<Vector> innovations;
     for (size_t index = 0; index < measurements.size(); ++index) {
-      const Matrix &measurement_noise = noise.empty() ? model_.observation_noise.at(kind) : noise.at(index);
+      const Matrix &measurement_noise = event.noise.at(index);
       const Vector expected = measurement_function->second(state_);
       if (measurements[index].size() != expected.size() || measurement_noise.rows() != expected.size() || measurement_noise.cols() != expected.size()) {
         throw std::invalid_argument("observation dimension mismatch");
@@ -111,11 +195,6 @@ public:
     return Estimate{time_, state_, covariance_, innovations};
   }
 
-  const Vector &state() const { return state_; }
-  const Matrix &covariance() const { return covariance_; }
-  double time() const { return time_; }
-
-private:
   Matrix jacobian(const std::function<Vector(const Vector &)> &function, const Vector &value) const {
     const Vector output = function(value);
     Matrix result(output.size(), value.size());
@@ -149,9 +228,13 @@ private:
   }
 
   ModelDefinition model_;
+  double max_rewind_age_ = 0.0;
   Vector state_;
   Matrix covariance_;
   double time_ = NAN;
+  std::vector<Event> events_;
+  std::vector<Snapshot> snapshots_;
+  uint64_t next_order_ = 0;
 };
 
 }

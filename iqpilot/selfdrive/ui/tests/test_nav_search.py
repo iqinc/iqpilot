@@ -93,3 +93,23 @@ def test_non_china_search_preserves_mapbox_request(monkeypatch):
     "proximity": "-90.2,41.3",
   }
   assert captured["timeout"] == 8
+
+
+def test_saved_addresses_and_recents_round_trip(tmp_path, monkeypatch):
+  monkeypatch.setattr(nav_search, "FAVORITES_PATH", str(tmp_path / "nav_favorites.json"))
+  home = nav_search.SearchResult("Home", "Home address", lat=41.0, lon=-87.0)
+  work = nav_search.SearchResult("Work", "Work address", lat=41.1, lon=-87.1)
+  nav_search.save_home(home)
+  nav_search.save_work(work)
+  nav_search.add_recent(home)
+  nav_search.add_recent(work)
+  nav_search.add_recent(home)
+  assert nav_search.get_home() == home
+  assert nav_search.get_work() == work
+  assert nav_search.get_recents() == [home, work]
+  nav_search.remove_home()
+  nav_search.remove_work()
+  nav_search.remove_recent(home)
+  assert nav_search.get_home() is None
+  assert nav_search.get_work() is None
+  assert nav_search.get_recents() == [work]

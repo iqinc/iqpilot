@@ -4,11 +4,9 @@ import time
 
 import numpy as np
 
-from iqpilot.cereal import car, log, custom, messaging
+from iqpilot.cereal import car, messaging
 from iqpilot.common.params import Params
-
-OpenpilotState = log.SelfdriveState.OpenpilotState
-GuidanceState = custom.AlwaysOnLateral.AlwaysOnLateralState
+from iqpilot.ui.engagement import resolve_engagement_display
 
 UI_STREAM_SERVICES = [
   "modelV2", "carState", "selfdriveState", "controlsState", "extrinsicsCalibration",
@@ -16,12 +14,7 @@ UI_STREAM_SERVICES = [
   "iqState", "onroadEvents",
 ]
 
-# Above this the viewer is not draining the channel; drop frames instead of queueing,
-# telemetry is newest-wins and unbounded SCTP buffering is how webrtcd leaked before.
 MAX_BUFFERED_BYTES = 256 * 1024
-
-# Bitrate at/below which modelV2 frames are decimated to half rate to leave
-# headroom for video on a struggling uplink.
 LOW_BANDWIDTH_BITRATE = 500_000
 
 HEARTBEAT_INTERVAL = 1.0
@@ -61,39 +54,7 @@ def _lead(lead) -> dict:
 
 
 def compute_ui_status(ss, iq_state, onroad_events) -> str:
-  # Mirrors IQUIState.update_status; that module pulls in the raylib UI stack,
-  # which must not be imported into webrtcd.
-  guidance = iq_state.aol
-  guidance_state = guidance.state
-
-  if ss.state == OpenpilotState.preEnabled:
-    return "override"
-
-  if ss.state == OpenpilotState.overriding:
-    if not guidance.available:
-      return "override"
-    if any(e.overrideLongitudinal for e in onroad_events):
-      return "override"
-
-  if guidance_state in (GuidanceState.paused, GuidanceState.overriding):
-    return "override"
-
-  if not guidance.available:
-    return "engaged" if ss.enabled else "disengaged"
-
-  if not guidance.enabled and not ss.enabled:
-    return "disengaged"
-
-  if guidance.enabled and ss.enabled:
-    return "engaged"
-
-  if guidance.enabled:
-    return "lat_only"
-
-  if ss.enabled:
-    return "long_only"
-
-  return "disengaged"
+  return resolve_engagement_display(ss, iq_state, onroad_events).status
 
 
 def build_init_payload(params: Params | None = None) -> dict:
@@ -126,10 +87,6 @@ def build_init_payload(params: Params | None = None) -> dict:
 
 
 class UIStreamMessageProxy:
-  """Sends a trimmed, HUD-only JSON projection of UI state over the session data
-  channel, clocked by modelV2 (~20Hz). Payload stays a few KB per frame; anything
-  the client renderers don't read is not serialized."""
-
   def __init__(self, sm: messaging.SubMaster | None = None, bitrate_getter=None):
     self.sm = sm if sm is not None else messaging.SubMaster(UI_STREAM_SERVICES)
     self.channels = []
@@ -155,14 +112,11 @@ class UIStreamMessageProxy:
       self._decimate_flip = not self._decimate_flip
       if self._decimate_flip:
         return
-
-    # Send as a text frame: react-native-webrtc surfaces binary frames as
-    # ArrayBuffers that Hermes cannot reliably decode without TextDecoder.
     frame = self._build_frame(include_model=model_updated)
     encoded = frame_to_str(frame)
     self._last_emit_time = now
     for channel in self.channels:
-      if channel.bufferedAmount > MAX_BUFFERED_BYTES:
+      if channel.buffered_amount() > MAX_BUFFERED_BYTES:
         self.dropped_frames += 1
         continue
       channel.send(encoded)
@@ -182,8 +136,6 @@ class UIStreamMessageProxy:
     iq_state = sm["iqState"]
     status = compute_ui_status(ss, iq_state, sm["onroadEvents"])
 
-    # Same stickiness as UIState._update_status: while still engaged-like, a
-    # transient disengaged classification keeps the last non-disengaged status.
     if status != "disengaged":
       self._last_non_disengaged = status
       return status
@@ -263,7 +215,6 @@ class UIStreamMessageProxy:
     }
 
     return {"type": "uiStream", "logMonoTime": sm.logMonoTime["modelV2"], "data": data}
-
 
 def frame_to_str(frame: dict) -> str:
   return json.dumps(frame, separators=(",", ":"))

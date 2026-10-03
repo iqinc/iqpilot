@@ -73,6 +73,65 @@ class TestSpeedLimitSetSpeedMirror:
     assert self.v_cruise_helper.v_cruise_cluster_kph == pytest.approx(13.41 * CV.MS_TO_KPH, abs=0.1)
 
 
+@pytest.mark.parametrize("pcm_cruise", [False, True])
+@pytest.mark.parametrize("is_metric", [False, True])
+def test_driver_increase_marker_survives_button_release(pcm_cruise, is_metric):
+  helper = VCruiseHelper(car.CarParams(pcmCruise=pcm_cruise), custom.IQCarParams(pcmCruiseSpeed=True))
+  helper.set_speed_to_limit = False
+  helper.v_cruise_kph = helper.v_cruise_cluster_kph = 80.0
+  state = car.CarState(cruiseState={"available": True, "speed": 80 * CV.KPH_TO_MS, "speedCluster": 80 * CV.KPH_TO_MS})
+  helper.update_v_cruise(state, True, is_metric)
+  state.buttonEvents = [car.CarState.ButtonEvent(type="accelCruise", pressed=True)]
+  helper.update_v_cruise(state, True, is_metric)
+  assert helper.slc_set_speed_request_id == 0
+  state.buttonEvents = [car.CarState.ButtonEvent(type="accelCruise", pressed=False)]
+  if pcm_cruise:
+    state.cruiseState.speed = state.cruiseState.speedCluster = 81 * CV.KPH_TO_MS
+  helper.update_v_cruise(state, True, is_metric)
+  request = custom.IQCarState.new_message(
+    slcSetSpeedRequestId=helper.slc_set_speed_request_id,
+    slcSetSpeedGestureId=helper.slc_set_speed_gesture_id,
+    slcSetSpeedRequestKph=helper.slc_set_speed_request_kph,
+  )
+  assert request.slcSetSpeedRequestId == 1
+  assert request.slcSetSpeedRequestKph == pytest.approx(helper.v_cruise_kph)
+  state.buttonEvents = []
+  for _ in range(100):
+    helper.update_v_cruise(state, True, is_metric)
+  assert helper.slc_set_speed_request_id == request.slcSetSpeedRequestId
+  assert helper.slc_set_speed_gesture_id == request.slcSetSpeedGestureId
+
+
+def test_stock_cruise_sync_is_not_a_driver_increase():
+  helper = VCruiseHelper(car.CarParams(pcmCruise=True, openpilotLongitudinalControl=True),
+                        custom.IQCarParams(pcmCruiseSpeed=True))
+  helper.set_speed_to_limit = True
+  helper.update_speed_limit_assist(True, TestSpeedLimitSetSpeedMirror._iq_plan(
+    50 * CV.KPH_TO_MS, custom.IQPlan.SpeedLimit.AssistState.active))
+  state = car.CarState(cruiseState={"available": True, "speed": 80 * CV.KPH_TO_MS, "speedCluster": 80 * CV.KPH_TO_MS})
+  for _ in range(10):
+    helper.update_v_cruise(state, True, True)
+  assert helper.slc_set_speed_request_id == 0
+  state.cruiseState.speed = state.cruiseState.speedCluster = 90 * CV.KPH_TO_MS
+  helper.update_v_cruise(state, True, True)
+  assert helper.slc_set_speed_request_id == 0
+
+
+def test_held_increase_uses_one_gesture_and_multiple_requests():
+  helper = VCruiseHelper(car.CarParams(pcmCruise=False), custom.IQCarParams(pcmCruiseSpeed=True))
+  helper.set_speed_to_limit = False
+  helper.v_cruise_kph = 80.0
+  state = car.CarState(cruiseState={"available": True})
+  state.buttonEvents = [car.CarState.ButtonEvent(type="accelCruise", pressed=True)]
+  helper.update_v_cruise(state, True, True)
+  state.buttonEvents = []
+  for _ in range(110):
+    helper.update_v_cruise(state, True, True)
+  assert helper.slc_set_speed_gesture_id == 1
+  assert helper.slc_set_speed_request_id >= 2
+  assert helper.slc_set_speed_request_kph == pytest.approx(helper.v_cruise_kph)
+
+
 def test_set_speed_does_not_follow_limit_when_feature_off():
   # Default off: set speed must stay the driver's value (limiter-only via planner min-blend).
   CP = car.CarParams(pcmCruise=True, openpilotLongitudinalControl=True)

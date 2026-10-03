@@ -4,8 +4,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 Candidate-ladder selection checks for get_nn_model_path, driven by a synthetic
 model directory so the assertions don't depend on which cars ship a model.
 """
-import json
-import os
 
 import pytest
 

@@ -557,7 +557,7 @@ class Tici(HardwareBase):
     if self.get_device_type() in ("tici", "tizi"):
       if initial_eps_apn:
         subprocess.call(["mmcli", "-m", "any", f'--3gpp-set-initial-eps-bearer-settings=apn={initial_eps_apn}'])
-      else:
+      elif is_comma_profile:
         subprocess.call(["mmcli", "-m", "any", '--3gpp-set-initial-eps-bearer-settings=apn='])
 
       cmds += [

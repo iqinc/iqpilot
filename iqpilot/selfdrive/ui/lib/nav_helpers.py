@@ -1,10 +1,15 @@
 import json
 import platform
+import threading
+import time
 from pathlib import Path
 
 from iqpilot.common.params import Params
 
 _MAPBOX_DEFAULT_HELPER_UNAVAILABLE = False
+_MAPBOX_DEFAULT_TOKEN = ""
+_MAPBOX_DEFAULT_RETRY_AT = 0.0
+_MAPBOX_DEFAULT_LOCK = threading.Lock()
 _GPS_SERVICES = ("gpsLocationExternal", "gpsLocation")
 _POSITION_PARAM_KEYS = ("LastGPSPosition", "LastGPSPositionIQLoc")
 
@@ -17,42 +22,60 @@ def _decode_param(value) -> str:
   return ""
 
 
-def resolve_mapbox_token(params: Params | None = None) -> str:
-  global _MAPBOX_DEFAULT_HELPER_UNAVAILABLE
+def active_navigation_route(params: Params) -> dict | None:
+  destination = params.get("NavigationDestination")
+  route = params.get("NavigationRenderRoute")
+  if not isinstance(destination, dict) or not isinstance(route, dict):
+    return None
+  if not params.get_bool("NavigationActive") or not route.get("active"):
+    return None
+  if (route.get("destinationLatitude") != destination.get("latitude")
+      or route.get("destinationLongitude") != destination.get("longitude")):
+    return None
+  return route
 
+
+def _load_default_mapbox_token(params: Params) -> None:
+  global _MAPBOX_DEFAULT_HELPER_UNAVAILABLE, _MAPBOX_DEFAULT_TOKEN, _MAPBOX_DEFAULT_RETRY_AT
+
+  try:
+    try:
+      from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
+      runtime_common = import_verified_module("iqpilot_navd_private", "iqpilot_private.navd.runtime_common")
+    except Exception:
+      _MAPBOX_DEFAULT_HELPER_UNAVAILABLE = True
+      return
+
+    for args in ((params,), ()):
+      try:
+        token = _decode_param(runtime_common.ensure_default_mapbox_token(*args))
+      except TypeError:
+        continue
+      except Exception:
+        return
+      _MAPBOX_DEFAULT_TOKEN = token or _decode_param(params.get("MapboxToken"))
+      return
+  finally:
+    _MAPBOX_DEFAULT_RETRY_AT = time.monotonic() + 60.0
+    _MAPBOX_DEFAULT_LOCK.release()
+
+
+def resolve_mapbox_token(params: Params | None = None) -> str:
   params = params or Params()
   token = _decode_param(params.get("MapboxToken"))
   if token:
     return token
+  if _MAPBOX_DEFAULT_TOKEN or _MAPBOX_DEFAULT_HELPER_UNAVAILABLE:
+    return _MAPBOX_DEFAULT_TOKEN
 
-  if _MAPBOX_DEFAULT_HELPER_UNAVAILABLE:
-    return ""
-
-  try:
-    from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
-    runtime_common = import_verified_module("iqpilot_navd_private", "iqpilot_private.navd.runtime_common")
-  except Exception:
-    _MAPBOX_DEFAULT_HELPER_UNAVAILABLE = True
-    return ""
-
-  for args in ((params,), ()):
+  # Default-token discovery can perform network and runtime verification work.
+  if time.monotonic() >= _MAPBOX_DEFAULT_RETRY_AT and _MAPBOX_DEFAULT_LOCK.acquire(blocking=False):
     try:
-      token = _decode_param(runtime_common.ensure_default_mapbox_token(*args))
-    except TypeError:
-      continue
+      threading.Thread(target=_load_default_mapbox_token, args=(params,), daemon=True, name="mapbox-token").start()
     except Exception:
-      token = ""
-
-    if not token:
-      token = _decode_param(params.get("MapboxToken"))
-    if token:
-      return token
-
-  return _decode_param(params.get("MapboxToken"))
-
-
-def has_mapbox_token(params: Params | None = None) -> bool:
-  return bool(resolve_mapbox_token(params))
+      _MAPBOX_DEFAULT_LOCK.release()
+      raise
+  return ""
 
 
 def _valid_lat_lon(lat: float, lon: float) -> bool:
@@ -67,11 +90,8 @@ def _float_field(data: dict, *names: str) -> float:
 
 
 def _position_from_json(raw) -> tuple[float, float, float, bool]:
-  text = _decode_param(raw)
-  if not text:
-    return 0.0, 0.0, 0.0, False
   try:
-    data = json.loads(text)
+    data = raw if isinstance(raw, dict) else json.loads(_decode_param(raw))
     if not isinstance(data, dict):
       return 0.0, 0.0, 0.0, False
     lat = _float_field(data, "latitude", "lat")
@@ -104,14 +124,9 @@ def _position_from_params(params: Params) -> tuple[float, float, float, bool]:
 
 
 def current_or_last_gps_position(params: Params | None = None) -> tuple[float, float, float, bool]:
-  # ui_state is imported lazily AND guarded: night-mode init constructs the ui_state singleton,
-  # which calls in here before the module finishes importing. In that window the import raises
-  # (partially initialized module) — fall back to the params path (Night Mode passes self.params),
-  # since there's no live GPS during boot anyway.
-  try:
-    from iqpilot.selfdrive.ui.ui_state import ui_state
-  except ImportError:
-    ui_state = None
+  # This helper also runs before UI initialization has completed.
+  import sys
+  ui_state = getattr(sys.modules.get("iqpilot.selfdrive.ui.ui_state"), "ui_state", None)
 
   if ui_state is not None:
     for service in _GPS_SERVICES:

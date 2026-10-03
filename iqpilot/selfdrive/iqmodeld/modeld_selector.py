@@ -63,6 +63,11 @@ def resolve_model_name(params, keys) -> str:
     from iqpilot.selfdrive.iqmodeld.egpu_model import DEFAULT_EGPU_MODEL, resolve_egpu_model
     resolved = resolve_egpu_model(params, allow_refresh=False)
     return resolved["key"] if resolved else DEFAULT_EGPU_MODEL
+  if params.get_bool("IQEmacSmallModel"):
+    from iqpilot.selfdrive.iqmodeld.models.helpers import get_active_bundle
+    bundle = get_active_bundle(params)
+    if bundle is not None and (bundle.internalName or bundle.displayName):
+      return bundle.internalName or bundle.displayName
   name = params.get("IQEmacModel") or b"lebrowski"
   return name.decode() if isinstance(name, bytes) else name
 
@@ -105,7 +110,10 @@ def wait_for_big(big_channel, target: int, deadline: float, min_frame: int = -1,
   big_peek = None
   grab_at = deadline - 0.004
   while time.perf_counter() < deadline:
-    bfid = big_channel.peek_frame_id()
+    bfid, writing = big_channel.peek()
+    if writing:
+      time.sleep(0.0002)
+      continue
     big_peek = bfid
     if bfid == target - 1 and time.perf_counter() < grab_at:
       time.sleep(0.0005)
@@ -114,11 +122,20 @@ def wait_for_big(big_channel, target: int, deadline: float, min_frame: int = -1,
       got = big_channel.read()
       if got is not None and got[0] == bfid:
         return got[1], big_peek
-      break
+      time.sleep(0.0002)
+      continue
     if bfid is None or bfid <= min_frame or bfid > target + BIG_FUTURE_ACCEPT or target - bfid > max_lag_frames:
       break
     time.sleep(0.0005)
   return None, big_peek
+
+
+def hold_big_plan(active: bool, last_big_payload: dict | None, last_big_published: int, target: int,
+                  max_lag_frames: int = BIG_MAX_LAG_FRAMES) -> dict | None:
+  # a big model slower than 20 Hz left gaps the small model filled, so two different models steered on alternate frames
+  if not active or last_big_payload is None or last_big_published < 0:
+    return None
+  return last_big_payload if 0 <= target - last_big_published <= max_lag_frames else None
 
 
 class BigLatch:
@@ -159,32 +176,50 @@ class BigLatch:
     return False, False
 
 
+BIG_SOURCES = frozenset({"egpu_big", "mac_big"})
+
+
 def _patch_and_send(pm: PubMaster, payload: dict, frame_drop_perc: float, selector_dropped: int,
-                    target: int, source_lag: int, mismatch: bool | None = None) -> None:
+                    target: int, source_lag: int, mismatch: bool | None = None, pose_payload: dict | None = None,
+                    backup_payload: dict | None = None) -> None:
   msgs = payload["msgs"]
   if mismatch is None:
     mismatch = source_lag > 0
 
+  big = bool(payload.get("big", payload.get("source") in BIG_SOURCES))
   model_msg = log_from_bytes(msgs["modelV2"]).as_builder()
   if mismatch:
     model_msg.modelV2.frameId = target
     model_msg.modelV2.frameAge = max(model_msg.modelV2.frameAge, source_lag)
   model_msg.modelV2.frameDropPerc = frame_drop_perc
+  model_msg.modelV2.big = big
   pm.send("modelV2", model_msg)
 
   driving_msg = log_from_bytes(msgs["drivingModelData"]).as_builder()
   if mismatch:
     driving_msg.drivingModelData.frameId = target
   driving_msg.drivingModelData.frameDropPerc = frame_drop_perc
+  driving_msg.drivingModelData.big = big
   pm.send("drivingModelData", driving_msg)
 
-  pose_msg = log_from_bytes(msgs["cameraOdometry"]).as_builder()
-  if mismatch:
+  # a stale big plan still beats the fallback, but its pose is for another frame; paramsd needs this frame's
+  pose_src, pose_mismatch = payload, mismatch
+  if mismatch and pose_payload is not None:
+    pose_src, pose_mismatch = pose_payload, False
+  pose_msg = log_from_bytes(pose_src["msgs"]["cameraOdometry"]).as_builder()
+  if pose_mismatch:
     pose_msg.cameraOdometry.frameId = target
-  pose_msg.valid = bool(payload["live_calib_seen"]) and selector_dropped < 1 and not mismatch
+  pose_msg.valid = bool(pose_src["live_calib_seen"]) and selector_dropped < 1 and not pose_mismatch
   pm.send("cameraOdometry", pose_msg)
 
-  pm.send("iqDriveModelData", msgs["iqDriveModelData"])
+  if not big or backup_payload is None:
+    pm.send("iqDriveModelData", msgs["iqDriveModelData"])
+    return
+  iq_msg = log_from_bytes(msgs["iqDriveModelData"]).as_builder()
+  backup = log_from_bytes(backup_payload["msgs"]["modelV2"]).modelV2.position
+  path = iq_msg.iqDriveModelData.backupPath
+  path.x, path.y, path.z = list(backup.x), list(backup.y), list(backup.z)
+  pm.send("iqDriveModelData", iq_msg)
 
 
 def _read_float(params, key: str, default: float) -> float:
@@ -215,6 +250,8 @@ def main() -> None:
   run_count = 0
   last_published = -1
   last_big_published = -1
+  last_big_payload: dict | None = None
+  held_count = 0
   frame_dropped_filter = FirstOrderFilter(0.0, 10.0, 1.0 / MODEL_FREQ)
   recent_big = deque(maxlen=STATUS_WINDOW)
   model_name = resolve_model_name(params, keys)
@@ -246,6 +283,7 @@ def main() -> None:
       cloudlog.warning(f"modeld_selector frame reset {last_published} -> {fid}; re-arming")
       last_published = -1
       last_big_published = -1
+      last_big_payload = None
       big_used_count = 0
       run_count = 0
       latch = BigLatch()
@@ -264,6 +302,7 @@ def main() -> None:
         model_name = resolve_model_name(params, keys)
         recent_big.clear()
         last_big_published = -1
+        last_big_payload = None
         big_used_count = 0
         run_count = 0
         latch = BigLatch()
@@ -279,6 +318,7 @@ def main() -> None:
 
     payload = None
     used_big = False
+    held = False
     big_peek = None
     if big_channel is not None and not latch.done:
       deadline = t_start + BIG_MODEL_DEADLINE
@@ -302,6 +342,8 @@ def main() -> None:
           miss_reasons["head_prev_timeout"] += 1
         else:
           miss_reasons["read_race"] += 1
+        payload = hold_big_plan(latch.active, last_big_payload, last_big_published, target)
+        used_big = held = payload is not None
 
     if payload is None:
       payload = small_payload
@@ -333,8 +375,11 @@ def main() -> None:
         frames_dropped = 0.0
       run_count += 1
       recent_big.append(used_big)
-      if used_big:
+      if held:
+        held_count += 1
+      elif used_big:
         big_used_count += 1
+        last_big_payload = payload
         big_fid = int(payload.get("frame_id", big_peek if big_peek is not None else target))
         last_big_published = min(big_fid, target)
         last_latency_ms = float(payload.get("model_execution_time", 0.0)) * 1e3
@@ -357,12 +402,15 @@ def main() -> None:
         }))
       if run_count % 100 == 0:
         cloudlog.warning(f"modeld_selector misses: {miss_reasons}")
-        cloudlog.warning(f"modeld_selector: big_used={big_used_count}/{run_count} "
-                         f"last_big_peek={big_peek} target={target} active={latch.active} "
-                         f"max_big_lag={BIG_MAX_LAG_FRAMES}")
+        pwriter.put_bool(keys["active"], latch.active)
+        cloudlog.warning(f"modeld_selector: big_used={big_used_count}/{run_count} held={held_count} "
+                         + f"last_big_peek={big_peek} target={target} active={latch.active} "
+                         + f"max_big_lag={BIG_MAX_LAG_FRAMES}")
 
       frame_drop_perc = 100.0 * frames_dropped / (1.0 + frames_dropped)
-      _patch_and_send(pm, payload, frame_drop_perc, selector_dropped, target, source_lag, frame_mismatch)
+      _patch_and_send(pm, payload, frame_drop_perc, selector_dropped, target, source_lag, frame_mismatch,
+                      pose_payload=small_payload if used_big else None,
+                      backup_payload=small_payload if used_big else None)
       last_published = target
 
 

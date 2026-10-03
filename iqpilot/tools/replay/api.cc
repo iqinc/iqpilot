@@ -110,11 +110,11 @@ std::string create_token(bool use_jwt, const json11::Json &payloads, int expiry)
     return create_jwt(payloads, expiry);
   }
 
-  std::string token_json = util::read_file(util::getenv("HOME") + "/.comma/auth.json");
+  std::string token_json = util::read_file(util::getenv("HOME") + "/.iq/auth.json");
+  if (token_json.empty()) return {};
   std::string err;
   auto json = json11::Json::parse(token_json, err);
   if (!err.empty()) {
-    std::cerr << "Error parsing auth.json " << err << std::endl;
     return "";
   }
   return json["access_token"].string_value();
@@ -139,6 +139,8 @@ std::string httpGet(const std::string &url, long *response_code) {
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, writeCallback);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
   curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
 
   // Handle headers
   struct curl_slist *headers = nullptr;
@@ -202,12 +204,26 @@ std::string getRouteFiles(const std::string &route) {
   return apiCall(routeFilesPath(route));
 }
 
+std::string getUser() {
+  if (create_token(false).empty()) return R"({"error": "unauthorized"})";
+  return apiCall("v1/me");
+}
+
+static std::string userApiCall(const std::string &path) {
+  const auto user = getUser();
+  std::string error;
+  const auto json = json11::Json::parse(user, error);
+  if (!error.empty() || !json.is_object()) return R"({"error": "network"})";
+  if (json["error"].is_string()) return user;
+  return apiCall(path);
+}
+
 std::string getDevices() {
-  return apiCall(devicesPath());
+  return userApiCall(devicesPath());
 }
 
 std::string getDeviceRoutes(const std::string &dongle_id, int64_t start_ms, int64_t end_ms, bool preserved) {
-  return apiCall(deviceRoutesPath(dongle_id, start_ms, end_ms, preserved));
+  return userApiCall(deviceRoutesPath(dongle_id, start_ms, end_ms, preserved));
 }
 
 }  // namespace CommaApi

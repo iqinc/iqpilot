@@ -12,14 +12,12 @@ from iqpilot.system.ui.lib.multilang import tr
 class DashcamLayoutMici(NavScroller):
   def __init__(self):
     super().__init__()
-    self._dashcam = BigParamControl(tr("enable dashcam"), "DashcamEnabled", toggle_callback=restart_needed_callback)
     self._record_front = BigParamControl(tr("record driver camera"), "RecordFront", toggle_callback=restart_needed_callback)
     self._record_audio = BigParamControl(tr("record microphone audio"), "RecordAudio", toggle_callback=restart_needed_callback)
 
-    self._scroller.add_widgets([self._dashcam, self._record_front, self._record_audio])
+    self._scroller.add_widgets([self._record_front, self._record_audio])
 
     self._refresh_toggles = (
-      ("DashcamEnabled", self._dashcam),
       ("RecordFront", self._record_front),
       ("RecordAudio", self._record_audio),
     )

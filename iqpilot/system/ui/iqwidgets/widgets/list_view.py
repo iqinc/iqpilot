@@ -17,7 +17,6 @@ import unicodedata
 from iqpilot.common.params import Params, UnknownKeyName
 from iqpilot.system.ui.widgets.label import gui_label
 from iqpilot.system.ui.lib.application import gui_app, MousePos, FontWeight
-from iqpilot.system.ui.widgets import Widget
 from iqpilot.system.ui.widgets.list_view import (ListItem, ToggleAction, ItemAction, MultipleButtonAction,
                                                    ButtonAction, _resolve_value, DualButtonAction)
 
@@ -27,19 +26,6 @@ _Pred = Callable[[], bool]
 LABEL_WIDTH = 350  # hoisted: used as a default arg in option_item before the option-control section
 _SPINNER_TEAL = rl.Color(16, 185, 169, 255)
 _SPINNER_HALO = rl.Color(255, 255, 255, 26)
-
-
-class Spacer(Widget):
-  def __init__(self, height: int = 1):
-    super().__init__()
-    self._rect = rl.Rectangle(0, 0, 0, height)
-
-  def set_parent_rect(self, parent_rect: rl.Rectangle) -> None:
-    super().set_parent_rect(parent_rect)
-    self._rect.width = parent_rect.width
-
-  def _render(self, _):
-    pass
 
 
 class IQLineSeparator(LineSeparator):
@@ -60,26 +46,6 @@ class IQToggleAction(ToggleAction):
     self.toggle = IQToggle(initial_state=initial_state, callback=callback, param=param)
 
 
-class SafeIQToggleAction(IQToggleAction):
-  """Toggle bound to a param that may be missing from the build's registry.
-
-  IQToggle's ParamSlot already degrades reads/writes on unknown keys; this
-  adds the caller-chosen fallback state and skips the callback on dead keys.
-  """
-
-  def __init__(self, param: str, default_on: bool = True, width: int = metrics.TOGGLE_W,
-               enabled: bool | _Pred = True, callback: Callable[[bool], None] | None = None):
-    slot = ParamSlot(param)
-
-    def _guarded(state: bool):
-      if slot.write(state) and callback:
-        callback(state)
-
-    super().__init__(initial_state=slot.read_bool(default_on), width=width, enabled=enabled,
-                     callback=_guarded, param=param)
-    self.toggle._slot = slot  # share one slot; IQToggle re-syncs from it every frame
-
-
 class IQButton(Button):
   def _update_state(self):
     super()._update_state()
@@ -98,37 +64,6 @@ class IQButton(Button):
         return rl.Color(min(255, c.r + 22), min(255, c.g + 22), min(255, c.b + 22), 255), None
       return c, None
     return (ink.PUSH_PRESSED if self.is_pressed else ink.PUSH), None
-
-
-class NavSectionButton(IQButton):
-  """A clean navigable section row: icon (left) + label + chevron (right), full width."""
-
-  def __init__(self, text, icon_path: str | None = None, click_callback: Callable | None = None):
-    super().__init__(text, click_callback=click_callback, button_style=ButtonStyle.NORMAL, text_padding=0)
-    self._label_src = text
-    self._icon = gui_app.texture(icon_path, 64, 64, keep_aspect_ratio=True) if icon_path else None
-    self._chevron = gui_app.texture("icons/iq/chevron_right.png", 50, 50, keep_aspect_ratio=True)
-    self._border_radius = 40
-
-  def _render(self, _):
-    rect = self._rect
-    roundness = self._border_radius / (min(rect.width, rect.height) / 2)
-    canvas.panel(rect, roundness, 10, self._background_color)
-
-    cy = rect.y + rect.height / 2
-    x = rect.x + 44
-    if self._icon:
-      rl.draw_texture(self._icon, int(x), int(cy - self._icon.height / 2), rl.WHITE)
-      x += self._icon.width + 30
-
-    text = self._label_src() if callable(self._label_src) else self._label_src
-    font = gui_app.font(FontWeight.MEDIUM)
-    fs = 58
-    ts = measure_text_cached(font, text, fs)
-    canvas.glyphs(font, text, rl.Vector2(int(x), int(cy - ts.y / 2)), fs, rl.WHITE)
-
-    rl.draw_texture(self._chevron, int(rect.x + rect.width - 44 - self._chevron.width),
-                    int(cy - self._chevron.height / 2), rl.Color(170, 172, 178, 255))
 
 
 class IQSimpleButtonAction(ItemAction):
@@ -732,6 +667,9 @@ class IQOptionControl(ItemAction):
     if self.on_value_changed:
       self.on_value_changed(value)
 
+  def sync_from_param(self):
+    self.current_value = self._clamp(self._codec.position_of(self._slot.read_raw(), self.min_value))
+
   def get_displayed_value(self) -> str:
     return self._codec.label(self.current_value)
 
@@ -833,15 +771,17 @@ class ProgressBarAction(ItemAction):
     self.text = ""
     self.show_progress = False
     self.indeterminate = False
+    self.gradient = True
     self.text_color = rl.GRAY
     self._font = gui_app.font(FontWeight.NORMAL)
 
-  def update(self, progress, text, show_progress=False, text_color=rl.GRAY, indeterminate=False):
+  def update(self, progress, text, show_progress=False, text_color=rl.GRAY, indeterminate=False, gradient=True):
     self.progress = progress
     self.text = text
     self.show_progress = show_progress
     self.text_color = text_color
     self.indeterminate = indeterminate
+    self.gradient = gradient
 
   def _bar_geometry(self, rect: rl.Rectangle) -> tuple[rl.Rectangle, float]:
     """Right-aligned bar sized to the text; a "NN% - detail" label reserves the
@@ -887,7 +827,11 @@ class ProgressBarAction(ItemAction):
           head = phase * (1.0 + _SWEEP_FRACTION)
           self._fill_span(track, head - _SWEEP_FRACTION, head)
         else:
-          self._fill_span(track, 0.0, self.progress / 100.0)
+          if self.gradient:
+            self._fill_span(track, 0.0, self.progress / 100.0)
+          else:
+            width = track.width * max(0.0, min(100.0, self.progress)) / 100.0
+            canvas.panel(rl.Rectangle(track.x, track.y, width, track.height), 0.5, 12, FILL_START)
 
     label_h = measure_text_cached(self._font, self.text, _FONT_SIZE).y
     rl.draw_text_ex(self._font, self.text, rl.Vector2(bar.x + text_dx, bar.y + (_BAR_H - label_h) / 2),
@@ -897,15 +841,12 @@ class ProgressBarAction(ItemAction):
 def progress_item(title):
   return ListItem(title=title, action_item=ProgressBarAction())
 
-from dataclasses import dataclass, field
-from iqpilot.common.params import Params
-from iqpilot.system.ui.iqwidgets.lib.styles import ink
+from dataclasses import dataclass, field, replace
 from iqpilot.system.ui.iqwidgets.widgets.helpers.glyphs import draw_star
-from iqpilot.system.ui.lib.application import FontWeight, gui_app
-from iqpilot.system.ui.lib.application import gui_app
+from iqpilot.system.ui.iqwidgets.widgets.helpers.status_pill import StatusPill, draw_status_pill, status_pill_width
 from iqpilot.system.ui.lib.multilang import tr
 from iqpilot.system.ui.widgets import DialogResult
-from iqpilot.system.ui.widgets.button import Button, ButtonStyle, BUTTON_PRESSED_BACKGROUND_COLORS
+from iqpilot.system.ui.widgets.button import BUTTON_PRESSED_BACKGROUND_COLORS
 from iqpilot.system.ui.widgets.html_render import HtmlModal
 from iqpilot.system.ui.widgets.keyboard import Keyboard
 from iqpilot.system.ui.widgets.option_dialog import MultiOptionDialog
@@ -920,6 +861,10 @@ TREE_SEARCH_PRESSED = rl.Color(58, 62, 70, 255)
 TREE_SEARCH_BORDER = rl.Color(255, 255, 255, 38)
 
 _STAR_SLOT = 90          # right-edge inset reserved for the favourite star
+_DETAIL_FONT_SIZE = 30
+_DETAIL_GAP = 16
+_DETAIL_COLOR = rl.Color(150, 150, 155, 255)
+_SELECTED_PILL_COLOR = rl.Color(255, 255, 255, 255)
 _ROW_H = 120
 _FRAME_PAD = 50
 
@@ -940,7 +885,8 @@ class _TreeRow(Button):
   """One rendered row: a brand/folder header, or a selectable leaf with an optional star."""
 
   def __init__(self, text, ref, is_folder=False, indent_level=0, click_callback=None,
-               favorite_callback=None, is_favorite=False, is_expanded=False):
+               favorite_callback=None, is_favorite=False, is_expanded=False, show_leaf_accent=True,
+               status_pill: StatusPill | None = None, detail_text: str = ""):
     super().__init__(text, click_callback, button_style=ButtonStyle.NORMAL,
                      text_alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT,
                      text_padding=20 + indent_level * 30, elide_right=True)
@@ -952,6 +898,9 @@ class _TreeRow(Button):
     self.selected = False
     self.is_expanded = is_expanded
     self._favorite_callback = favorite_callback
+    self._show_leaf_accent = show_leaf_accent
+    self.status_pill = status_pill
+    self.detail_text = detail_text
     self.text_padding = 20 + indent_level * 30
     self.border_radius = 10
 
@@ -981,12 +930,34 @@ class _TreeRow(Button):
                              40, 40, keep_aspect_ratio=True)
       rl.draw_texture(chev, int(self._rect.x + self.text_padding + 6), int(cy - chev.height / 2), rl.Color(205, 205, 210, 255))
       text_offset = self.text_padding + 6 + 40 + 22
-    elif self.indent_level > 0 and not self.selected:
+    elif self._show_leaf_accent and self.indent_level > 0 and not self.selected:
       # teal accent marking a model under the expanded brand
       rl.draw_rectangle_rounded(rl.Rectangle(self._rect.x + 16, cy - 24, 6, 48), 1.0, 4, TREE_TEAL)
 
+    label_right = self._rect.x + self._rect.width - _STAR_SLOT
+    decorated = not self.is_folder and (self.status_pill is not None or self.detail_text)
+    if decorated:
+      deco_right = self._rect.x + self._rect.width - (_STAR_SLOT + 50 if self._favorite_callback else 24)
+      detail_font = gui_app.font(FontWeight.NORMAL)
+      detail_size = measure_text_cached(detail_font, self.detail_text, _DETAIL_FONT_SIZE) if self.detail_text else None
+      deco_left = deco_right
+      if self.status_pill is not None:
+        deco_left -= status_pill_width(self.status_pill) + _DETAIL_GAP
+      if detail_size is not None:
+        deco_left -= detail_size.x + _DETAIL_GAP
+      label_right = min(label_right, deco_left)
+
     self._label.render(rl.Rectangle(self._rect.x + text_offset, self._rect.y,
-                                    self._rect.width - text_offset - _STAR_SLOT, self._rect.height))
+                                    label_right - self._rect.x - text_offset, self._rect.height))
+
+    if decorated:
+      x = deco_right
+      if self.status_pill is not None:
+        pill = replace(self.status_pill, color=_SELECTED_PILL_COLOR) if self.selected else self.status_pill
+        x = draw_status_pill(pill, x, cy) - _DETAIL_GAP
+      if detail_size is not None:
+        rl.draw_text_ex(detail_font, self.detail_text, rl.Vector2(x - detail_size.x, cy - detail_size.y / 2),
+                        _DETAIL_FONT_SIZE, 0, _DETAIL_COLOR)
 
     if not self.is_folder and self._favorite_callback:
       draw_star(self._rect.x + self._rect.width - _STAR_SLOT, cy, 40, self.is_favorite,
@@ -1003,7 +974,9 @@ class PickerDialog(MultiOptionDialog):
   """Folder/leaf picker with search, favourites, and a pinned current selection."""
 
   def __init__(self, title, folders, current_ref="", fav_param="", option_font_weight=FontWeight.MEDIUM, search_prompt=None,
-               get_folders_fn=None, on_exit=None, display_func=None, search_funcs=None, search_title=None, search_subtitle=None):
+               get_folders_fn=None, on_exit=None, display_func=None, search_funcs=None, search_title=None, search_subtitle=None,
+               show_leaf_accent=True, header_action_text=None, header_action=None, header_action_enabled=True,
+               pin_current=True):
     super().__init__(title, [], current_ref, option_font_weight)
     self.folders = folders
     self.selection_ref = current_ref
@@ -1015,6 +988,7 @@ class PickerDialog(MultiOptionDialog):
     self.query = ""
     self.search_prompt = search_prompt or tr("Search")
     self.get_folders_fn = get_folders_fn
+    self._last_folder_refresh = 0.0
     self.on_exit = on_exit
     self.display_func = display_func or (lambda node: node.data.get('display_name', node.ref))
     self.search_funcs = search_funcs or [lambda node: node.data.get('display_name', ''), lambda node: node.data.get('short_name', '')]
@@ -1022,6 +996,12 @@ class PickerDialog(MultiOptionDialog):
     self.search_subtitle = search_subtitle
     self._search_rect: rl.Rectangle | None = None
     self._search_pressed = False
+    self.show_leaf_accent = show_leaf_accent
+    self.pin_current = pin_current
+    self._header_action = Button(header_action_text, click_callback=header_action, font_size=34,
+                                 button_style=ButtonStyle.NORMAL, border_radius=28) if header_action_text and header_action else None
+    if self._header_action is not None:
+      self._header_action.set_enabled(header_action_enabled)
 
     self.selection_node = self._locate_current(current_ref)
     if self.selection_node is not None:
@@ -1051,13 +1031,14 @@ class PickerDialog(MultiOptionDialog):
       fav_cb = lambda n=node: self._toggle_favorite(n)  # noqa: E731
     return _TreeRow(self.display_func(node), node.ref, False, depth,
                     lambda n=node: self._select_node(n),
-                    fav_cb, node.ref in self.favorites, is_expanded=expanded)
+                    fav_cb, node.ref in self.favorites, is_expanded=expanded, show_leaf_accent=self.show_leaf_accent,
+                    status_pill=node.data.get('status_pill'), detail_text=node.data.get('detail_text', ""))
 
   def _build_visible_items(self, reset_scroll=True):
     rows: list[_TreeRow] = []
 
     # Pinned selected item at the very top (if any)
-    pinned = getattr(self, "selection_node", None)
+    pinned = getattr(self, "selection_node", None) if self.pin_current else None
     if pinned is not None:
       self.selection = self.current = self.display_func(pinned)
       rows.append(self._leaf_row(pinned, 0, expanded=True))
@@ -1112,12 +1093,27 @@ class PickerDialog(MultiOptionDialog):
 
     open_text_prompt(self.search_title, self.search_subtitle, initial=self.query, on_done=_apply)
 
+  def _update_state(self):
+    now = time.monotonic()
+    if self.get_folders_fn and now - self._last_folder_refresh >= 1.0:
+      self._last_folder_refresh = now
+      folders = self.get_folders_fn(self.favorites)
+      if folders != self.folders:
+        self.folders = folders
+        self._build_visible_items(reset_scroll=False)
+
   # -- drawing --------------------------------------------------------------
   def _render(self, rect):
     frame = rl.Rectangle(rect.x + _FRAME_PAD, rect.y + _FRAME_PAD, rect.width - 2 * _FRAME_PAD, rect.height - 2 * _FRAME_PAD)
     rl.draw_rectangle_rounded(frame, 0.02, 20, rl.BLACK)
 
-    title_rect = rl.Rectangle(frame.x + _FRAME_PAD, frame.y + _FRAME_PAD, frame.width * 0.5, 70)
+    title_x = frame.x + _FRAME_PAD
+    title_right = frame.x + frame.width - _FRAME_PAD
+    if self._header_action is not None:
+      action_rect = rl.Rectangle(title_right - 390, frame.y + _FRAME_PAD + 3, 390, 72)
+      self._header_action.render(action_rect)
+      title_right = action_rect.x - 35
+    title_rect = rl.Rectangle(title_x, frame.y + _FRAME_PAD, title_right - title_x, 78)
     gui_label(title_rect, self.title, 70, font_weight=FontWeight.BOLD)
 
     search_bottom = self._draw_search_field(frame, title_rect.y + title_rect.height + 36)

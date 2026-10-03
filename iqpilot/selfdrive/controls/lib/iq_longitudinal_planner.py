@@ -63,8 +63,6 @@ class LongitudinalPlannerIQ:
     CS = sm['carState']
     v_cruise_cluster_kph = min(CS.vCruiseCluster, V_CRUISE_MAX)
     v_cruise_cluster = v_cruise_cluster_kph * CV.KPH_TO_MS
-    # SLC should apply whenever IQ.Pilot is engaged, even on stock-longitudinal cars
-    # where carControl.longActive stays false.
     slc_apply_enabled = bool(getattr(sm['selfdriveState'], "enabled", False))
 
     nav_state = sm['iqNavState']
@@ -75,7 +73,6 @@ class LongitudinalPlannerIQ:
     self.nav_accel_target = float(getattr(nav_state, "accelTarget", 0.0))
     self.nav_valid = bool(getattr(nav_state, "valid", False) and self.nav_engaged)
 
-    # IQ.Pilot custom Speed Limit Controller
     now = datetime.now()
     if hasattr(sm, "alive"):
       time_validated = sm.alive.get('clocks', False) and getattr(sm['clocks'], 'timeValid', False)
@@ -85,8 +82,6 @@ class LongitudinalPlannerIQ:
     slc_v_cruise = self.slimit.update(slc_apply_enabled, now, time_validated, v_cruise, v_ego, sm)
     self.iq_dynamic.set_slc_experimental_mode(self.slimit.slc_experimental_mode)
     self.iq_dynamic.update(sm)
-    # Prefer confirmed controller output for UI/planner rendering.
-    # Fall back to active (policy-resolved) target/source when confirmed is unavailable.
     display_speed_limit = self.slimit.slc_target if self.slimit.slc_target > 0 else self.slimit.slc_active_target
     display_source = self.slimit.slc_source if self.slimit.slc_source != "None" else self.slimit.slc_active_source
 
@@ -96,7 +91,6 @@ class LongitudinalPlannerIQ:
     elif display_source == "None":
       self.speed_limit_last = 0.0
       self.speed_limit_final_last = 0.0
-    # Respect user-defined max cruise speed when applying SLC.
     if v_cruise_cluster > 0 and self.speed_limit_final_last > 0:
       self.speed_limit_final_last = min(self.speed_limit_final_last, v_cruise_cluster)
     source_map = {
@@ -117,15 +111,11 @@ class LongitudinalPlannerIQ:
     self.source = min(targets, key=lambda k: targets[k])
     self.output_v_target = targets[self.source]
     self.output_v_target = self._apply_force_stop(self.output_v_target, v_ego, sm, slc_apply_enabled)
-    # envelope shaping only in Assist mode: info/warn must never change the plan
     self._envelope_enabled = (slc_apply_enabled and bool(getattr(self.slimit, "controller_enabled", False))
                               and bool(getattr(self.slimit, "mode_assist", False)))
     return self.output_v_target
 
   def cruise_envelope(self, v_target: float, v_ego: float, t_idxs) -> np.ndarray:
-    """Per-timestep cruise speed over the MPC horizon: the scalar target, shaped down
-    ahead of an upcoming lower speed limit so the solver decelerates before the sign
-    instead of at it."""
     env = np.full(len(t_idxs), max(float(v_target), 0.0))
     if not getattr(self, "_envelope_enabled", False):
       return env
@@ -193,8 +183,11 @@ class LongitudinalPlannerIQ:
       plan_msg.vTarget = float(self.output_v_target)
       plan_msg.aTarget = float(self.output_a_target)
       plan_msg.events = self.events_iq.to_msg()
+      if hasattr(self, 'distance_control'):
+        plan_msg.distanceControl = self.distance_control.state.to_dict()
+      if hasattr(self, 'accel_boost'):
+        plan_msg.accelBoost = float(self.accel_boost.value)
 
-      # IQ.Dynamic control state
       iq_dynamic = plan_msg.iqDynamic
       iq_dynamic.state = IQDynamicState.blended if self.iq_dynamic.mode() == 'blended' else IQDynamicState.acc
       iq_dynamic.enabled = self.iq_dynamic.enabled()
@@ -208,7 +201,6 @@ class LongitudinalPlannerIQ:
       nav_summary.accelTarget = float(self.nav_accel_target)
       nav_summary.valid = self.nav_valid
 
-      # Speed Limit
       speedLimit = plan_msg.speedLimit
       resolver = speedLimit.resolver
       speed_limit = float(self.slimit.slc_target if self.slimit.slc_target > 0 else self.slimit.slc_active_target)

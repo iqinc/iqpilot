@@ -52,9 +52,9 @@ sync_python_env() {
   fi
   VENV_SITE_PACKAGES="$("$DIR/.venv/bin/python3" -c 'import site; print(site.getsitepackages()[0])' 2>/dev/null || true)"
   PACKAGES_READY=0
-  if [ -d "$DIR/artifacts/package_runtime" ] && PYTHONPATH="$DIR/artifacts/package_runtime" /usr/local/venv/bin/python3 -c "import iqdbc, msgq, panda, tinygrad" 2>/dev/null; then
+  if [ -d "$DIR/artifacts/package_runtime" ] && PYTHONPATH="$DIR/artifacts/package_runtime" /usr/local/venv/bin/python3 -c "import iqdbc, msgq, panda, tinygrad, capnp" 2>/dev/null; then
     PACKAGES_READY=1
-  elif [ "$PACKAGE_LOCK_SHA" = "$INSTALLED_PACKAGE_LOCK_SHA" ] && "$DIR/.venv/bin/python3" -c "import iqdbc, msgq, panda, tinygrad" 2>/dev/null \
+  elif [ "$PACKAGE_LOCK_SHA" = "$INSTALLED_PACKAGE_LOCK_SHA" ] && "$DIR/.venv/bin/python3" -c "import iqdbc, msgq, panda, tinygrad, capnp" 2>/dev/null \
       && "$DIR/.venv/bin/python3" "$DIR/iqpilot/system/runtime_packages_verify.py"; then
     # a top-level import passes on a partially extracted install (lazy backends),
     # so readiness also requires every wheel RECORD file to exist on disk
@@ -66,6 +66,10 @@ sync_python_env() {
   elif [ "$RUNTIME_WHEEL_LOCK_SHA" = "$INSTALLED_RUNTIME_WHEEL_LOCK_SHA" ] && "$DIR/.venv/bin/python3" -c "import libdatachannel" 2>/dev/null \
       && PYTHONPATH="$DIR" "$DIR/.venv/bin/python3" "$DIR/iqpilot/system/runtime_wheels_verify.py"; then
     RUNTIME_WHEELS_READY=1
+  fi
+  if [ ! -f "$DIR/prebuilt" ] && [ ! -x "$DIR/.venv/bin/python3" ]; then
+    PACKAGES_READY=0
+    RUNTIME_WHEELS_READY=0
   fi
   if [ "$PACKAGES_READY" != "1" ] || [ "$RUNTIME_WHEELS_READY" != "1" ]; then
     UV_CACHE_DIR="$DIR/.uv-cache"
@@ -79,14 +83,19 @@ sync_python_env() {
     fi
     if [ "$PACKAGES_READY" != "1" ]; then
       IQDBC_PACKAGE_SOURCE=""
+      PYCAPNP_PACKAGE_SOURCE=""
       PACKAGE_SOURCES=()
       while IFS=$'\t' read -r package_name package_source; do
-        PACKAGE_SOURCES+=("$package_source")
         if [ "$package_name" = "iqdbc" ]; then
           IQDBC_PACKAGE_SOURCE="$package_source"
+          PACKAGE_SOURCES+=("$package_source")
+        elif [ "$package_name" = "pycapnp" ]; then
+          PYCAPNP_PACKAGE_SOURCE="$package_source"
+        else
+          PACKAGE_SOURCES+=("$package_source")
         fi
       done < <(/usr/local/venv/bin/python3 "$DIR/iqpilot/system/runtime_package_sources.py" "$DIR")
-      if [ "${#PACKAGE_SOURCES[@]}" = "0" ] || [ -z "$IQDBC_PACKAGE_SOURCE" ]; then
+      if [ "${#PACKAGE_SOURCES[@]}" = "0" ] || [ -z "$IQDBC_PACKAGE_SOURCE" ] || [ -z "$PYCAPNP_PACKAGE_SOURCE" ]; then
         return 1
       fi
       PACKAGE_BUILD_PYTHONPATH="$BASE_SITE_PACKAGES:$VENV_SITE_PACKAGES"
@@ -100,6 +109,8 @@ sync_python_env() {
       if [ -n "$EIGEN_INCLUDE_ROOT" ]; then
         PACKAGE_BUILD_CPATH="$EIGEN_INCLUDE_ROOT${PACKAGE_BUILD_CPATH:+:$PACKAGE_BUILD_CPATH}"
       fi
+      UV_CACHE_DIR="$UV_CACHE_DIR" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
+        uv pip install --python "$DIR/.venv/bin/python" --no-build-isolation --no-deps --reinstall "$PYCAPNP_PACKAGE_SOURCE" || return 1
       UV_CACHE_DIR="$UV_CACHE_DIR" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" CPATH="$PACKAGE_BUILD_CPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
         uv pip install --python "$DIR/.venv/bin/python" --no-build-isolation --no-deps --reinstall "$IQDBC_PACKAGE_SOURCE" || return 1
       UV_CACHE_DIR="$UV_CACHE_DIR" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" CPATH="$PACKAGE_BUILD_CPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
@@ -113,6 +124,9 @@ sync_python_env() {
       PYTHONPATH="$DIR" "$DIR/.venv/bin/python3" "$DIR/iqpilot/system/runtime_wheels_verify.py" || return 1
       printf '%s\n' "$RUNTIME_WHEEL_LOCK_SHA" > "$DIR/.iqpilot-runtime-wheel-lock-sha256"
     fi
+  fi
+  if [ ! -f "$DIR/prebuilt" ] && [ ! -x "$DIR/.venv/bin/python3" ]; then
+    return 1
   fi
   if [ -n "$VENV_SITE_PACKAGES" ]; then
     printf 'import site; site.addsitedir("%s")\n' "$BASE_SITE_PACKAGES" | sudo tee "$VENV_SITE_PACKAGES/iqpilot-system-venv.pth" >/dev/null

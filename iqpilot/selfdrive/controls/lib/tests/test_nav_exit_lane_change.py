@@ -94,3 +94,90 @@ def test_too_far_does_not_trigger():
   cs = DummyCarState(rightBlindspot=False)
   nav = DummyNavState(nextManeuverDistance=900.0)
   assert _run(dh, cs, nav) == log.Desire.none
+
+
+class RequestedNavState(DummyNavState):
+  def __init__(self, direction=int(NavDirection.right), **kwargs):
+    super().__init__(nextManeuverType=int(ManeuverType.continueStraight), nextManeuverDistance=120.0, **kwargs)
+    self.shouldSendLaneChangeDesire = True
+    self.navLaneChangeDesireDirection = direction
+
+
+def test_requested_lane_change_waits_for_nudge_even_with_bsm():
+  dh = _make_dh(enabled=True, enable_bsm=True)
+  cs = DummyCarState(rightBlindspot=False, steeringPressed=False)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+  assert dh.lane_change_state == LaneChangeState.preLaneChange
+  assert dh.lane_change_direction == LaneChangeDirection.right
+
+
+def test_requested_lane_change_starts_on_matching_nudge():
+  dh = _make_dh(enabled=True, enable_bsm=False)
+  cs = DummyCarState(steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.laneChangeRight
+
+
+def test_requested_lane_change_ignores_opposite_nudge():
+  dh = _make_dh(enabled=True, enable_bsm=False)
+  cs = DummyCarState(steeringPressed=True, steeringTorque=1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+
+
+def test_requested_lane_change_blocked_by_blindspot():
+  dh = _make_dh(enabled=True, enable_bsm=True)
+  cs = DummyCarState(rightBlindspot=True, steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+
+
+def test_requested_lane_change_needs_feature_enabled():
+  dh = _make_dh(enabled=False, enable_bsm=False)
+  cs = DummyCarState(steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+
+
+def test_requested_lane_change_never_below_lane_change_speed():
+  dh = _make_dh(enabled=True, enable_bsm=False)
+  cs = DummyCarState(vEgo=7.0, steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, cs, RequestedNavState()) == log.Desire.none
+
+
+def _complete_lane_change(dh, carstate, nav_state):
+  for _ in range(200):
+    dh.update(carstate, True, 0.0, nav_state)
+    if dh.lane_change_state in (LaneChangeState.off, LaneChangeState.preLaneChange):
+      return
+
+
+def test_exit_needing_a_second_lane_rearms_for_a_nudge():
+  dh = _make_dh(enabled=True, enable_bsm=True)
+  cs = DummyCarState(rightBlindspot=False)
+  nav = DummyNavState(nextManeuverDistance=480.0)
+  assert _run(dh, cs, nav) == log.Desire.laneChangeRight
+  _complete_lane_change(dh, cs, DummyNavState(nextManeuverDistance=400.0))
+  assert dh.lane_change_state == LaneChangeState.preLaneChange
+  assert dh.lane_change_direction == LaneChangeDirection.right
+  assert _run(dh, cs, DummyNavState(nextManeuverDistance=60.0), n=100) == log.Desire.none
+  assert dh.lane_change_state == LaneChangeState.preLaneChange
+  nudge = DummyCarState(steeringPressed=True, steeringTorque=-1)
+  assert _run(dh, nudge, DummyNavState(nextManeuverDistance=40.0)) == log.Desire.laneChangeRight
+
+
+def test_rearm_ends_with_the_exit_and_the_next_exit_starts_fresh():
+  dh = _make_dh(enabled=True, enable_bsm=True)
+  cs = DummyCarState(rightBlindspot=False)
+  assert _run(dh, cs, DummyNavState(nextManeuverDistance=480.0)) == log.Desire.laneChangeRight
+  _complete_lane_change(dh, cs, DummyNavState(nextManeuverDistance=400.0))
+  assert dh.lane_change_state == LaneChangeState.preLaneChange
+  _run(dh, cs, DummyNavState(nextManeuverType=int(ManeuverType.turn), nextManeuverDistance=900.0))
+  assert dh.lane_change_state == LaneChangeState.off
+  assert not dh.nav_exit_rearmed
+  assert _run(dh, cs, DummyNavState(nextManeuverDistance=450.0)) == log.Desire.laneChangeRight
+
+
+def test_cancelled_exit_lane_change_does_not_come_back():
+  dh = _make_dh(enabled=True, enable_bsm=True)
+  cs = DummyCarState(rightBlindspot=False)
+  assert _run(dh, cs, DummyNavState(nextManeuverDistance=480.0)) == log.Desire.laneChangeRight
+  _run(dh, DummyCarState(leftBlinker=True), DummyNavState(nextManeuverDistance=460.0), n=2)
+  assert _run(dh, cs, DummyNavState(nextManeuverDistance=400.0), n=60) == log.Desire.none
+  assert dh.lane_change_state == LaneChangeState.off

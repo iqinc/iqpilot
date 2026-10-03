@@ -9,9 +9,10 @@ from iqdbc.car import Bus, DT_CTRL, structs
 from iqdbc.car.volkswagen.carstate import CarState
 from iqdbc.car.structs import CarParams
 from iqdbc.car.volkswagen.interface import CarInterface
-from iqdbc.car.volkswagen.values import (CAR, FW_QUERY_CONFIG, MLB_ACC_COORDINATOR_MSGS, MLB_MSG_ACC_10,
-                                         MLB_MSG_LH_EPS_03, WMI, VolkswagenFlags, VolkswagenFlagsIQ,
-                                         VolkswagenSafetyFlags)
+from iqdbc.car.volkswagen.values import (CAR, FW_QUERY_CONFIG, MLB_ACC_COORDINATOR_MSGS, MLB_GEARBOX_MSGS, MLB_MSG_ACC_01,
+                                         MLB_MSG_ACC_02, MLB_MSG_ACC_10,
+                                         MLB_MSG_GATEWAY_05, MLB_MSG_GETRIEBE_01, MLB_MSG_LH_EPS_01, MLB_MSG_LH_EPS_03,
+                                         WMI, VolkswagenFlags, VolkswagenFlagsIQ, VolkswagenSafetyFlags)
 from iqdbc.car.volkswagen.fingerprints import FW_VERSIONS
 
 Ecu = CarParams.Ecu
@@ -210,7 +211,6 @@ def _a4_mk4_frames(packer, reverse=False, eps_torque=None):
     packer.make_can_msg("Kombi_02", 1, {"KBI_Inhalt_Tank": 40, "KBI_Kilometerstand": 100000}),
     packer.make_can_msg("Airbag_02", 1, {"AB_Gurtschloss_FA": 3}),
     packer.make_can_msg("Gateway_05", 1, {"BCM1_Rueckfahrlicht_Schalter": int(reverse)}),
-    packer.make_can_msg("LH_EPS_01", 1, {}),
   ]
   if eps_torque is not None:
     msgs.append(packer.make_can_msg("LH_EPS_03", 1, {"EPS_Lenkmoment": abs(eps_torque),
@@ -333,6 +333,58 @@ def test_mlb_manual_gear_follows_the_reverse_light_switch():
   assert _run(a4, lambda: _a4_mk4_frames(packer, reverse=False)).gearShifter == structs.CarState.GearShifter.drive
 
 
+def _q5_params(bus0, bus1=(), car_fw=()):
+  fingerprints = _mlb_fingerprint(0, bus0)
+  fingerprints[1] = {msg: 8 for msg in bus1}
+  fingerprints[2] = {msg: 8 for msg in MLB_ECAN_CAMERA}
+  return CarInterface.get_params(CAR.AUDI_Q5_MK1, fingerprints, list(car_fw), alpha_long=False, is_release=False, docs=False)
+
+
+MLB_ECAN_GATEWAY_NO_GEARBOX = tuple(msg for msg in MLB_ECAN_GATEWAY if msg not in MLB_GEARBOX_MSGS)
+
+
+def test_mlb_gearbox_on_the_powertrain_bus_keeps_automatic():
+  params = _q5_params(MLB_ECAN_GATEWAY_NO_GEARBOX, bus1=(MLB_MSG_GETRIEBE_01, MLB_MSG_GATEWAY_05))
+  assert params.transmissionType == CarParams.TransmissionType.automatic
+
+
+def test_mlb_transmission_ecu_firmware_keeps_automatic():
+  transmission = CarParams.CarFw.new_message(ecu=Ecu.transmission, address=0x7e1)
+  params = _q5_params(MLB_ECAN_GATEWAY_NO_GEARBOX, bus1=(MLB_MSG_GATEWAY_05,), car_fw=(transmission,))
+  assert params.transmissionType == CarParams.TransmissionType.automatic
+
+
+def test_mlb_reverse_switch_on_the_extended_can_alone_keeps_automatic():
+  params = _q5_params(MLB_ECAN_GATEWAY_NO_GEARBOX + (MLB_MSG_GATEWAY_05,))
+  assert params.transmissionType == CarParams.TransmissionType.automatic
+
+
+def test_mlb_manual_needs_no_gearbox_anywhere_and_a_reverse_switch_on_the_powertrain_bus():
+  params = _q5_params(MLB_ECAN_GATEWAY_NO_GEARBOX, bus1=(MLB_MSG_GATEWAY_05,))
+  assert params.transmissionType == CarParams.TransmissionType.manual
+
+
+def test_mlb_manual_gateway_car_reads_reverse_from_the_powertrain_bus():
+  fingerprints = _mlb_fingerprint(0, MLB_ECAN_GATEWAY_NO_GEARBOX)
+  fingerprints[1] = {MLB_MSG_GATEWAY_05: 8}
+  fingerprints[2] = {msg: 8 for msg in MLB_ECAN_CAMERA}
+  q5 = _build_mlb_car(CAR.AUDI_Q5_MK1, fingerprints)
+  assert q5.CP.transmissionType == CarParams.TransmissionType.manual
+
+  packer = CANPacker("vw_mlb")
+  frames = lambda reverse: [packer.make_can_msg("Gateway_05", 1, {"BCM1_Rueckfahrlicht_Schalter": int(reverse)})]
+  assert _run(q5, lambda: frames(True)).gearShifter == structs.CarState.GearShifter.reverse
+  assert _run(q5, lambda: frames(False)).gearShifter == structs.CarState.GearShifter.drive
+  assert MLB_MSG_GATEWAY_05 not in q5.can_parsers[Bus.pt].addresses
+
+
+def test_mlb_automatic_never_subscribes_gateway_05():
+  q5 = _q5_mk1_car()
+  q5.update([(int(DT_CTRL * 1e9), [])])
+  assert MLB_MSG_GATEWAY_05 not in q5.can_parsers[Bus.pt].addresses
+  assert MLB_MSG_GATEWAY_05 not in q5.can_parsers[Bus.aux].addresses
+
+
 @pytest.mark.parametrize("button_type", (
   structs.CarState.ButtonEvent.Type.setCruise,
   structs.CarState.ButtonEvent.Type.resumeCruise,
@@ -382,3 +434,196 @@ def test_meb_does_not_infer_mqb_cluster_from_address(platform):
   fingerprints[0][0x30B] = 8
   params = CarInterface.get_params(platform, fingerprints, [], alpha_long=False, is_release=False, docs=False)
   assert not params.flags & VolkswagenFlags.KOMBI_PRESENT
+
+
+
+def _subscribed_addresses(car, updates=5):
+  nanos = 0
+  for _ in range(updates):
+    nanos += int(DT_CTRL * 1e9)
+    car.update([(nanos, [])])
+  return {bus: set(parser.addresses) for bus, parser in car.can_parsers.items()}
+
+
+def _frames_for(car, packer, subscribed):
+  frames = []
+  for bus, parser in car.can_parsers.items():
+    for addr in sorted(subscribed[bus]):
+      frames.append(packer.make_can_msg(parser.dbc.addr_to_msg[addr].name, parser.bus, {}))
+  return frames
+
+
+def _run_past_aliveness_timeout(car, build, seconds=15.0):
+  nanos = 0
+  ret = None
+  for _ in range(int(seconds / DT_CTRL)):
+    nanos += int(DT_CTRL * 1e9)
+    ret, _ = car.update([(nanos, build())])
+  return ret
+
+
+def _sparse_q5(car_fw=(), bus1=()):
+  fingerprints = _mlb_fingerprint(0, MLB_ECAN_GATEWAY_NO_GEARBOX)
+  fingerprints[1] = {msg: 8 for msg in bus1}
+  fingerprints[2] = {msg: 8 for msg in MLB_ECAN_CAMERA}
+  CP = CarInterface.get_params(CAR.AUDI_Q5_MK1, fingerprints, list(car_fw), alpha_long=False, is_release=False, docs=False)
+  CP_IQ = CarInterface.get_params_iq(CP, CAR.AUDI_Q5_MK1, fingerprints, list(car_fw), alpha_long=False, is_release_iq=False, docs=False)
+  return CarInterface(CP, CP_IQ)
+
+
+@pytest.mark.parametrize("car_fw", (
+  (),
+  (CarParams.CarFw.new_message(ecu=Ecu.transmission, address=0x7e1),),
+), ids=("no_fw", "transmission_fw"))
+def test_mlb_gateway_car_with_a_sparse_fingerprint_snapshot_reads_only_what_an_automatic_reads(car_fw):
+  automatic = _subscribed_addresses(_q5_mk1_car())
+  assert all(MLB_MSG_GATEWAY_05 not in addrs for addrs in automatic.values())
+
+  q5 = _sparse_q5(car_fw)
+  packer = CANPacker("vw_mlb")
+  ret = _run_past_aliveness_timeout(q5, lambda: _frames_for(q5, packer, automatic))
+
+  assert ret.canValid
+  assert all(parser.can_valid for parser in q5.can_parsers.values())
+  assert not any(parser.bus_timeout for parser in q5.can_parsers.values())
+  assert {bus: set(parser.addresses) for bus, parser in q5.can_parsers.items()} == automatic
+  assert q5.CP.transmissionType == CarParams.TransmissionType.automatic
+
+
+def test_mlb_manual_gateway_car_adds_only_the_reverse_switch_on_the_powertrain_bus():
+  automatic = _subscribed_addresses(_q5_mk1_car())
+  manual = _subscribed_addresses(_sparse_q5(bus1=(MLB_MSG_GATEWAY_05,)))
+
+  assert manual[Bus.pt] == automatic[Bus.pt]
+  assert manual[Bus.cam] == automatic[Bus.cam]
+  assert manual[Bus.aux] == automatic[Bus.aux] | {MLB_MSG_GATEWAY_05}
+
+
+def _read_like_the_alc_runtime(parser, name):
+  # the closed-source ALC reads its key slot through parser.vl, which subscribes the message on first access
+  if name not in parser.dat:
+    parser.vl[name]
+  return parser.dat.get(name, b"")
+
+
+@pytest.mark.parametrize("build", (_a4_mk4_car, _q5_mk1_car), ids=("a4_mk4", "q5_mk1"))
+def test_mlb_alc_key_slot_read_keeps_can_valid_on_a_rack_that_never_sends_it(build):
+  car = build()
+  subscribed = _subscribed_addresses(car)
+  never_sent = {bus: addrs - {MLB_MSG_LH_EPS_01} for bus, addrs in subscribed.items()}
+
+  packer = CANPacker("vw_mlb")
+
+  def build_frames():
+    _read_like_the_alc_runtime(car.can_parsers[Bus.pt], "LH_EPS_01")
+    return _frames_for(car, packer, never_sent)
+
+  ret = _run_past_aliveness_timeout(car, build_frames)
+
+  assert ret.canValid
+  assert all(parser.can_valid for parser in car.can_parsers.values())
+  assert not any(parser.bus_timeout for parser in car.can_parsers.values())
+
+
+@pytest.mark.parametrize("build", (_a4_mk4_car, _q5_mk1_car), ids=("a4_mk4", "q5_mk1"))
+def test_mlb_carstate_subscriptions_settle_and_stay_alive(build):
+  car = build()
+  subscribed = _subscribed_addresses(car)
+
+  packer = CANPacker("vw_mlb")
+  ret = _run_past_aliveness_timeout(car, lambda: _frames_for(car, packer, subscribed))
+
+  assert {bus: set(parser.addresses) for bus, parser in car.can_parsers.items()} == subscribed
+  assert ret.canValid
+  assert all(parser.can_valid for parser in car.can_parsers.values())
+  assert not any(parser.bus_timeout for parser in car.can_parsers.values())
+
+
+def _steering_state(flags, lwi=(0.0, 0), eps=(0.0, 0)):
+  state = object.__new__(CarState)
+  state.CP = SimpleNamespace(flags=flags)
+  state.CCP = SimpleNamespace(STEER_DRIVER_ALLOWANCE=100, hca_status_values={5: "ACTIVE"})
+  state.eps_init_complete = True
+  state.frame = 0
+  pt_cp = SimpleNamespace(vl={
+    "LWI_01": {"LWI_Lenkradwinkel": lwi[0], "LWI_VZ_Lenkradwinkel": lwi[1],
+               "LWI_Lenkradw_Geschw": 4.0, "LWI_VZ_Lenkradw_Geschw": 0},
+    "LH_EPS_03": {"EPS_Berechneter_LW": eps[0], "EPS_VZ_BLW": eps[1],
+                  "EPS_Lenkmoment": 0.0, "EPS_VZ_Lenkmoment": 0, "EPS_HCA_Status": 5},
+  })
+  ret = structs.CarState()
+  state.parse_mlb_mqb_steering_state(ret, pt_cp)
+  return ret
+
+
+def test_mlb_takes_the_steering_angle_from_the_eps():
+  ret = _steering_state(VolkswagenFlags.MLB, lwi=(12.0, 0), eps=(9.6, 0))
+  assert ret.steeringAngleDeg == pytest.approx(9.6)
+  assert ret.steeringRateDeg == pytest.approx(4.0)
+
+
+def test_mlb_eps_angle_honours_its_own_sign_bit():
+  ret = _steering_state(VolkswagenFlags.MLB, lwi=(12.0, 0), eps=(9.6, 1))
+  assert ret.steeringAngleDeg == pytest.approx(-9.6)
+
+
+def test_mlb_without_hca_eps_keeps_the_steering_wheel_sensor():
+  flags = VolkswagenFlags.MLB | VolkswagenFlagsIQ.IQ_MLB_NO_HCA_EPS
+  ret = _steering_state(flags, lwi=(12.0, 1), eps=(9.6, 0))
+  assert ret.steeringAngleDeg == pytest.approx(-12.0)
+
+
+def test_mqb_keeps_the_steering_wheel_sensor():
+  ret = _steering_state(0, lwi=(12.0, 0), eps=(9.6, 0))
+  assert ret.steeringAngleDeg == pytest.approx(12.0)
+
+
+def _mlb_long_car(platform):
+  fingerprints = _mlb_fingerprint(0, MLB_ECAN_GATEWAY)
+  fingerprints[2] = {msg: 8 for msg in MLB_ECAN_CAMERA}
+  CP = CarInterface.get_params(platform, fingerprints, [], alpha_long=True, is_release=False, docs=False)
+  CP_IQ = CarInterface.get_params_iq(CP, platform, fingerprints, [], alpha_long=True, is_release_iq=False, docs=False)
+  assert CP.openpilotLongitudinalControl
+  return CarInterface(CP, CP_IQ)
+
+
+def _run_long_controller(car, build, seconds=15.0):
+  CC = structs.CarControl().as_reader()
+  CC_IQ = structs.IQCarControl()
+  nanos = 0
+  ret = None
+  for _ in range(int(seconds / DT_CTRL)):
+    nanos += int(DT_CTRL * 1e9)
+    ret, _ = car.update([(nanos, build())])
+    car.apply(CC, CC_IQ, nanos)
+  return ret
+
+
+@pytest.mark.parametrize("platform", (CAR.PORSCHE_MACAN_MK1, CAR.AUDI_Q5_MK1), ids=("macan_mk1", "q5_mk1"))
+def test_mlb_long_keeps_can_valid_when_the_acc_ecu_never_sends_acc_01(platform):
+  car = _mlb_long_car(platform)
+  subscribed = _subscribed_addresses(car)
+  never_sent = {bus: addrs - {MLB_MSG_ACC_01} for bus, addrs in subscribed.items()}
+
+  packer = CANPacker("vw_mlb")
+  ret = _run_long_controller(car, lambda: _frames_for(car, packer, never_sent))
+
+  assert ret.canValid
+  assert all(parser.can_valid for parser in car.can_parsers.values())
+  assert not any(parser.bus_timeout for parser in car.can_parsers.values())
+  assert "ACC_01" not in car.CS.acc_stock_counters
+  assert car.CC.acc_counters_seeded == {"ACC_02"}
+
+
+def test_mlb_long_seeds_acc_01_from_the_stock_frame_when_it_is_sent():
+  car = _mlb_long_car(CAR.AUDI_Q5_MK1)
+  subscribed = _subscribed_addresses(car)
+  assert MLB_MSG_ACC_01 in subscribed[Bus.cam]
+
+  packer = CANPacker("vw_mlb")
+  ret = _run_long_controller(car, lambda: _frames_for(car, packer, subscribed), seconds=1.0)
+
+  assert ret.canValid
+  assert car.CC.acc_counters_seeded == {"ACC_01", "ACC_02"}
+  assert car.CS.acc_stock_counters["ACC_01"] == car.can_parsers[Bus.cam].vl["ACC_01"]["COUNTER"]
+  assert MLB_MSG_ACC_02 in subscribed[Bus.cam]

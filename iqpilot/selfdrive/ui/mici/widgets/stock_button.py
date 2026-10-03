@@ -12,7 +12,16 @@ from iqpilot.system.ui.widgets.label import UnifiedLabel
 from iqpilot.system.ui.widgets.scroller import DO_ZOOM
 from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from iqpilot.common.filter_simple import BounceFilter
-from iqpilot.ui.theme import NeonTheme
+try:
+  from iqpilot.ui.theme import NeonTheme
+except ImportError:
+  class _FallbackTheme:
+    def glow(self, alpha=255): return rl.Color(0, 255, 245, alpha)
+    def glow_mid(self, alpha=130): return rl.Color(0, 255, 245, alpha)
+    def glow_outer(self, alpha=45): return rl.Color(0, 255, 245, alpha)
+    def bg(self): return rl.Color(0, 26, 25, 255)
+    def bg_pressed(self): return rl.Color(0, 33, 32, 255)
+  NeonTheme = _FallbackTheme()
 
 try:
   from iqpilot.common.params import Params, UnknownKeyName
@@ -336,6 +345,9 @@ class BigButton(Widget):
       sub_label_rect = rl.Rectangle(label_x, label_y, self._width_hint(), sub_label_height)
       self._sub_label.render(sub_label_rect)
 
+    self._draw_icon(btn_x, btn_y, btn_width)
+
+  def _draw_icon(self, btn_x: float, btn_y: float, btn_width: float):
     if self._txt_icon:
       rotation = 0
       if self._rotate_icon_t is not None:
@@ -364,6 +376,9 @@ class BigButton(Widget):
 
 
 class BigToggle(BigButton):
+  def _get_label_font_size(self):
+    return 42
+
   def __init__(self, text: str, value: str = "", initial_state: bool = False, toggle_callback: Callable | None = None):
     super().__init__(text, value, "")
     self._checked = initial_state
@@ -471,27 +486,9 @@ class GreyBigButton(BigButton):
     self._draw_content(self._rect.x, self._rect.y, self._rect.width, self._rect.height)
 
 
-class BigMultiParamToggle(BigMultiToggle):
-  def __init__(self, text: str, param: str, options: list[str], toggle_callback: Callable | None = None,
-               select_callback: Callable | None = None):
-    super().__init__(text, options, toggle_callback, select_callback)
-    self._param = param
-
-    self._params = Params()
-    self._load_value()
-
-  def _load_value(self):
-    self.set_value(self._options[self._params.get(self._param) or 0])
-
-  def _handle_mouse_release(self, mouse_pos: MousePos):
-    super()._handle_mouse_release(mouse_pos)
-    new_idx = self._options.index(self.value)
-    self._params.put(self._param, new_idx)
-
-
 class BigParamControl(BigToggle):
-  def __init__(self, text: str, param: str, toggle_callback: Callable | None = None):
-    super().__init__(text, "", toggle_callback=toggle_callback)
+  def __init__(self, text: str, param: str, toggle_callback: Callable | None = None, value: str = ""):
+    super().__init__(text, value, toggle_callback=toggle_callback)
     self.param = param
     self.params = Params()
     self.set_checked(self._read_bool())

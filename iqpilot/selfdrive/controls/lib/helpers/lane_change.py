@@ -6,7 +6,7 @@ from iqpilot.cereal import custom, log
 from iqpilot.common.params import Params
 from iqpilot.common.realtime import DT_MDL
 
-NAV_EXIT_COMMIT_DISTANCE = 500.0  # m before a route exit to begin moving into the exit lane
+NAV_EXIT_COMMIT_DISTANCE = 500.0
 _ManeuverType = custom.IQNavState.ManeuverType
 _NavDirection = custom.NavDirection
 
@@ -194,6 +194,13 @@ class NavExitLaneChangeController:
 
     if not self.enabled or nav_state is None or not getattr(nav_state, "active", False):
       return
+
+    requested = self._requested_direction(nav_state)
+    if requested != log.LaneChangeDirection.none:
+      self.direction = requested
+      self.active = True
+      return
+
     if not getattr(nav_state, "nextManeuverValid", False):
       return
     if self._raw(getattr(nav_state, "nextManeuverType", _ManeuverType.none)) != int(_ManeuverType.exit):
@@ -213,6 +220,16 @@ class NavExitLaneChangeController:
     self.active = True
     blindspot = carstate.leftBlindspot if self.direction == log.LaneChangeDirection.left else carstate.rightBlindspot
     self.auto_allowed = (not blindspot) if self._enable_bsm else False
+
+  def _requested_direction(self, nav_state):
+    if not getattr(nav_state, "shouldSendLaneChangeDesire", False):
+      return log.LaneChangeDirection.none
+    direction = self._raw(getattr(nav_state, "navLaneChangeDesireDirection", _NavDirection.none))
+    if direction == int(_NavDirection.left):
+      return log.LaneChangeDirection.left
+    if direction == int(_NavDirection.right):
+      return log.LaneChangeDirection.right
+    return log.LaneChangeDirection.none
 
 
 AutoLaneChangeMode = LaneSwapPreset

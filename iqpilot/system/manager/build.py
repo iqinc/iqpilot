@@ -51,7 +51,57 @@ class _SilentProgress:
     pass
 
 
-def build(spinner, dirty: bool = False, minimal: bool = False, show_error_window: bool = True) -> None:
+REGISTRY_ARTIFACTS = [
+  "iqpilot/cereal/services.h",
+  "iqpilot/cereal/messaging/socketmaster.o",
+  "iqpilot/cereal/libsocketmaster.a",
+  "iqpilot/cereal/messaging/bridge",
+  "iqpilot/selfdrive/iqlocd/iqlocd",
+  "iqpilot/selfdrive/pandad/pandad",
+  "iqpilot/system/camerad/camerad",
+  "iqpilot/system/loggerd/loggerd",
+  "iqpilot/system/loggerd/encoderd",
+  "iqpilot/system/loggerd/bootlog",
+]
+
+
+def stale_registry_artifacts(basedir: str = BASEDIR) -> list[str]:
+  from iqpilot.cereal.services import REGISTRY_TAG_PREFIX, registry_tag
+  expected = registry_tag().encode()
+  prefix = REGISTRY_TAG_PREFIX.encode()
+  stale = []
+  for rel in REGISTRY_ARTIFACTS:
+    path = os.path.join(basedir, rel)
+    if not os.path.isfile(path):
+      continue
+    with open(path, "rb") as f:
+      data = f.read()
+    if prefix in data and expected not in data:
+      stale.append(rel)
+  return stale
+
+
+def purge_stale_registry_header(basedir: str = BASEDIR) -> bool:
+  from iqpilot.cereal.services import registry_tag
+  header = os.path.join(basedir, REGISTRY_ARTIFACTS[0])
+  if not os.path.isfile(header):
+    return False
+  with open(header, "rb") as f:
+    stamped = registry_tag().encode() in f.read()
+  if stamped:
+    return False
+  purge_registry_artifacts([], basedir)
+  return True
+
+
+def purge_registry_artifacts(stale: list[str], basedir: str = BASEDIR) -> None:
+  for rel in set(stale) | set(REGISTRY_ARTIFACTS[:3]):
+    path = os.path.join(basedir, rel)
+    if os.path.isfile(path):
+      os.remove(path)
+
+
+def build(spinner, dirty: bool = False, minimal: bool = False, show_error_window: bool = True, registry_retry: bool = False) -> None:
   env = os.environ.copy()
   env.pop('PWD', None)
   env['SCONS_PROGRESS'] = "1"
@@ -64,6 +114,9 @@ def build(spinner, dirty: bool = False, minimal: bool = False, show_error_window
 
   # building with all cores can result in using too
   # much memory, so retry with less parallelism
+  if purge_stale_registry_header():
+    cloudlog.error("generated service registry header was stale, regenerating")
+
   compile_output: list[bytes] = []
   for n in get_job_sequence():
     compile_output.clear()
@@ -104,6 +157,22 @@ def build(spinner, dirty: bool = False, minimal: bool = False, show_error_window
     cloudlog.error("scons build failed\n" + error_s)
 
     # Show TextWindow
+    spinner.close()
+    if not os.getenv("CI") and show_error_window:
+      with TextWindow("IQ.Pilot failed to build\n \n" + error_s) as t:
+        t.wait_for_exit()
+    exit(1)
+
+  stale = stale_registry_artifacts()
+  if stale and not registry_retry:
+    cloudlog.error(f"compiled service registry is stale in {', '.join(stale)}, rebuilding messaging")
+    purge_registry_artifacts(stale)
+    build(spinner, dirty, minimal, show_error_window, registry_retry=True)
+    return
+  if stale:
+    error_s = "compiled service registry is still stale after rebuild: " + ", ".join(stale)
+    add_file_handler(cloudlog)
+    cloudlog.error(error_s)
     spinner.close()
     if not os.getenv("CI") and show_error_window:
       with TextWindow("IQ.Pilot failed to build\n \n" + error_s) as t:

@@ -507,8 +507,10 @@ class UbloxMsgParser:
 
 
 def main():
+  from iqpilot.system.phonegps.bridge import gps_publish_service
   parser = UbloxMsgParser()
-  pm = messaging.PubMaster(['ubloxGnss', 'gpsLocationExternal'])
+  gps_service = gps_publish_service('gpsLocationExternal')
+  pm = messaging.PubMaster(['ubloxGnss', gps_service])
   sock = messaging.sub_sock('ubloxRaw', timeout=100, conflate=False)
 
   while True:
@@ -527,7 +529,7 @@ def main():
       if not res:
         continue
       service, dat = res
-      pm.send(service, dat)
+      pm.send(gps_service if service == 'gpsLocationExternal' else service, dat)
 
 
 if __name__ == '__main__':

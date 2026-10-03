@@ -68,8 +68,7 @@ class TripsLayout(Widget):
   _CARD_FILL = rl.Color(38, 40, 46, 255)
   _CARD_EDGE = rl.Color(255, 255, 255, 18)
   _ACCENT = rl.Color(30, 200, 168, 255)
-  _ACCENT_DIM = rl.Color(93, 202, 165, 255)
-  _UNIT = rl.Color(138, 139, 144, 255)
+  _UNIT = rl.WHITE
   _RULE = rl.Color(255, 255, 255, 16)
 
   def __init__(self):
@@ -101,18 +100,16 @@ class TripsLayout(Widget):
     rl.draw_rectangle_rounded_lines_ex(card, 0.10, 20, 2, self._CARD_EDGE)
     pad = 44
     label_y = y + 36
-    tick_h = 30
-    title_size = 34 * FONT_SCALE
-    rl.draw_rectangle_rounded(rl.Rectangle(x + pad, label_y, 6, tick_h), 0.5, 6, self._ACCENT)
+    title_size = 38 * FONT_SCALE
     rl.draw_text_ex(gui_app.font(FontWeight.BOLD), title,
-                    rl.Vector2(x + pad + 22, label_y + (tick_h - title_size) / 2), title_size, 4, self._ACCENT_DIM)
+                    rl.Vector2(x + pad, label_y), title_size, 4, self._ACCENT)
     col_width = width / 3
-    content_top = label_y + tick_h + 20
+    content_top = label_y + title_size + 20
     content_bottom = y + height - 30
     number_font = gui_app.font(FontWeight.BOLD)
     unit_font = gui_app.font(FontWeight.MEDIUM)
     number_size = 84 * FONT_SCALE
-    unit_size = 30 * FONT_SCALE
+    unit_size = 36 * FONT_SCALE
     unit_spacing = 2.0
     icon_gap = 16
     num_gap = 14

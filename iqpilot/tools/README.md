@@ -52,15 +52,19 @@ python3 iqpilot/tools/lib/auth.py
 ```
 
 This will:
-- Open your browser to log in via GitHub OAuth
-- Save your authentication token to `~/.comma/auth.json`
+- Open your browser to log in through Konn3kt (GitHub by default)
+- Save your authentication token to `~/.iq/auth.json`
 - Allow access to your Konn3kt routes
 
-If browser auto-open is unavailable (headless/WSL), copy the printed URL into any browser — the local callback listens on port 3000.
+Choose a provider with `python3 iqpilot/tools/lib/auth.py google`, `github`, `apple`, or `microsoft`. Cabana offers the same four providers when you select **Browse Konn3kt routes**.
+
+The browser must run on the same computer as the tool. The callback uses an available localhost port and expires after three minutes. Browser authentication requires the Konn3kt backend's tools callback support. Existing JWTs can still be supplied with `python3 iqpilot/tools/lib/auth.py jwt <token>`.
+
+Tokens are written atomically with owner-only permissions. Tools do not read or migrate tokens from `~/.comma`; sign in again to populate `~/.iq/auth.json`.
 
 ## How It Works
 
-OP Tools reads your Konn3kt JWT token from `~/.comma/auth.json`.
+IQ.Pilot tools read your Konn3kt JWT token from `~/.iq/auth.json`.
 
 You can always view public routes!
 

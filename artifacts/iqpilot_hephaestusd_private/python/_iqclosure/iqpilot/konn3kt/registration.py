@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, UTC
 from iqpilot.common.api import api_get, get_key_pair
 from iqpilot.common.params import Params
 from iqpilot.common.spinner import Spinner
-from iqpilot.system.hardware import HARDWARE, PC
+from iqpilot.system.hardware import HARDWARE
 from iqpilot.system.hardware.hw import Paths
 from iqpilot.common.swaglog import cloudlog
 
@@ -123,11 +123,6 @@ def ensure_dev_pairing_identity(params: Params | None = None, force_reset: bool 
     "serial": p.get("HardwareSerial") or f"DEV-{dongle_id}",
     "persist_dir": str(persist_dir),
   }
-def is_registered_device() -> bool:
-  dongle = Params().get("DongleId")
-  return dongle not in (None, UNREGISTERED_DONGLE_ID)
-
-
 def _normalize_imei(value: str | None) -> str:
   return value or ""
 

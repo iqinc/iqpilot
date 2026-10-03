@@ -21,8 +21,8 @@ TOYOTA_COMMON_LONG_TX_MSGS = [[0x283, 0], [0x2E6, 0], [0x2E7, 0], [0x33E, 0], [0
 GAS_INTERCEPTOR_TX_MSGS = [[0x200, 0]]
 
 UNSUPPORTED_DSU = [
-  {"SAFETY_PARAM_IQ": ToyotaSafetyFlagsIQ.DEFAULT},
-  {"SAFETY_PARAM_IQ": ToyotaSafetyFlagsIQ.UNSUPPORTED_DSU},
+  {"SAFETY_PARAM_IQ": ToyotaSafetyFlagsIQ.LKAS_HUD},
+  {"SAFETY_PARAM_IQ": ToyotaSafetyFlagsIQ.UNSUPPORTED_DSU | ToyotaSafetyFlagsIQ.LKAS_HUD},
 ]
 
 
@@ -33,7 +33,7 @@ class TestToyotaSafetyBase(common.CarSafetyTest, common.LongitudinalAccelSafetyT
   FWD_BLACKLISTED_ADDRS = {2: [0x2E4, 0x412, 0x191, 0x343]}
   EPS_SCALE = 73
 
-  SAFETY_PARAM_IQ: int = 0
+  SAFETY_PARAM_IQ: int = ToyotaSafetyFlagsIQ.LKAS_HUD
 
   packer: CANPackerSafety
   safety: libsafety_py.LibSafety
@@ -90,6 +90,48 @@ class TestToyotaSafetyBase(common.CarSafetyTest, common.LongitudinalAccelSafetyT
     msg = "DSU_CRUISE" if self.SAFETY_PARAM_IQ & ToyotaSafetyFlagsIQ.UNSUPPORTED_DSU else "PCM_CRUISE_2"
     values = {"MAIN_ON": enabled}
     return self.packer.make_can_msg_safety(msg, 0, values)
+
+  def _lkas_button_msg(self, lkas_button=False, lda_value=None):
+    values = {"LDA_ON_MESSAGE": (1 if lkas_button else 0) if lda_value is None else lda_value}
+    return self.packer.make_can_msg_safety("LKAS_HUD", 2, values)
+
+  def test_enable_control_allowed_with_aol_button(self):
+    self.safety.set_current_safety_param_iq(self.SAFETY_PARAM_IQ | ToyotaSafetyFlagsIQ.LKAS_HUD)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.safety.get_current_safety_param())
+    self.safety.init_tests()
+    for enable_aol in (True, False):
+      with self.subTest("enable_aol", aol_enabled=enable_aol):
+        self.safety.set_aol_params(enable_aol, False, False)
+
+        self._rx(self._lkas_button_msg(False))
+        self.assertEqual(0, self.safety.get_aol_button_press())
+        self.assertFalse(self.safety.get_controls_allowed_lat())
+
+        self._rx(self._lkas_button_msg(True))
+        self.assertEqual(1, self.safety.get_aol_button_press())
+        self.assertEqual(enable_aol, self.safety.get_controls_allowed_lat())
+
+        self._rx(self._lkas_button_msg(False))
+        self.assertEqual(0, self.safety.get_aol_button_press())
+        self.assertEqual(enable_aol, self.safety.get_controls_allowed_lat())
+
+        self.safety.set_controls_allowed_lat(False)
+        self._rx(self._lkas_button_msg(False, lda_value=2))
+        self.assertEqual(1, self.safety.get_aol_button_press())
+        self.assertEqual(enable_aol, self.safety.get_controls_allowed_lat())
+        self._rx(self._lkas_button_msg(False))
+        self.safety.set_controls_allowed_lat(False)
+        self.safety.set_aol_params(False, False, False)
+
+  def test_lkas_button_requires_lkas_hud(self):
+    self.safety.set_current_safety_param_iq(self.SAFETY_PARAM_IQ & ~ToyotaSafetyFlagsIQ.LKAS_HUD)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.safety.get_current_safety_param())
+    self.safety.init_tests()
+    self.safety.set_aol_params(True, False, False)
+    button_state = self.safety.get_aol_button_press()
+    self._rx(self._lkas_button_msg(True))
+    self.assertEqual(button_state, self.safety.get_aol_button_press())
+    self.assertFalse(self.safety.get_controls_allowed_lat())
 
   def test_diagnostics(self, stock_longitudinal: bool = False, ecu_disabled: bool = True):
     for should_tx, msg in ((False, b"\x6D\x02\x3E\x00\x00\x00\x00\x00"),  # fwdCamera tester present
@@ -221,6 +263,7 @@ class TestToyotaSafetyAngle(TestToyotaSafetyBase, common.AngleSteeringSafetyTest
   def setUp(self):
     self.packer = CANPackerSafety("toyota_nodsu_pt_generated")
     self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_iq(self.SAFETY_PARAM_IQ)
     self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.EPS_SCALE | ToyotaSafetyFlags.LTA)
     self.safety.init_tests()
 
@@ -402,6 +445,7 @@ class TestToyotaStockLongitudinalAngle(TestToyotaStockLongitudinalBase, TestToyo
   def setUp(self):
     self.packer = CANPackerSafety("toyota_nodsu_pt_generated")
     self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_iq(self.SAFETY_PARAM_IQ)
     self.safety.set_safety_hooks(CarParams.SafetyModel.toyota,
                                  self.EPS_SCALE | ToyotaSafetyFlags.STOCK_LONGITUDINAL | ToyotaSafetyFlags.LTA)
     self.safety.init_tests()
@@ -416,6 +460,7 @@ class TestToyotaSecOcSafetyBase(TestToyotaSafetyBase):
   def setUp(self):
     self.packer = CANPackerSafety("toyota_secoc_pt_generated")
     self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_iq(self.SAFETY_PARAM_IQ)
     self.safety.set_safety_hooks(CarParams.SafetyModel.toyota,
                                  self.EPS_SCALE | ToyotaSafetyFlags.SECOC)
     self.safety.init_tests()
@@ -456,6 +501,7 @@ class TestToyotaSecOcSafetyStockLongitudinal(TestToyotaSecOcSafetyBase, TestToyo
   def setUp(self):
     self.packer = CANPackerSafety("toyota_secoc_pt_generated")
     self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_iq(self.SAFETY_PARAM_IQ)
     self.safety.set_safety_hooks(CarParams.SafetyModel.toyota,
                                  self.EPS_SCALE | ToyotaSafetyFlags.STOCK_LONGITUDINAL | ToyotaSafetyFlags.SECOC)
     self.safety.init_tests()
@@ -469,6 +515,7 @@ class TestToyotaSecOcSafety(TestToyotaSecOcSafetyBase):
   def setUp(self):
     self.packer = CANPackerSafety("toyota_secoc_pt_generated")
     self.safety = libsafety_py.libsafety
+    self.safety.set_current_safety_param_iq(self.SAFETY_PARAM_IQ)
     self.safety.set_safety_hooks(CarParams.SafetyModel.toyota, self.EPS_SCALE | ToyotaSafetyFlags.SECOC)
     self.safety.init_tests()
 

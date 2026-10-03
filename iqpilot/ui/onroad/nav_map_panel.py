@@ -4,6 +4,7 @@ import threading
 import time
 from typing import Any
 from pathlib import Path
+from functools import lru_cache
 
 try:
   import sqlite3
@@ -17,7 +18,6 @@ from iqpilot.common.basedir import BASEDIR
 from iqpilot.common.iq_perf import PerfSample, PerfTraceEmitter
 from iqpilot.common.params import Params, UnknownKeyName
 from iqpilot.selfdrive.ui.lib.nav_helpers import current_or_last_gps_position, resolve_mapbox_token
-from iqpilot.selfdrive.ui.lib.local_routes import utc_offset_hours
 from iqpilot.ui.onroad.offline_tiles import (
   find_offline_mbtiles_path,
   find_offline_xyz_root,
@@ -29,33 +29,22 @@ from iqpilot.ui.onroad.offline_tiles import (
   xyz_zoom_bounds,
 )
 from iqpilot.ui.onroad.nav_map_utils import (
+  MapMarkerMotion,
   build_mapbox_tile_url,
   choose_nav_camera,
+  closest_polyline_segment,
   mercator_world_px_at_zoom,
   project_nav_point,
   project_nav_polyline,
-  solar_elevation_deg,
 )
 from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.ui.lib.application import gui_app, FontWeight
-from iqpilot.system.ui.lib.text_measure import measure_text_cached
-from iqpilot.system.ui.lib.wrap_text import wrap_text
 from iqpilot.system.ui.widgets import Widget
 
 PANEL_WIDTH = 560
-PANEL_HEIGHT = 600
-PANEL_MARGIN_RIGHT = 28
-PANEL_MARGIN_TOP = 92
-CARD_RADIUS = 0.055
 MAP_HEIGHT = 392
-SPLIT_HEADER_HEIGHT = 160
-SPLIT_FOOTER_HEIGHT = 112
-# parents[4] pointed one level above the repo (stock selfdrive/assets has no nav icons),
-# so the maneuver arrow never loaded anywhere — anchor to BASEDIR instead
-ICON_ASSET_DIR = Path(BASEDIR) / "iqpilot" / "iqpilot" / "selfdrive" / "assets" / "navigation"
-STAT_GAP = 10
+ICON_ASSET_DIR = Path(BASEDIR) / "iqpilot" / "selfdrive" / "assets" / "navigation"
 TILE_SIZE = 256
-# env-overridable GPU-texture footprint levers; CACHE_LIMIT must stay >= the keep-set (~(visible + 2*margin)^2)
 TILE_SCALE = int(os.getenv("IQPILOT_NAV_TILE_SCALE", "2"))
 # Downscale each decoded tile before uploading to the GPU. Mapbox only serves integer-retina
 # tiles (@2x = 512px), which cost ~1MB of dmabuf each; the resident cache of these is the bulk
@@ -65,28 +54,24 @@ TILE_SCALE = int(os.getenv("IQPILOT_NAV_TILE_SCALE", "2"))
 # are left untouched. Set to TILE_SCALE to keep full @2x resolution.
 TILE_TEXTURE_SCALE = float(os.getenv("IQPILOT_NAV_TILE_TEXTURE_SCALE", "1.75"))
 MAX_INFLIGHT_TILES = 8
+TILE_RETRY_BASE_S = 2.0
+TILE_RETRY_MAX_S = 60.0
+TILE_RETRY_LIMIT = 512
+TOKEN_REJECTED_RETRY_S = 600.0
 CAMERA_SMOOTHING = 0.18
-# The onroad corner panel is immediate-mode redrawn (rounded rects + every glyph + tile blits)
-# every UI frame at 20Hz, which measured at ~52% of a CPU core on a comma 3x and starved radard.
-# Cache the whole panel in a persistent RenderTexture and only re-render it a few times a second;
-# every frame just blits the cached texture. A corner map panning at 12Hz is visually seamless.
+# Cache the map presentation independently of the 60 FPS onroad UI.
 PANEL_RENDER_FPS = max(1, int(os.getenv("IQPILOT_NAV_PANEL_FPS", "12")))
 PANEL_RENDER_INTERVAL = 1.0 / PANEL_RENDER_FPS
-# The drop-shadow is drawn a few px past the panel bounds; pad the render target so it isn't clipped.
-PANEL_SHADOW_PAD = 16
-# Chrome (badge + info-panel text/chips) only changes when nav values change, so it's cached in its
-# own texture regenerated on a content-key change. This cap forces a refresh at least every 0.5s so a
-# missed key field can never freeze the readout.
-CHROME_MAX_INTERVAL = 0.5
 CACHE_MARGIN_TILES = int(os.getenv("IQPILOT_NAV_CACHE_MARGIN", "2"))
 CACHE_LIMIT = int(os.getenv("IQPILOT_NAV_CACHE_LIMIT", "96"))
-# The corner panel's viewport (560x392) keeps ~(3+2*margin)x(2+2*margin) = 42 tiles on
-# screen+margin; 96 was sized for the full-screen interactive map and doubles the panel's
-# resident GPU footprint for tiles that can never be drawn.
+# Retention budget; larger viewports retain only their required visible coverage.
+# Spare textures share this budget with resident tiles.
 PANEL_CACHE_LIMIT = int(os.getenv("IQPILOT_NAV_PANEL_CACHE_LIMIT", "48"))
 # How long mapbox must stay healthy before the offline fallback's tile cache is freed.
 OFFLINE_RELEASE_AFTER_S = 60.0
 PARAMS_REFRESH_S = 0.5
+FALLBACK_POSITION_UPDATE_S = 0.5
+NAV_FIX_TIMEOUT_S = 2.0
 MAP_PROVIDER_UPDATE_S = 0.25
 # Offline decode now runs off the render thread (worker pattern, same as mapbox), so when
 # offline is the engaged provider it updates at the same cadence as the online one.
@@ -165,11 +150,15 @@ class TexturePool:
   def __init__(self, max_free: int):
     self._max_free = max_free
     self._free: dict[tuple[int, int], list[Any]] = {}
+    self._free_count = 0
 
   def acquire(self, image) -> Any:
     bucket = self._free.get((image.width, image.height))
     if bucket:
       texture = bucket.pop()
+      self._free_count -= 1
+      if not bucket:
+        del self._free[(image.width, image.height)]
       rl.update_texture(texture, image.data)
       return texture
     texture = rl.load_texture_from_image(image)
@@ -178,20 +167,153 @@ class TexturePool:
     return texture
 
   def release(self, texture) -> None:
-    bucket = self._free.setdefault((texture.width, texture.height), [])
-    if len(bucket) < self._max_free:
-      bucket.append(texture)
-    else:
+    if self._max_free <= 0:
       rl.unload_texture(texture)
+      return
+    if self._free_count >= self._max_free:
+      oldest_size = next(iter(self._free))
+      oldest_bucket = self._free[oldest_size]
+      rl.unload_texture(oldest_bucket.pop())
+      self._free_count -= 1
+      if not oldest_bucket:
+        del self._free[oldest_size]
+    size = (texture.width, texture.height)
+    bucket = self._free.pop(size, [])
+    bucket.append(texture)
+    self._free[size] = bucket
+    self._free_count += 1
+
+  def trim(self, limit: int) -> None:
+    while self._free_count > max(0, limit):
+      size = next(iter(self._free))
+      bucket = self._free[size]
+      rl.unload_texture(bucket.pop())
+      self._free_count -= 1
+      if not bucket:
+        del self._free[size]
 
   def drain(self) -> None:
     for bucket in self._free.values():
       for texture in bucket:
         rl.unload_texture(texture)
     self._free.clear()
+    self._free_count = 0
 
 
-class MapboxTileProvider:
+class TileRetryGate:
+  def __init__(self, base_s: float = TILE_RETRY_BASE_S, max_s: float = TILE_RETRY_MAX_S, limit: int = TILE_RETRY_LIMIT):
+    self._base_s = base_s
+    self._max_s = max_s
+    self._limit = limit
+    self._lock = threading.Lock()
+    self._entries: dict[tuple[int, int, int], tuple[int, float]] = {}
+
+  def failed(self, tile_key: tuple[int, int, int]) -> None:
+    with self._lock:
+      failures = self._entries.pop(tile_key, (0, 0.0))[0] + 1
+      delay = min(self._max_s, self._base_s * 2 ** (failures - 1))
+      self._entries[tile_key] = (failures, time.monotonic() + delay)
+      while len(self._entries) > self._limit:
+        del self._entries[next(iter(self._entries))]
+
+  def loaded(self, tile_key: tuple[int, int, int]) -> None:
+    with self._lock:
+      self._entries.pop(tile_key, None)
+
+  def has_failed(self, tile_key: tuple[int, int, int]) -> bool:
+    with self._lock:
+      return tile_key in self._entries
+
+  def blocked(self, tile_key: tuple[int, int, int]) -> bool:
+    with self._lock:
+      entry = self._entries.get(tile_key)
+    return entry is not None and time.monotonic() < entry[1]
+
+  def clear(self) -> None:
+    with self._lock:
+      self._entries.clear()
+
+
+class RasterTileProvider:
+  def _stash_pending(self, tile_key: tuple[int, int, int], image, generation: int) -> None:
+    """Store a decoded tile Image for upload, unloading any Image it displaces.
+
+    Safe to call from a fetch worker thread; only the render thread uploads/unloads textures."""
+    with self._lock:
+      if generation == self._generation:
+        displaced = self._pending_tiles.get(tile_key)
+        self._pending_tiles[tile_key] = image
+      else:
+        displaced = image
+    if displaced is not None:
+      rl.unload_image(displaced)
+
+  def _visible_tile_keys(
+    self, latitude: float, longitude: float, zoom: float, width: float, height: float
+  ) -> tuple[int, float, float, float, list[tuple[int, int, int]]]:
+    if self._rotated:
+      # Cover the rotated viewport without clipping its corners.
+      width = height = math.hypot(width, height)
+    z = max(0, min(22, int(round(zoom))))
+    scale = 2.0 ** (zoom - z)
+    center_x, center_y = mercator_world_px_at_zoom(latitude, longitude, z, tile_size=TILE_SIZE)
+    world_half_width = (width * 0.5) / max(scale, 1e-6)
+    world_half_height = (height * 0.5) / max(scale, 1e-6)
+    min_tile_x = int(math.floor((center_x - world_half_width) / TILE_SIZE)) - 1
+    max_tile_x = int(math.floor((center_x + world_half_width) / TILE_SIZE)) + 1
+    min_tile_y = int(math.floor((center_y - world_half_height) / TILE_SIZE)) - 1
+    max_tile_y = int(math.floor((center_y + world_half_height) / TILE_SIZE)) + 1
+
+    tile_count = 2 ** z
+    visible = []
+    for tile_y in range(max(0, min_tile_y), min(tile_count - 1, max_tile_y) + 1):
+      for tile_x in range(min_tile_x, max_tile_x + 1):
+        visible.append((z, tile_x % tile_count, tile_y))
+    return z, scale, center_x, center_y, visible
+
+  def set_rotated(self, rotated: bool) -> None:
+    self._rotated = rotated
+    self._keep_margin = 1 if rotated else CACHE_MARGIN_TILES
+
+  def _prune_cache(self, keep_tiles: set[tuple[int, int, int]], visible_tiles: set[tuple[int, int, int]]) -> None:
+    budget = max(self._cache_limit, len(visible_tiles))
+    self._pool.trim(budget - len(self._textures))
+    if len(self._textures) <= budget:
+      return
+
+    cache_before = len(self._textures)
+    unload_count = 0
+    started_ns = time.monotonic_ns()
+    for tile_key in sorted(self._textures, key=lambda key: key in keep_tiles):
+      if tile_key in visible_tiles:
+        continue
+      self._pool.release(self._textures.pop(tile_key))
+      unload_count += 1
+      if len(self._textures) <= budget:
+        break
+    self._pool.trim(budget - len(self._textures))
+    prune_us = (time.monotonic_ns() - started_ns) // 1000
+    if prune_us >= NAV_PRUNE_WARN_US or unload_count >= NAV_BURST_WARN_TILES:
+      sample = PerfSample(
+        texture_prune_us=int(prune_us),
+        texture_cache_before=cache_before,
+        texture_cache_after=len(self._textures),
+        texture_unloaded=unload_count,
+      )
+      _emit_nav_perf(
+        "nav_texture_prune",
+        total_time_us=int(prune_us),
+        batch_size=unload_count,
+        detail=f"provider={self._perf_provider} prune_us={prune_us} cache_before={cache_before} cache_after={len(self._textures)} unload_count={unload_count}",
+        sample=sample,
+      )
+
+
+class MapboxTileProvider(RasterTileProvider):
+  _perf_provider = "mapbox"
+  _rejected_token = ""
+  _rejected_until = 0.0
+
   def __init__(self, cache_limit: int = CACHE_LIMIT):
     self._cache_limit = cache_limit
     self._pool = TexturePool(cache_limit)
@@ -203,6 +325,8 @@ class MapboxTileProvider:
     self._inflight: set[tuple[int, int, int]] = set()
     self._textures: dict[tuple[int, int, int], rl.Texture] = {}
     self._lock = threading.Lock()
+    self._retry = TileRetryGate()
+    self._generation = 0
     self._status = "idle"
     self._viewport_complete = False
     self._cache_root = TILE_CACHE_ROOT
@@ -219,52 +343,73 @@ class MapboxTileProvider:
     the resident textures are the wrong palette. Render-thread only (release touches GL)."""
     if day == self._day_mode:
       return
+    self.release()
     self._day_mode = day
     self._style = "navigation-day-v1" if day else "navigation-night-v1"
-    self.release()
 
   def _token(self) -> str:
     return resolve_mapbox_token(self._params)
 
-  def _fetch_worker(self, tile_key: tuple[int, int, int], token: str) -> None:
+  def _fetch_worker(self, tile_key: tuple[int, int, int], token: str, generation: int) -> None:
     z, x, y = tile_key
-    url = build_mapbox_tile_url(z, x, y, tile_size=TILE_SIZE, scale=TILE_SCALE, style=self._style)
     try:
+      with self._lock:
+        if generation != self._generation:
+          return
+        style, day_mode = self._style, self._day_mode
+      url = build_mapbox_tile_url(z, x, y, tile_size=TILE_SIZE, scale=TILE_SCALE, style=style)
       response = self._session.get(url, params={"access_token": token}, timeout=1.5)
-      fallback_style = "light-v11" if self._day_mode else "dark-v11"
-      if response.status_code == 401 and self._style != fallback_style:
+      fallback_style = "light-v11" if day_mode else "dark-v11"
+      if response.status_code == 401 and style != fallback_style:
         # some tokens can't access the navigation styles ("Direct access not allowed")
-        self._style = fallback_style
-        url = build_mapbox_tile_url(z, x, y, tile_size=TILE_SIZE, scale=TILE_SCALE, style=self._style)
+        style = fallback_style
+        with self._lock:
+          if generation != self._generation:
+            return
+          self._style = style
+        url = build_mapbox_tile_url(z, x, y, tile_size=TILE_SIZE, scale=TILE_SCALE, style=style)
         response = self._session.get(url, params={"access_token": token}, timeout=3.0)
+      if response.status_code in (401, 403):
+        self._rejected_token = token
+        self._rejected_until = time.monotonic() + TOKEN_REJECTED_RETRY_S
       response.raise_for_status()
       if not self._cache_disabled:
-        cache_path = self._cache_path(tile_key)
+        cache_path = self._cache_path(tile_key, style)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_bytes(response.content)
       # Decode + downscale here on the worker thread (pure CPU/stb, no GL), so the render
       # thread only pays the cheap GPU upload in _consume_pending.
-      self._stash_pending(tile_key, _decode_tile_image(response.content))
-      self._status = "ready"
+      self._stash_pending(tile_key, _decode_tile_image(response.content), generation)
+      self._retry.loaded(tile_key)
+      self._set_status("ready", generation)
     except (requests.RequestException, ValueError):
-      if not self._queue_cached_tile(tile_key, inline=True):
-        self._status = "error"
+      if not self._queue_cached_tile(tile_key, inline=True, generation=generation):
+        self._retry.failed(tile_key)
+        self._set_status("error", generation)
     finally:
       self._inflight.discard(tile_key)
 
-  def _cache_path(self, tile_key: tuple[int, int, int]) -> Path:
+  def _set_status(self, status: str, generation: int) -> None:
+    with self._lock:
+      if generation == self._generation:
+        self._status = status
+
+  def _cache_path(self, tile_key: tuple[int, int, int], style: str | None = None) -> Path:
     z, x, y = tile_key
     # style-keyed: day and night tiles must never mix in the disk cache
-    return self._cache_root / self._style / str(z) / str(x) / f"{y}@{TILE_SCALE}x.png"
+    return self._cache_root / (self._style if style is None else style) / str(z) / str(x) / f"{y}@{TILE_SCALE}x.png"
 
-  def _queue_cached_tile(self, tile_key: tuple[int, int, int], inline: bool = False) -> bool:
+  def _queue_cached_tile(self, tile_key: tuple[int, int, int], inline: bool = False, generation: int | None = None) -> bool:
+    generation = self._generation if generation is None else generation
+    if generation != self._generation:
+      return False
     if self._cache_disabled:
       return False
     if tile_key in self._textures or tile_key in self._pending_tiles:
       return True
     # The render-thread path defers when the tile is already being fetched/decoded; the inline
     # (network-error fallback) path owns its own _inflight entry, so it must not short-circuit here.
-    if not inline and tile_key in self._inflight:
+    if not inline and (tile_key in self._inflight or self._retry.blocked(tile_key)):
       return True
 
     cache_path = self._cache_path(tile_key)
@@ -275,45 +420,37 @@ class MapboxTileProvider:
       # Already on a worker thread (network-error fallback) — decode here directly.
       try:
         payload = cache_path.read_bytes()
-        self._stash_pending(tile_key, _decode_tile_image(payload))
+        self._stash_pending(tile_key, _decode_tile_image(payload), generation)
       except (OSError, ValueError):
         return False
-      self._status = "offline_cache"
+      self._set_status("offline_cache", generation)
       return True
 
     # Called from the render thread: offload the disk read + decode + resize to a worker so the
     # UI loop never stalls, even when a whole screen of tiles is served from cache. Bounded by
     # MAX_INFLIGHT (shared with network fetches); over the cap we defer to a later frame.
-    if len(self._inflight) >= MAX_INFLIGHT_TILES:
+    if len(self._inflight) + len(self._pending_tiles) >= MAX_INFLIGHT_TILES:
       return True
     self._inflight.add(tile_key)
     self._status = "offline_cache"
-    threading.Thread(target=self._cache_decode_worker, args=(tile_key, cache_path), daemon=True).start()
+    threading.Thread(target=self._cache_decode_worker, args=(tile_key, cache_path, generation), daemon=True).start()
     return True
 
-  def _cache_decode_worker(self, tile_key: tuple[int, int, int], cache_path: Path) -> None:
+  def _cache_decode_worker(self, tile_key: tuple[int, int, int], cache_path: Path, generation: int) -> None:
     try:
+      if generation != self._generation:
+        return
       payload = cache_path.read_bytes()
-      self._stash_pending(tile_key, _decode_tile_image(payload))
+      self._stash_pending(tile_key, _decode_tile_image(payload), generation)
     except (OSError, ValueError):
-      pass
+      self._retry.failed(tile_key)
     finally:
       self._inflight.discard(tile_key)
 
-  def _stash_pending(self, tile_key: tuple[int, int, int], image) -> None:
-    """Store a decoded tile Image for upload, unloading any Image it displaces.
-
-    Safe to call from a fetch worker thread; only the render thread uploads/unloads textures."""
-    with self._lock:
-      displaced = self._pending_tiles.get(tile_key)
-      self._pending_tiles[tile_key] = image
-    if displaced is not None:
-      rl.unload_image(displaced)
-
   def _consume_pending(self) -> None:
     with self._lock:
-      pending = list(self._pending_tiles.items())
-      self._pending_tiles.clear()
+      tile_key = next(iter(self._pending_tiles), None)
+      pending = [(tile_key, self._pending_tiles.pop(tile_key))] if tile_key is not None else []
 
     decode_us = 0
     upload_us = 0
@@ -365,32 +502,6 @@ class MapboxTileProvider:
         sample=sample,
       )
 
-  def _visible_tile_keys(
-    self, latitude: float, longitude: float, zoom: float, width: float, height: float
-  ) -> tuple[int, float, float, float, list[tuple[int, int, int]]]:
-    if self._rotated:
-      # rotation coverage = bounding circle; keep_margin=1 keeps resident set under cache_limit
-      width = height = math.hypot(width, height)
-    z = max(0, min(22, int(round(zoom))))
-    scale = 2.0 ** (zoom - z)
-    center_x, center_y = mercator_world_px_at_zoom(latitude, longitude, z, tile_size=TILE_SIZE)
-    world_half_width = (width * 0.5) / max(scale, 1e-6)
-    world_half_height = (height * 0.5) / max(scale, 1e-6)
-    min_tile_x = int(math.floor((center_x - world_half_width) / TILE_SIZE)) - 1
-    max_tile_x = int(math.floor((center_x + world_half_width) / TILE_SIZE)) + 1
-    min_tile_y = int(math.floor((center_y - world_half_height) / TILE_SIZE)) - 1
-    max_tile_y = int(math.floor((center_y + world_half_height) / TILE_SIZE)) + 1
-
-    tile_count = 2 ** z
-    visible = []
-    for tile_y in range(max(0, min_tile_y), min(tile_count - 1, max_tile_y) + 1):
-      for tile_x in range(min_tile_x, max_tile_x + 1):
-        visible.append((z, tile_x % tile_count, tile_y))
-    return z, scale, center_x, center_y, visible
-
-  def set_rotated(self, rotated: bool) -> None:
-    self._rotated = rotated
-    self._keep_margin = 1 if rotated else CACHE_MARGIN_TILES
 
   @staticmethod
   def _image_ext(payload: bytes) -> str:
@@ -399,36 +510,6 @@ class MapboxTileProvider:
     if payload.startswith(b"RIFF") and b"WEBP" in payload[:16]:
       return ".webp"
     return ".png"
-
-  def _prune_cache(self, keep_tiles: set[tuple[int, int, int]]) -> None:
-    if len(self._textures) <= self._cache_limit:
-      return
-
-    cache_before = len(self._textures)
-    unload_count = 0
-    started_ns = time.monotonic_ns()
-    for tile_key in list(self._textures):
-      if tile_key in keep_tiles:
-        continue
-      self._pool.release(self._textures.pop(tile_key))
-      unload_count += 1
-      if len(self._textures) <= self._cache_limit:
-        break
-    prune_us = (time.monotonic_ns() - started_ns) // 1000
-    if prune_us >= NAV_PRUNE_WARN_US or unload_count >= NAV_BURST_WARN_TILES:
-      sample = PerfSample(
-        texture_prune_us=int(prune_us),
-        texture_cache_before=cache_before,
-        texture_cache_after=len(self._textures),
-        texture_unloaded=unload_count,
-      )
-      _emit_nav_perf(
-        "nav_texture_prune",
-        total_time_us=int(prune_us),
-        batch_size=unload_count,
-        detail=f"provider=mapbox prune_us={prune_us} cache_before={cache_before} cache_after={len(self._textures)} unload_count={unload_count}",
-        sample=sample,
-      )
 
   def update(self, latitude: float, longitude: float, zoom: float, width: float, height: float):
     if self._provider_disabled:
@@ -441,21 +522,24 @@ class MapboxTileProvider:
     center_tile_x = center_x / TILE_SIZE
     center_tile_y = center_y / TILE_SIZE
     token = self._token()
+    if token == self._rejected_token and time.monotonic() < self._rejected_until:
+      token = ""
 
     for tile_key in visible_tiles:
       self._queue_cached_tile(tile_key)
 
     missing_tiles = [
       tile_key for tile_key in visible_tiles
-      if tile_key not in self._textures and tile_key not in self._inflight
+      if tile_key not in self._textures and tile_key not in self._inflight and tile_key not in self._pending_tiles
+      and not self._retry.blocked(tile_key)
     ]
     missing_tiles.sort(key=lambda tile_key: abs(tile_key[1] - center_tile_x) + abs(tile_key[2] - center_tile_y))
     if token:
-      launch_count = max(0, MAX_INFLIGHT_TILES - len(self._inflight))
+      launch_count = max(0, MAX_INFLIGHT_TILES - len(self._inflight) - len(self._pending_tiles))
       for tile_key in missing_tiles[:launch_count]:
         self._inflight.add(tile_key)
         self._status = "loading"
-        thread = threading.Thread(target=self._fetch_worker, args=(tile_key, token), daemon=True)
+        thread = threading.Thread(target=self._fetch_worker, args=(tile_key, token, self._generation), daemon=True)
         thread.start()
     elif not self._textures:
       self._status = "token_missing"
@@ -478,7 +562,25 @@ class MapboxTileProvider:
           keep_y = tile_y + dy
           if 0 <= keep_y < tile_count:
             keep_tiles.add((z, (tile_x + dx) % tile_count, keep_y))
-    self._prune_cache(keep_tiles)
+    self._prune_cache(keep_tiles | self._fallback_tiles(visible_tiles), set(visible_tiles))
+
+  def _fallback_tiles(self, visible_tiles: list[tuple[int, int, int]]) -> set[tuple[int, int, int]]:
+    fallback = set()
+    for tile_key in visible_tiles:
+      if tile_key in self._textures:
+        continue
+      z, x, y = tile_key
+      for levels in (1, 2):
+        parent = (z - levels, x >> levels, y >> levels)
+        if parent in self._textures:
+          fallback.add(parent)
+          break
+      else:
+        fallback.update(
+          child for dx in (0, 1) for dy in (0, 1)
+          if (child := (z + 1, x * 2 + dx, y * 2 + dy)) in self._textures
+        )
+    return fallback
 
   def draw(self, rect: rl.Rectangle, latitude: float, longitude: float, zoom: float) -> bool:
     if self._provider_disabled:
@@ -488,14 +590,18 @@ class MapboxTileProvider:
     half_width = rect.width * 0.5
     half_height = rect.height * 0.5
 
-    for tile_key in visible_tiles:
+    fallback = sorted(self._fallback_tiles(visible_tiles))
+    for tile_key in fallback + visible_tiles:
       texture = self._textures.get(tile_key)
       if texture is None:
         continue
-      _, tile_x, tile_y = tile_key
-      tile_left = rect.x + half_width + ((tile_x * TILE_SIZE) - center_x) * scale
-      tile_top = rect.y + half_height + ((tile_y * TILE_SIZE) - center_y) * scale
-      dst = rl.Rectangle(tile_left, tile_top, TILE_SIZE * scale, TILE_SIZE * scale)
+      tile_z, tile_x, tile_y = tile_key
+      tile_span = TILE_SIZE * 2.0 ** (z - tile_z)
+      world_size = TILE_SIZE * 2 ** z
+      offset_x = (tile_x * tile_span - center_x + world_size * 0.5) % world_size - world_size * 0.5
+      tile_left = rect.x + half_width + offset_x * scale
+      tile_top = rect.y + half_height + (tile_y * tile_span - center_y) * scale
+      dst = rl.Rectangle(tile_left, tile_top, tile_span * scale, tile_span * scale)
       src = rl.Rectangle(0, 0, float(texture.width), float(texture.height))
       rl.draw_texture_pro(texture, src, dst, rl.Vector2(0, 0), 0.0, rl.WHITE)
       drew_any = True
@@ -524,15 +630,19 @@ class MapboxTileProvider:
     self._textures.clear()
     self._pool.drain()
     with self._lock:
+      self._generation += 1
       pending_images = list(self._pending_tiles.values())
       self._pending_tiles.clear()
     for image in pending_images:
       rl.unload_image(image)
+    self._retry.clear()
     self._status = "idle"
     self._viewport_complete = False
 
 
-class OsmOfflineProvider:
+class OsmOfflineProvider(RasterTileProvider):
+  _perf_provider = "offline"
+
   def __init__(self, cache_limit: int = CACHE_LIMIT):
     self._cache_limit = cache_limit
     self._pool = TexturePool(cache_limit)
@@ -547,8 +657,11 @@ class OsmOfflineProvider:
     self._pending_tiles: dict[tuple[int, int, int], Any] = {}
     self._inflight: set[tuple[int, int, int]] = set()
     self._lock = threading.Lock()
+    self._retry = TileRetryGate()
+    self._generation = 0
     self._textures: dict[tuple[int, int, int], rl.Texture] = {}
     self._status = "offline_missing"
+    self._visible_source: list[tuple[int, int, int]] = []
     self._min_zoom: int | None = None
     self._max_zoom: int | None = None
     self._day_mode = False
@@ -558,10 +671,6 @@ class OsmOfflineProvider:
   def set_day_mode(self, day: bool) -> None:
     self._day_mode = day
 
-  def set_rotated(self, rotated: bool) -> None:
-    self._rotated = rotated
-    self._keep_margin = 1 if rotated else CACHE_MARGIN_TILES
-
   def _close_conn_locked(self) -> None:
     if self._conn is not None:
       self._conn.close()
@@ -569,12 +678,23 @@ class OsmOfflineProvider:
 
   def _drop_pending(self) -> None:
     with self._lock:
+      self._generation += 1
       pending_images = list(self._pending_tiles.values())
       self._pending_tiles.clear()
     for image in pending_images:
       rl.unload_image(image)
+    self._retry.clear()
 
-  def _refresh_source(self, latitude: float, longitude: float) -> None:
+  def source_available(self, latitude: float | None = None, longitude: float | None = None) -> bool:
+    self._refresh_source(latitude, longitude)
+    return self._status == "offline_ready"
+
+  def viewport_missing(self) -> bool:
+    return self._status != "offline_ready" or (
+      bool(self._visible_source) and all(self._retry.has_failed(tile) for tile in self._visible_source)
+    )
+
+  def _refresh_source(self, latitude: float | None, longitude: float | None) -> None:
     mbtiles_path = find_offline_mbtiles_path(latitude, longitude, day=self._day_mode)
     xyz_root = find_offline_xyz_root(latitude, longitude)
 
@@ -624,28 +744,23 @@ class OsmOfflineProvider:
 
     return (source_z, x >> delta, y >> delta), delta
 
-  def _stash_pending(self, tile_key: tuple[int, int, int], image) -> None:
-    """Store a decoded tile Image for upload, unloading any Image it displaces.
-
-    Safe to call from a fetch worker thread; only the render thread uploads/unloads textures."""
-    with self._lock:
-      displaced = self._pending_tiles.get(tile_key)
-      self._pending_tiles[tile_key] = image
-    if displaced is not None:
-      rl.unload_image(displaced)
-
-  def _load_decode_worker(self, tile_key: tuple[int, int, int]) -> None:
+  def _load_decode_worker(self, tile_key: tuple[int, int, int], generation: int) -> None:
     """Read a tile blob from disk and decode + downscale it, entirely off the render thread.
 
     Mirrors MapboxTileProvider._fetch_worker: the render loop must never pay the sqlite/file
     read or the stb decode — with offline as the primary provider, an inline decode of a
     screenful of tiles was a visible render-loop hitch."""
     try:
+      if generation != self._generation:
+        return
       payload = self._load_blob(tile_key)
-      if payload is not None:
-        self._stash_pending(tile_key, _decode_tile_image(payload))
+      if payload is None:
+        self._retry.failed(tile_key)
+      else:
+        self._stash_pending(tile_key, _decode_tile_image(payload), generation)
+        self._retry.loaded(tile_key)
     except Exception:
-      pass
+      self._retry.failed(tile_key)
     finally:
       self._inflight.discard(tile_key)
 
@@ -698,58 +813,6 @@ class OsmOfflineProvider:
         sample=sample,
       )
 
-  def _prune_cache(self, keep_tiles: set[tuple[int, int, int]]) -> None:
-    if len(self._textures) <= self._cache_limit:
-      return
-
-    cache_before = len(self._textures)
-    unload_count = 0
-    started_ns = time.monotonic_ns()
-    for tile_key in list(self._textures):
-      if tile_key in keep_tiles:
-        continue
-      self._pool.release(self._textures.pop(tile_key))
-      unload_count += 1
-      if len(self._textures) <= self._cache_limit:
-        break
-    prune_us = (time.monotonic_ns() - started_ns) // 1000
-    if prune_us >= NAV_PRUNE_WARN_US or unload_count >= NAV_BURST_WARN_TILES:
-      sample = PerfSample(
-        texture_prune_us=int(prune_us),
-        texture_cache_before=cache_before,
-        texture_cache_after=len(self._textures),
-        texture_unloaded=unload_count,
-      )
-      _emit_nav_perf(
-        "nav_texture_prune",
-        total_time_us=int(prune_us),
-        batch_size=unload_count,
-        detail=f"provider=offline prune_us={prune_us} cache_before={cache_before} cache_after={len(self._textures)} unload_count={unload_count}",
-        sample=sample,
-      )
-
-  def _visible_tile_keys(
-    self, latitude: float, longitude: float, zoom: float, width: float, height: float
-  ) -> tuple[int, float, float, float, list[tuple[int, int, int]]]:
-    if self._rotated:
-      width = height = math.hypot(width, height)
-    z = max(0, min(22, int(round(zoom))))
-    scale = 2.0 ** (zoom - z)
-    center_x, center_y = mercator_world_px_at_zoom(latitude, longitude, z, tile_size=TILE_SIZE)
-    world_half_width = (width * 0.5) / max(scale, 1e-6)
-    world_half_height = (height * 0.5) / max(scale, 1e-6)
-    min_tile_x = int(math.floor((center_x - world_half_width) / TILE_SIZE)) - 1
-    max_tile_x = int(math.floor((center_x + world_half_width) / TILE_SIZE)) + 1
-    min_tile_y = int(math.floor((center_y - world_half_height) / TILE_SIZE)) - 1
-    max_tile_y = int(math.floor((center_y + world_half_height) / TILE_SIZE)) + 1
-
-    tile_count = 2 ** z
-    visible = []
-    for tile_y in range(max(0, min_tile_y), min(tile_count - 1, max_tile_y) + 1):
-      for tile_x in range(min_tile_x, max_tile_x + 1):
-        visible.append((z, tile_x % tile_count, tile_y))
-    return z, scale, center_x, center_y, visible
-
   def _load_blob(self, tile_key: tuple[int, int, int]) -> bytes | None:
     z, x, y = tile_key
     # Runs on worker threads: the shared read-only sqlite connection is not safe for
@@ -783,9 +846,12 @@ class OsmOfflineProvider:
         seen.add(source_tile)
         visible_source.append(source_tile)
 
+    self._visible_source = visible_source
+
     missing_tiles = [
       tile_key for tile_key in visible_source
-      if tile_key not in self._textures and tile_key not in self._inflight
+      if tile_key not in self._textures and tile_key not in self._inflight and tile_key not in self._pending_tiles
+      and not self._retry.blocked(tile_key)
     ]
 
     def _center_distance(tile_key: tuple[int, int, int]) -> float:
@@ -797,10 +863,10 @@ class OsmOfflineProvider:
       )
 
     missing_tiles.sort(key=_center_distance)
-    launch_count = max(0, MAX_INFLIGHT_TILES - len(self._inflight))
+    launch_count = max(0, MAX_INFLIGHT_TILES - len(self._inflight) - len(self._pending_tiles))
     for tile_key in missing_tiles[:launch_count]:
       self._inflight.add(tile_key)
-      threading.Thread(target=self._load_decode_worker, args=(tile_key,), daemon=True).start()
+      threading.Thread(target=self._load_decode_worker, args=(tile_key, self._generation), daemon=True).start()
 
     # Keep a margin ring around the visible source tiles so panning doesn't churn re-decodes;
     # the cache limit bounds the resident GPU footprint exactly like the mapbox provider.
@@ -812,7 +878,7 @@ class OsmOfflineProvider:
           keep_y = tile_y + dy
           if 0 <= keep_y < tile_count:
             keep_tiles.add((source_z, (tile_x + dx) % tile_count, keep_y))
-    self._prune_cache(keep_tiles)
+    self._prune_cache(keep_tiles, set(visible_source))
 
   def draw(self, rect: rl.Rectangle, latitude: float, longitude: float, zoom: float) -> bool:
     if self._status != "offline_ready":
@@ -887,54 +953,37 @@ class NavMapPanel(Widget):
     self.next_type = 0
     self.next_valid = False
     self.nav_active = False
-    self.destination_name = ""
-    self.time_remaining = 0.0
-    self.distance_remaining = 0.0
     self.road_name = ""
     self._has_render_fix = False
     self._route_ahead_index = 0
     self._projected_route_points: list[tuple[float, float]] = []
     self._projected_route_key: tuple | None = None
+    self._route_camera: tuple[float, float, float, float, float] | None = None
     self._map_viewport_width: float = PANEL_WIDTH - 24
     self._map_viewport_height: float = MAP_HEIGHT
     self._mapbox = MapboxTileProvider(cache_limit=PANEL_CACHE_LIMIT)
     self._offline = OsmOfflineProvider(cache_limit=PANEL_CACHE_LIMIT)
     self._offline_idle_since = 0.0
-    # OnlineOSMaps/OfflineOSMaps pick the tile sources: both on = online primary with offline
-    # filling in whenever mapbox is unhealthy; online only = mapbox alone (stock behavior);
-    # offline only = local tiles alone, mapbox never fetched (no network threads at all).
+    # OnlineOSMaps and OfflineOSMaps independently control their respective tile sources.
     self._online_maps_enabled = True
     self._offline_maps_enabled = False
     self._mapbox_mode_released = False
-    # Day/night map styling, Apple/Google-style: solar elevation drives it once a GPS fix
-    # exists (hysteresis: day above 0 deg, night below -6 deg / civil dusk); the local clock
-    # seeds the first frame. OSMapsStyleMode param forces day(1)/night(2), 0 = auto.
-    self._day_mode = 6 <= time.localtime().tm_hour < 20
-    self._style_mode = 0
-    self._last_daynight_check = 0.0
     self._heading_up = True
     self.display_bearing = 0.0
     self._title_font = gui_app.font(FontWeight.BOLD)
-    self._body_font = gui_app.font(FontWeight.MEDIUM)
-    self._micro_font = gui_app.font(FontWeight.SEMI_BOLD)
     self._icon_textures: dict[str, rl.Texture] = {}
     self._last_params_refresh = 0.0
+    self._last_fallback_position_update = 0.0
+    self._last_nav_fix = float("-inf")
+    self._last_position_change = float("-inf")
     self._last_mapbox_update = 0.0
     self._last_offline_update = 0.0
     self._released = False
     self._last_projection_update = 0.0
-    # Memoizes _fit_text_size: the fit loop measures the same (font, text, width) tuples every
-    # frame at 20Hz across ~a dozen text elements. The result only depends on those inputs, so
-    # cache it and skip the descending measure loop entirely on repeats.
-    self._fit_size_cache: dict[tuple, int] = {}
-    # Split RenderTexture caches for the onroad panel (lazily created on the render thread, which
-    # owns the GL context). The map layer (tiles/route/ego) pans, so it refreshes at
-    # PANEL_RENDER_FPS; the chrome layer (badge + info text) only refreshes on a value change.
-    self._map_rt: Any = None
-    self._chrome_rt: Any = None
-    self._last_map_render = 0.0
-    self._last_chrome_render = 0.0
-    self._chrome_key: Any = None
+    self._split_rt: Any = None
+    self._last_split_render = 0.0
+    self._map_camera: tuple[float, float, float, float] | None = None
+    self._marker_motion = MapMarkerMotion()
 
   @staticmethod
   def _enum_value(value) -> int:
@@ -946,18 +995,18 @@ class NavMapPanel(Widget):
     Latched so it runs on the offroad/maps-off transition rather than every idle
     frame. force_visible (offroad NAV screen) keeps its own panel active, so this
     only fires for the onroad panel when it stops drawing."""
+    gui_app.cancel_render_job(self)
     if self._released:
       return
     self._mapbox.release()
     self._offline.release()
-    for attr in ("_map_rt", "_chrome_rt"):
-      rt = getattr(self, attr)
-      if rt is not None:
-        rl.unload_render_texture(rt)
-        setattr(self, attr, None)
-    self._last_map_render = 0.0
-    self._last_chrome_render = 0.0
-    self._chrome_key = None
+    if self._split_rt is not None:
+      rl.unload_render_texture(self._split_rt)
+      self._split_rt = None
+    self._last_split_render = 0.0
+    self._map_camera = None
+    self._marker_motion = MapMarkerMotion()
+    self._last_position_change = float("-inf")
     self._released = True
 
   def _route_ahead_points(self):
@@ -967,16 +1016,22 @@ class NavMapPanel(Widget):
 
     best_idx = 0
     best_score = None
-    for idx, point in enumerate(self.route_points):
-      dlat = float(point.latitude) - self.current_latitude
-      dlon = float(point.longitude) - self.current_longitude
-      score = dlat * dlat + dlon * dlon
+    longitude_scale = math.cos(math.radians(self.current_latitude))
+    for idx in range(len(self.route_points) - 1):
+      point, following = self.route_points[idx], self.route_points[idx + 1]
+      x = (float(point.longitude) - self.current_longitude) * longitude_scale
+      y = float(point.latitude) - self.current_latitude
+      dx = (float(following.longitude) - float(point.longitude)) * longitude_scale
+      dy = float(following.latitude) - float(point.latitude)
+      length_squared = dx * dx + dy * dy
+      fraction = min(1.0, max(0.0, -(x * dx + y * dy) / length_squared)) if length_squared else 0.0
+      score = (x + fraction * dx) ** 2 + (y + fraction * dy) ** 2
       if best_score is None or score < best_score:
         best_score = score
         best_idx = idx
 
     self._route_ahead_index = best_idx
-    return self.route_points[best_idx:]
+    return self.route_points[self._route_ahead_index:]
 
   def _refresh_route_projection(self, force: bool = False) -> None:
     route_points = self.route_points[self._route_ahead_index:]
@@ -1007,6 +1062,8 @@ class NavMapPanel(Widget):
       self._map_viewport_width,
       self._map_viewport_height,
     )
+    self._route_camera = (self.display_center_latitude, self.display_center_longitude, self.display_zoom,
+                          self._map_viewport_width, self._map_viewport_height)
     self._projected_route_key = projection_key
 
     project_us = int((time.monotonic() - started) * 1_000_000)
@@ -1034,7 +1091,7 @@ class NavMapPanel(Widget):
       return "direction_fork_left.png" if dir_left else "direction_fork_right.png"
     if self.next_type == 6:
       return "direction_arrive.png"
-    return "direction_continue_left.png" if dir_left else "direction_continue_right.png"
+    return "direction_turn_left.png" if dir_left else "direction_turn_right.png"
 
   def _display_next_valid(self) -> bool:
     return bool(
@@ -1052,17 +1109,6 @@ class NavMapPanel(Widget):
     if " right " in description and " left " not in description:
       return False
     return self.next_direction == 1
-
-  def _display_route_active(self) -> bool:
-    return bool(
-      self.nav_active and (
-        self.distance_remaining > 1.0
-        or self.time_remaining > 1.0
-        or bool(self.destination_name)
-        or self._display_next_valid()
-        or len(self.route_points) >= 2
-      )
-    )
 
   def _icon_texture(self):
     name = self._icon_asset_name()
@@ -1096,22 +1142,6 @@ class NavMapPanel(Widget):
     self._icon_textures[name] = texture
     return texture
 
-  def _fit_text_size(self, font: rl.Font, text: str, max_width: float, max_size: int, min_size: int) -> int:
-    key = (id(font), text, round(max_width), max_size, min_size)
-    cached = self._fit_size_cache.get(key)
-    if cached is not None:
-      return cached
-    fitted = min_size
-    for size in range(max_size, min_size - 1, -1):
-      if measure_text_cached(font, text, size).x <= max_width:
-        fitted = size
-        break
-    # Bound the cache: distances/ETA strings churn, but the working set per frame is tiny.
-    if len(self._fit_size_cache) > 512:
-      self._fit_size_cache.clear()
-    self._fit_size_cache[key] = fitted
-    return fitted
-
   @staticmethod
   def _lerp(start: float, end: float, alpha: float) -> float:
     return start + (end - start) * alpha
@@ -1122,6 +1152,8 @@ class NavMapPanel(Widget):
     return (current + delta * alpha) % 360.0
 
   def _refresh_position_from_fallback(self) -> bool:
+    if time.monotonic() - self._last_nav_fix < NAV_FIX_TIMEOUT_S:
+      return False
     lat, lon, bearing, have_fix = current_or_last_gps_position()
     if not have_fix:
       return False
@@ -1159,34 +1191,25 @@ class NavMapPanel(Widget):
       self._online_maps_enabled = self._params.get_bool("OnlineOSMaps")
       self._offline_maps_enabled = self._params.get_bool("OfflineOSMaps")
     except UnknownKeyName:
-      # Builds whose compiled params predate the toggles keep the legacy behavior:
-      # online primary with the offline fallback armed.
       self._online_maps_enabled = True
+      self._offline_maps_enabled = False
+
+    has_downloaded_maps = find_offline_mbtiles_path() is not None or find_offline_xyz_root() is not None
+    if gui_app.big_ui() and has_downloaded_maps:
+      enable_panel = not self._maps_enabled
+      enable_offline = not self._offline_maps_enabled
+      self._maps_enabled = True
       self._offline_maps_enabled = True
-    try:
-      self._style_mode = int(self._params.get("OSMapsStyleMode") or 0)
-    except (UnknownKeyName, ValueError):
-      self._style_mode = 0
+      if not self._force_visible:
+        if enable_panel:
+          self._params.put_bool("OnScreenNavigation", True)
+        if enable_offline:
+          self._params.put_bool("OfflineOSMaps", True)
     try:
       self._heading_up = self._params.get_bool("OSMapsHeadingUp")
     except UnknownKeyName:
       self._heading_up = True
     self._last_params_refresh = now
-
-  def _refresh_day_mode(self, now: float) -> None:
-    if self._style_mode in (1, 2):
-      self._day_mode = self._style_mode == 1
-      return
-    if now - self._last_daynight_check < 60.0:
-      return
-    self._last_daynight_check = now
-    if abs(self.current_latitude) > 0.01 or abs(self.current_longitude) > 0.01:
-      elevation = solar_elevation_deg(self.current_latitude, self.current_longitude, time.time())  # noqa: TID251
-      if elevation > 0.0:
-        self._day_mode = True
-      elif elevation < -6.0:
-        self._day_mode = False
-      # between 0 and -6 deg (twilight): keep the current style, no flapping
 
   def update(self):
     now = time.monotonic()
@@ -1205,23 +1228,25 @@ class NavMapPanel(Widget):
     self._released = False
 
     sm = ui_state.sm
-    render_updated = False
     if sm.updated["iqNavRenderState"]:
-      render_updated = True
       rs = sm["iqNavRenderState"]
       rs_lat = float(rs.currentLatitude)
       rs_lon = float(rs.currentLongitude)
-      has_fix = abs(rs_lat) > 0.001 and abs(rs_lon) > 0.001
+      has_fix = 0.001 < abs(rs_lat) <= 90.0 and 0.001 < abs(rs_lon) <= 180.0 and math.isfinite(float(rs.bearingDeg))
       if has_fix:
+        self._last_nav_fix = now
+        if (rs_lat, rs_lon) != (self.current_latitude, self.current_longitude):
+          self._last_position_change = now
         self.current_latitude = rs_lat
         self.current_longitude = rs_lon
         self.bearing_deg = float(rs.bearingDeg)
         self.zoom_hint = float(rs.zoomHint) if float(rs.zoomHint) > 0.0 else 16.0
         self._has_render_fix = True
       route_points = list(rs.routePolylineSimplified) if len(rs.routePolylineSimplified) > 0 else list(rs.routePolyline)
-      if route_points:
-        self.route_points = route_points
-        self._projected_route_key = None
+      self.route_points = route_points
+      self._projected_route_key = None
+      if not route_points:
+        self._projected_route_points = []
       self.next_distance = float(rs.nextManeuverDistance)
       self.next_direction = self._enum_value(rs.nextManeuverDirection)
       self.next_type = self._enum_value(rs.nextManeuverType)
@@ -1243,17 +1268,19 @@ class NavMapPanel(Widget):
         self.display_zoom = self.render_zoom
       self.active = bool(rs.active) or self._has_render_fix or bool(self.route_points)
 
-    if self._force_visible and (not render_updated or not self.active):
+    if now - self._last_fallback_position_update >= FALLBACK_POSITION_UPDATE_S:
       self._refresh_position_from_fallback()
+      self._last_fallback_position_update = now
 
     if sm.updated["iqNavState"]:
       nav = sm["iqNavState"]
       self.nav_active = bool(nav.active)
+      if not self.nav_active:
+        self.route_points = []
+        self._projected_route_points = []
+        self._projected_route_key = None
       self.next_valid = bool(nav.nextManeuverValid)
-      self.destination_name = str(nav.destinationName or "")
       self.next_description = nav.nextManeuverDescription if nav.nextManeuverValid else ""
-      self.time_remaining = float(nav.timeRemaining)
-      self.distance_remaining = float(nav.distanceRemaining)
       self.next_direction = self._enum_value(nav.nextManeuverDirection) if nav.nextManeuverValid else self.next_direction
       self.next_type = self._enum_value(nav.nextManeuverType) if nav.nextManeuverValid else self.next_type
 
@@ -1268,9 +1295,8 @@ class NavMapPanel(Widget):
         self._refresh_route_projection()
         self._last_projection_update = now
 
-      self._refresh_day_mode(now)
-      self._mapbox.set_day_mode(self._day_mode)
-      self._offline.set_day_mode(self._day_mode)
+      self._mapbox.set_day_mode(False)
+      self._offline.set_day_mode(False)
 
       rotate = self._heading_up and self._has_render_fix
       self._mapbox.set_rotated(rotate)
@@ -1289,19 +1315,19 @@ class NavMapPanel(Widget):
             self._map_viewport_height,
           )
           self._last_mapbox_update = now
+        else:
+          self._mapbox._consume_pending()
       elif not self._mapbox_mode_released:
         # Online maps toggled off: free the mapbox tile cache once. No update() means no fetch
         # threads and no network traffic while offline-only mode is selected.
         self._mapbox.release()
         self._mapbox_mode_released = True
 
+      mapbox_status = self._mapbox.status()
       if self._offline_maps_enabled:
-        if self._online_maps_enabled:
-          # Both sources on: offline engages only while mapbox can't cover the screen.
-          mapbox_status = self._mapbox.status()
-          offline_engaged = mapbox_status in {"disabled", "token_missing", "error"} or not self._mapbox.has_content()
-        else:
-          offline_engaged = True
+        offline_engaged = not self._online_maps_enabled or (
+          mapbox_status in {"disabled", "token_missing", "error"} or not self._mapbox.has_content()
+        )
       else:
         offline_engaged = False
 
@@ -1337,6 +1363,14 @@ class NavMapPanel(Widget):
     self._refresh_params(time.monotonic())
     return bool(self._maps_enabled)
 
+  def set_maps_enabled(self, enabled: bool) -> None:
+    self._params.put_bool("OnScreenNavigation", enabled)
+    self._maps_enabled = enabled
+    self._last_params_refresh = time.monotonic()
+    if not enabled:
+      self.active = False
+      self._release_providers()
+
   def warm_up_tiles(self, timeout_s: float = 30.0) -> bool:
     """Block until the online provider covers the current viewport. For offline rendering
     (tools/clip), where frames aren't wall-clock paced and async tile fetches would lag the
@@ -1357,38 +1391,18 @@ class NavMapPanel(Widget):
       time.sleep(0.05)
 
   @staticmethod
-  def _draw_card(rect: rl.Rectangle):
-    shadow = rl.Rectangle(rect.x + 8, rect.y + 12, rect.width, rect.height)
-    rl.draw_rectangle_rounded(shadow, CARD_RADIUS, 18, rl.Color(4, 8, 14, 110))
-    rl.draw_rectangle_rounded(rect, CARD_RADIUS, 18, rl.Color(9, 18, 28, 246))
-    rl.draw_rectangle_rounded_lines(rect, CARD_RADIUS, 18, rl.Color(255, 255, 255, 35))
-
-  @staticmethod
-  def _draw_fallback_background(rect: rl.Rectangle, draw_grid: bool = True):
-    rl.draw_rectangle_rounded(rect, 0.04, 14, rl.Color(20, 27, 37, 255))
-    # The decorative grid is only visible in the no-map placeholder state; once tiles are drawn
-    # they paint over it opaquely, so the ~20 draw_line calls/frame are pure wasted overdraw.
-    if not draw_grid:
-      return
-    spacing = 44
-    line_color = rl.Color(90, 104, 123, 86)
-    x = rect.x
-    while x < rect.x + rect.width:
-      rl.draw_line(int(x), int(rect.y), int(x), int(rect.y + rect.height), line_color)
-      x += spacing
-    y = rect.y
-    while y < rect.y + rect.height:
-      rl.draw_line(int(rect.x), int(y), int(rect.x + rect.width), int(y), line_color)
-      y += spacing
+  def _draw_fallback_background(rect: rl.Rectangle):
+    rl.draw_rectangle_rec(rect, rl.Color(10, 17, 23, 255))
 
   @staticmethod
   def _draw_ego_arrow(center_x: float, center_y: float, bearing_deg: float):
     rl.draw_circle_v(rl.Vector2(center_x, center_y + 8), 21.0, rl.Color(0, 0, 0, 120))
     heading = math.radians(bearing_deg)
+    cos_heading, sin_heading = math.cos(heading), math.sin(heading)
 
     def rotate(px: float, py: float) -> rl.Vector2:
-      rx = (px * math.cos(heading)) - (py * math.sin(heading))
-      ry = (px * math.sin(heading)) + (py * math.cos(heading))
+      rx = (px * cos_heading) - (py * sin_heading)
+      ry = (px * sin_heading) + (py * cos_heading)
       return rl.Vector2(center_x + rx, center_y + ry)
 
     nose = rotate(0.0, -25.0)
@@ -1396,91 +1410,9 @@ class NavMapPanel(Widget):
     right = rotate(16.0, 19.0)
     rl.draw_triangle(nose, left, right, rl.Color(255, 255, 255, 245))
 
-  def _draw_provider_badge(self, map_rect: rl.Rectangle):
-    status = self._mapbox.status()
-    offline_status = self._offline.status()
-    base = self.road_name or "Navigation"
-    if not self._online_maps_enabled and not self._offline_maps_enabled:
-      label = "Map sources disabled"
-    elif not self._online_maps_enabled:
-      # Offline-only mode: local tiles are the primary (and only) source.
-      if offline_status == "offline_ready" and self._offline.has_content():
-        label = f"{base} (offline)"
-      else:
-        label = {
-          "offline_missing": "Offline maps missing",
-          "offline_invalid": "Offline maps invalid",
-        }.get(offline_status, "Loading offline map")
-    elif status == "offline_cache":
-      label = f"{base} (Mapbox cached)"
-    elif status == "ready" or self._mapbox.has_content():
-      label = base
-    elif self._offline_maps_enabled and offline_status == "offline_ready" and self._offline.has_content():
-      label = f"{base} (offline)"
-    else:
-      label = {
-        "disabled": "Mapbox disabled",
-        "token_missing": "Mapbox token missing",
-        "loading": "Loading live map",
-        "error": "Mapbox unavailable",
-        "offline_cache": "Mapbox cached",
-      }.get(status, base)
-      if self._offline_maps_enabled and status in {"token_missing", "error"}:
-        if offline_status == "offline_missing":
-          label = "Offline maps missing"
-        elif offline_status == "offline_invalid":
-          label = "Offline maps invalid"
-
-    badge = rl.Rectangle(map_rect.x + 16, map_rect.y + 16, min(280.0, map_rect.width - 32), 38)
-    rl.draw_rectangle_rounded(badge, 0.28, 10, rl.Color(7, 12, 18, 175))
-    rl.draw_text_ex(self._micro_font, label, rl.Vector2(badge.x + 14, badge.y + 9), 20, 0, rl.Color(238, 243, 247, 240))
-
-  @staticmethod
-  def _draw_panel_shell(rect: rl.Rectangle):
-    rl.draw_rectangle_rounded(rect, 0.03, 12, rl.Color(9, 18, 28, 248))
-    rl.draw_rectangle_rounded_lines(rect, 0.03, 12, rl.Color(255, 255, 255, 26))
-
-  @staticmethod
-  def _draw_glass_band(rect: rl.Rectangle, alpha: int = 220):
-    rl.draw_rectangle_rounded(rect, 0.02, 10, rl.Color(7, 12, 18, alpha))
-
-  def _format_next_distance(self) -> str:
-    if not self._display_next_valid() or self.next_distance <= 0.0:
-      return "--"
-    if ui_state.is_metric:
-      if self.next_distance >= 1000.0:
-        return f"{self.next_distance / 1000.0:.1f} km"
-      return f"{self.next_distance:.0f} m"
-
-    feet = self.next_distance * 3.28084
-    if feet >= 900.0:
-      return f"{self.next_distance * 0.000621371:.1f} mi"
-    if feet < 500.0:
-      return f"{int(round(feet / 50) * 50)} ft"
-    return f"{int(round(feet / 100) * 100)} ft"
-
-  def _format_remaining_distance(self) -> str:
-    if not self._display_route_active() or self.distance_remaining <= 0.0:
-      return "--"
-    if ui_state.is_metric:
-      return f"{self.distance_remaining / 1000.0:.1f} km"
-    return f"{self.distance_remaining * 0.000621371:.1f} mi"
-
-  def _format_eta_clock(self) -> str:
-    if not self._display_route_active() or self.time_remaining <= 0.0:
-      return "--"
-    eta_epoch = time.time() + self.time_remaining + utc_offset_hours() * 3600
-    eta_time = time.gmtime(eta_epoch)
-    if ui_state.is_metric:
-      return time.strftime("%H:%M", eta_time)
-    return time.strftime("%-I:%M %p", eta_time).lower()
-
   def _draw_map_surface(self, map_rect: rl.Rectangle, draw_fade: bool = True) -> None:
     rl.begin_scissor_mode(int(map_rect.x), int(map_rect.y), int(map_rect.width), int(map_rect.height))
-    # Skip the placeholder grid whenever a provider has tiles to paint over it.
-    has_tiles = self._mapbox.has_content() or self._offline.has_content()
-    self._draw_fallback_background(map_rect, draw_grid=not has_tiles)
-    # heading-up: one modelview rotation about the map center covers tiles + route + pin
+    self._draw_fallback_background(map_rect)
     rotation = self.display_bearing % 360.0
     rotated = min(rotation, 360.0 - rotation) > 0.2
     if rotated:
@@ -1496,7 +1428,6 @@ class NavMapPanel(Widget):
       self._mapbox.draw(map_rect, self.display_center_latitude, self.display_center_longitude, self.display_zoom)
     elif self._offline_maps_enabled:
       self._offline.draw(map_rect, self.display_center_latitude, self.display_center_longitude, self.display_zoom)
-    self._draw_route_overlay(map_rect)
     if rotated:
       rl.rl_pop_matrix()
     if draw_fade:
@@ -1504,24 +1435,46 @@ class NavMapPanel(Widget):
       rl.draw_rectangle_gradient_v(int(fade.x), int(fade.y), int(fade.width), int(fade.height), rl.Color(0, 0, 0, 0), rl.Color(4, 10, 16, 170))
     rl.end_scissor_mode()
 
-  def _draw_route_overlay(self, map_rect: rl.Rectangle):
-    if len(self._projected_route_points) >= 2:
-      for idx in range(len(self._projected_route_points) - 1):
+  def _draw_route_overlay(self, map_rect: rl.Rectangle, pose, camera):
+    center_latitude, center_longitude, display_zoom, display_bearing = camera
+    if self.nav_active and len(self._projected_route_points) >= 2 and self._route_camera is not None:
+      latitude, longitude, zoom, width, height = self._route_camera
+      scale = 2.0 ** (display_zoom - zoom)
+      center_x, center_y = project_nav_point(latitude, longitude, center_latitude,
+                                             center_longitude, display_zoom, 0.0,
+                                             map_rect.width, map_rect.height)
+      offset_x = map_rect.x + center_x - width * scale * 0.5
+      offset_y = map_rect.y + center_y - height * scale * 0.5
+      marker_x, marker_y = project_nav_point(pose[0], pose[1], latitude, longitude, zoom, 0.0, width, height)
+      first, fraction = closest_polyline_segment(self._projected_route_points, marker_x, marker_y)
+      radius = math.hypot(map_rect.width, map_rect.height) * 0.5 + 16.0
+      mid_x, mid_y = map_rect.x + map_rect.width * 0.5, map_rect.y + map_rect.height * 0.5
+      for idx in range(first, len(self._projected_route_points) - 1):
         x1, y1 = self._projected_route_points[idx]
         x2, y2 = self._projected_route_points[idx + 1]
-        p1 = rl.Vector2(map_rect.x + x1, map_rect.y + y1)
-        p2 = rl.Vector2(map_rect.x + x2, map_rect.y + y2)
+        if idx == first:
+          x1 += (x2 - x1) * fraction
+          y1 += (y2 - y1) * fraction
+        if x1 == x2 and y1 == y2:
+          continue
+        x1, y1 = offset_x + x1 * scale, offset_y + y1 * scale
+        x2, y2 = offset_x + x2 * scale, offset_y + y2 * scale
+        if (min(x1, x2) > mid_x + radius or max(x1, x2) < mid_x - radius
+            or min(y1, y2) > mid_y + radius or max(y1, y2) < mid_y - radius):
+          continue
+        p1 = rl.Vector2(x1, y1)
+        p2 = rl.Vector2(x2, y2)
         rl.draw_line_ex(p1, p2, 16.0, rl.Color(8, 18, 30, 220))
         rl.draw_line_ex(p1, p2, 10.0, rl.Color(255, 255, 255, 210))
-        rl.draw_line_ex(p1, p2, 6.0, rl.Color(58, 164, 255, 255))
+        rl.draw_line_ex(p1, p2, 6.0, rl.Color(24, 194, 181, 255))
 
-    if abs(self.destination_latitude) > 0.001 and abs(self.destination_longitude) > 0.001:
+    if self.nav_active and abs(self.destination_latitude) > 0.001 and abs(self.destination_longitude) > 0.001:
       dest_x, dest_y = project_nav_point(
         self.destination_latitude,
         self.destination_longitude,
-        self.display_center_latitude,
-        self.display_center_longitude,
-        self.display_zoom,
+        center_latitude,
+        center_longitude,
+        display_zoom,
         0.0,
         map_rect.width,
         map_rect.height,
@@ -1534,184 +1487,71 @@ class NavMapPanel(Widget):
         src = rl.Rectangle(0, 0, float(texture.width), float(texture.height))
         # counter-rotate about its own center so the flag stays upright in heading-up
         dst = rl.Rectangle(center.x, center.y, 18, 22)
-        rl.draw_texture_pro(texture, src, dst, rl.Vector2(9, 11), self.display_bearing, rl.WHITE)
+        rl.draw_texture_pro(texture, src, dst, rl.Vector2(9, 11), display_bearing, rl.WHITE)
 
-    ego_x, ego_y = project_nav_point(
-      self.current_latitude,
-      self.current_longitude,
-      self.display_center_latitude,
-      self.display_center_longitude,
-      self.display_zoom,
-      0.0,
-      map_rect.width,
-      map_rect.height,
-    )
-    self._draw_ego_arrow(map_rect.x + ego_x, map_rect.y + ego_y, self.bearing_deg)
+  def _update_pointer_pose(self, now: float) -> tuple[float, float, float]:
+    sm = ui_state.sm
+    car = sm['carState']
+    motion_valid = sm.valid['carState'] and sm.alive['carState'] and 0 <= now - sm.recv_time['carState'] < 0.5
+    motion_valid = motion_valid and str(car.gearShifter) != 'reverse'
+    return self._marker_motion.update(now, self._last_position_change, self.current_latitude, self.current_longitude,
+                                      self.bearing_deg, float(car.vEgo), float(car.yawRate), motion_valid)
 
-  def _draw_maneuver_icon(self, tile: rl.Rectangle):
-    display_next_valid = self._display_next_valid()
+  def _draw_live_pointer(self, rect: rl.Rectangle) -> None:
+    if not self._has_render_fix or self._map_camera is None:
+      self._marker_motion = MapMarkerMotion()
+      return
+    pose = self._update_pointer_pose(time.monotonic())
+    if pose is None:
+      return
+    latitude, longitude, heading = pose
+    center_latitude, center_longitude, zoom, bearing = self._map_camera
+    # Project against the camera baked into the map texture, not the next camera update.
+    x, y = project_nav_point(latitude, longitude, center_latitude, center_longitude,
+                             zoom, bearing, rect.width, rect.height)
+    top = rect.y + 24
+    bottom = rect.y + rect.height - 24
+    rl.begin_scissor_mode(int(rect.x + 24), int(top), int(rect.width - 48), max(0, int(bottom - top)))
+    map_rect = rect
+    rl.rl_push_matrix()
+    rl.rl_translatef(map_rect.x + map_rect.width * 0.5, map_rect.y + map_rect.height * 0.5, 0.0)
+    rl.rl_rotatef(-bearing, 0.0, 0.0, 1.0)
+    rl.rl_translatef(-(map_rect.x + map_rect.width * 0.5), -(map_rect.y + map_rect.height * 0.5), 0.0)
+    self._draw_route_overlay(map_rect, pose, self._map_camera)
+    rl.rl_pop_matrix()
+    self._draw_ego_arrow(rect.x + x, rect.y + y, heading - bearing)
+    rl.end_scissor_mode()
+
+  def _draw_maneuver_icon(self, bounds: rl.Rectangle):
     texture = self._icon_texture()
-    if texture is not None and display_next_valid:
+    if texture is not None and self._display_next_valid():
       src = rl.Rectangle(0, 0, float(texture.width), float(texture.height))
-      icon_side = min(tile.width, tile.height - 32)
-      dst = rl.Rectangle(tile.x + (tile.width - icon_side) * 0.5, tile.y, icon_side, icon_side)
-      rl.draw_texture_pro(texture, src, dst, rl.Vector2(0, 0), 0.0, rl.WHITE)
+      rl.draw_texture_pro(texture, src, bounds, rl.Vector2(0, 0), 0.0, rl.WHITE)
 
-    distance_text = f"{self.next_distance:.0f} m" if display_next_valid and self.next_distance > 0 else "--"
-    distance_size = self._fit_text_size(self._micro_font, distance_text, tile.width - 22, 22, 16)
-    dist_width = measure_text_cached(self._micro_font, distance_text, distance_size).x
-    distance_color = rl.WHITE if display_next_valid else rl.Color(150, 163, 176, 200)
-    rl.draw_text_ex(
-      self._micro_font,
-      distance_text,
-      rl.Vector2(tile.x + (tile.width - dist_width) * 0.5, tile.y + tile.height - 30),
-      distance_size,
-      0,
-      distance_color,
-    )
-
-  def _draw_split_header(self, rect: rl.Rectangle):
-    header_rect = rl.Rectangle(rect.x + 14, rect.y + 14, rect.width - 28, SPLIT_HEADER_HEIGHT - 20)
-    self._draw_glass_band(header_rect, 214)
-
-    icon_tile = rl.Rectangle(header_rect.x + 18, header_rect.y + 18, 112, 112)
-    self._draw_maneuver_icon(icon_tile)
-
-    display_next_valid = self._display_next_valid()
-    display_route_active = self._display_route_active()
-    distance_text = self._format_next_distance()
-    if display_next_valid and self.next_description:
-      title = self.next_description
-    elif display_route_active and self.destination_name:
-      title = self.destination_name
-    elif display_route_active:
-      title = "Route guidance"
-    else:
-      title = self.road_name or "Navigation"
-
-    if display_next_valid and self.road_name:
-      sublabel = self.road_name
-    elif display_route_active:
-      sublabel = "Route active"
-    else:
-      sublabel = self.road_name or "Navigation standby"
-
-    text_x = icon_tile.x + icon_tile.width + 22
-    right_x = header_rect.x + header_rect.width - 22
-    distance_size = self._fit_text_size(self._title_font, distance_text, 140, 42, 22)
-    distance_width = measure_text_cached(self._title_font, distance_text, distance_size).x
-    rl.draw_text_ex(self._title_font, distance_text, rl.Vector2(right_x - distance_width, header_rect.y + 22), distance_size, 0, rl.WHITE)
-
-    title_max_width = max(160.0, right_x - text_x - 10)
-    title_size = self._fit_text_size(self._title_font, title, title_max_width, 34, 22)
-    title_lines = wrap_text(self._title_font, title, title_size, int(title_max_width))[:2]
-    for idx, line in enumerate(title_lines):
-      rl.draw_text_ex(self._title_font, line, rl.Vector2(text_x, header_rect.y + 24 + idx * (title_size + 2)), title_size, 0, rl.WHITE)
-
-    sub_size = self._fit_text_size(self._micro_font, sublabel, title_max_width, 22, 18)
-    sub_y = header_rect.y + 30 + len(title_lines) * (title_size + 2)
-    rl.draw_text_ex(self._micro_font, sublabel, rl.Vector2(text_x, sub_y), sub_size, 0, rl.Color(179, 188, 201, 240))
-
-  def _draw_split_footer(self, rect: rl.Rectangle):
-    footer_rect = rl.Rectangle(rect.x + 14, rect.y + rect.height - SPLIT_FOOTER_HEIGHT - 14, rect.width - 28, SPLIT_FOOTER_HEIGHT)
-    self._draw_glass_band(footer_rect, 222)
-
-    chips_y = footer_rect.y + 20
-    chips_x = footer_rect.x + 20
-    chips_gap = 12
-    chip_width = (footer_rect.width - 40 - chips_gap * 2) / 3.0
-    self._draw_stat_chip(rl.Rectangle(chips_x, chips_y, chip_width, 54), self._format_eta_clock(), "eta")
-    minutes_text = f"{self.time_remaining / 60.0:.1f} min" if self._display_route_active() and self.time_remaining > 0.0 else "--"
-    self._draw_stat_chip(rl.Rectangle(chips_x + chip_width + chips_gap, chips_y, chip_width, 54), minutes_text, "time")
-    self._draw_stat_chip(rl.Rectangle(chips_x + (chip_width + chips_gap) * 2, chips_y, chip_width, 54), self._format_remaining_distance(), "left")
-
-  def _draw_info_panel(self, panel_rect: rl.Rectangle):
-    info_rect = rl.Rectangle(panel_rect.x + 14, panel_rect.y + MAP_HEIGHT + 26, panel_rect.width - 28, panel_rect.height - MAP_HEIGHT - 40)
-    rl.draw_rectangle_rounded(info_rect, 0.08, 12, rl.Color(8, 14, 20, 225))
-
-    icon_tile = rl.Rectangle(info_rect.x + 16, info_rect.y + 16, 124, 124)
-    self._draw_maneuver_icon(icon_tile)
-
-    display_next_valid = self._display_next_valid()
-    display_route_active = self._display_route_active()
-
-    if display_next_valid and self.next_description:
-      title = self.next_description
-    elif display_route_active and self.destination_name:
-      title = self.destination_name
-    elif display_route_active:
-      title = "Route guidance"
-    else:
-      title = self.road_name or "Navigation"
-    title_x = info_rect.x + 162
-    title_max_width = info_rect.width - 178
-    title_size = self._fit_text_size(self._title_font, title, title_max_width, 34, 24)
-    title_lines = wrap_text(self._title_font, title, title_size, int(title_max_width))[:2]
-    for idx, line in enumerate(title_lines):
-      rl.draw_text_ex(self._title_font, line, rl.Vector2(title_x, info_rect.y + 18 + idx * (title_size + 2)), title_size, 0, rl.WHITE)
-
-    if display_next_valid and self.road_name:
-      road_label = self.road_name
-    elif display_route_active:
-      road_label = "Route active"
-    else:
-      road_label = self.road_name or "No active route"
-    road_size = self._fit_text_size(self._micro_font, road_label, title_max_width, 22, 18)
-    road_y = info_rect.y + 18 + len(title_lines) * (title_size + 2) + 8
-    rl.draw_text_ex(self._micro_font, road_label, rl.Vector2(title_x, road_y), road_size, 0, rl.Color(171, 184, 196, 240))
-
-    eta_text = f"{(self.time_remaining / 60.0):.1f} min" if display_route_active and self.time_remaining > 0 else "--"
-    remaining_text = f"{(self.distance_remaining / 1000.0):.1f} km" if display_route_active and self.distance_remaining > 0 else "--"
-    next_text = f"{self.next_distance:.0f} m" if display_next_valid and self.next_distance > 0 else "--"
-
-    stat_y = info_rect.y + info_rect.height - 58
-    available_width = info_rect.width - 178
-    chip_width = (available_width - STAT_GAP * 2) / 3.0
-    self._draw_stat_chip(rl.Rectangle(title_x, stat_y, chip_width, 50), next_text, "next")
-    self._draw_stat_chip(rl.Rectangle(title_x + chip_width + STAT_GAP, stat_y, chip_width, 50), eta_text, "eta")
-    self._draw_stat_chip(rl.Rectangle(title_x + (chip_width + STAT_GAP) * 2, stat_y, chip_width, 50), remaining_text, "left")
-
-  def _draw_stat_chip(self, rect: rl.Rectangle, value: str, label: str):
-    rl.draw_rectangle_rounded(rect, 0.24, 10, rl.Color(18, 30, 42, 255))
-    value_size = self._fit_text_size(self._body_font, value, rect.width - 16, 25, 17)
-    label_size = self._fit_text_size(self._micro_font, label.upper(), rect.width - 16, 12, 9)
-    value_width = measure_text_cached(self._body_font, value, value_size).x
-    label_width = measure_text_cached(self._micro_font, label.upper(), label_size).x
-    rl.draw_text_ex(
-      self._body_font,
-      value,
-      rl.Vector2(rect.x + (rect.width - value_width) * 0.5, rect.y + 3),
-      value_size,
-      0,
-      rl.WHITE,
-    )
-    rl.draw_text_ex(
-      self._micro_font,
-      label.upper(),
-      rl.Vector2(rect.x + (rect.width - label_width) * 0.5, rect.y + 33),
-      label_size,
-      0,
-      rl.Color(122, 205, 161, 255),
-    )
-
-  def _draw_panel_contents(self, panel_rect: rl.Rectangle) -> None:
-    """Draw the full onroad panel into the given rect. Rect origin is (0,0) when rendering into
-    the cache texture, or the real screen position on the direct-draw fallback."""
-    self._draw_card(panel_rect)
-
-    map_rect = rl.Rectangle(panel_rect.x + 12, panel_rect.y + 12, panel_rect.width - 24, MAP_HEIGHT)
-    self._map_viewport_width = map_rect.width
-    self._map_viewport_height = map_rect.height
-    self._draw_map_surface(map_rect)
-
-    self._draw_provider_badge(map_rect)
-    self._draw_info_panel(panel_rect)
+  def render_details(self, rect: rl.Rectangle) -> None:
+    if not self._display_next_valid():
+      return
+    fade = gui_app.texture('icons/onroad/nav_instruction_fade.png')
+    rl.draw_texture_pro(fade, rl.Rectangle(0, 0, fade.width, fade.height),
+                        rl.Rectangle(rect.x - 144, rect.y - 160, gui_app.width - rect.x + 144, gui_app.height - rect.y + 160),
+                        rl.Vector2(0, 0), 0, rl.WHITE)
+    self._draw_maneuver_icon(rl.Rectangle(rect.x + 12, rect.y + 7, 64, 64))
+    distance = f"{self.next_distance / 1609.344:.1f} mi"
+    if self.next_distance < 160.9344:
+      distance = "< 0.1 mi"
+    rl.draw_text_ex(self._title_font, distance, rl.Vector2(rect.x + 96, rect.y + 13), 44, 0, rl.WHITE)
 
   def _ensure_rt(self, attr: str, width: int, height: int):
     rt = getattr(self, attr)
+    if rt is not None and (rt.texture.width != width or rt.texture.height != height):
+      rl.unload_render_texture(rt)
+      rt = None
+      setattr(self, attr, None)
     if rt is None:
       try:
         rt = rl.load_render_texture(width, height)
+        if not rl.is_render_texture_valid(rt):
+          return None
         rl.set_texture_filter(rt.texture, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
         setattr(self, attr, rt)
       except Exception:
@@ -1719,82 +1559,66 @@ class NavMapPanel(Widget):
         return None
     return rt
 
-  def _chrome_content_key(self):
-    # Every piece of state that _draw_provider_badge + _draw_info_panel turn into pixels.
-    return (
-      round(self.next_distance), self.next_direction, self.next_type, bool(self.next_valid),
-      self.next_description, self.destination_name,
-      round(self.time_remaining), round(self.distance_remaining),
-      bool(self.nav_active), self.road_name, len(self.route_points),
-      self._mapbox.status(), self._offline.status(),
-      self._mapbox.has_content(), self._offline.has_content(),
-      self._online_maps_enabled, self._offline_maps_enabled, self._day_mode,
-      bool(ui_state.is_metric),
-    )
+  @staticmethod
+  @lru_cache(maxsize=4)
+  def _rounded_perimeter(width: int, height: int):
+    radius = min(24, width / 2, height / 2)
+    corners = ((width - radius, radius, -90), (width - radius, height - radius, 0),
+               (radius, height - radius, 90), (radius, radius, 180))
+    perimeter = [(cx + radius * math.cos(math.radians(angle + step * 7.5)),
+                  cy + radius * math.sin(math.radians(angle + step * 7.5)))
+                 for cx, cy, angle in corners for step in range(13)]
+    return perimeter
 
   @staticmethod
   def _blit_rt(rt, x: float, y: float) -> None:
     # RenderTexture color buffers are stored bottom-up, so flip vertically via negative src height.
     tex = rt.texture
-    src = rl.Rectangle(0, 0, float(tex.width), -float(tex.height))
-    dst = rl.Rectangle(float(x), float(y), float(tex.width), float(tex.height))
-    rl.draw_texture_pro(tex, src, dst, rl.Vector2(0, 0), 0.0, rl.WHITE)
+    width, height = tex.width, tex.height
+    perimeter = NavMapPanel._rounded_perimeter(width, height)
+    rl.rl_set_texture(tex.id)
+    rl.rl_begin(rl.RL_QUADS)
+    rl.rl_color4ub(255, 255, 255, 255)
+    for index, point in enumerate(perimeter):
+      for px, py in ((width / 2, height / 2), perimeter[(index + 1) % len(perimeter)], point, point):
+        rl.rl_tex_coord2f(px / width, 1 - py / height)
+        rl.rl_vertex2f(x + px, y + py)
+    rl.rl_end()
+    rl.rl_set_texture(0)
 
   def _render(self, rect: rl.Rectangle):
-    if not self.active or not gui_app.big_ui():
-      return
+    self.render_split(rect)
 
-    panel_x = rect.x + rect.width - PANEL_WIDTH - PANEL_MARGIN_RIGHT
-    panel_y = rect.y + PANEL_MARGIN_TOP
-    map_w = float(PANEL_WIDTH - 24)
-    map_h = float(MAP_HEIGHT)
-
-    map_rt = self._ensure_rt("_map_rt", int(map_w), int(map_h))
-    chrome_rt = self._ensure_rt("_chrome_rt", int(PANEL_WIDTH + PANEL_SHADOW_PAD), int(PANEL_HEIGHT + PANEL_SHADOW_PAD))
-    if map_rt is None or chrome_rt is None:
-      # RenderTexture unavailable — fall back to direct per-frame draw (previous behavior).
-      self._draw_panel_contents(rl.Rectangle(panel_x, panel_y, PANEL_WIDTH, PANEL_HEIGHT))
-      return
-
-    now = time.monotonic()
-    self._map_viewport_width = map_w
-    self._map_viewport_height = map_h
-
-    # LIVE map layer: tiles/route/ego pan continuously -> refresh at PANEL_RENDER_FPS.
-    if now - self._last_map_render >= PANEL_RENDER_INTERVAL:
-      self._last_map_render = now
-      rl.begin_texture_mode(map_rt)
-      rl.clear_background(rl.Color(0, 0, 0, 0))
-      self._draw_map_surface(rl.Rectangle(0.0, 0.0, map_w, map_h))
-      rl.end_texture_mode()
-
-    # CHROME layer: badge + info text only change on value updates. Regenerate on a content-key
-    # change, with a safety cap so a missed key field can't freeze the readout.
-    key = self._chrome_content_key()
-    if key != self._chrome_key or now - self._last_chrome_render >= CHROME_MAX_INTERVAL:
-      self._chrome_key = key
-      self._last_chrome_render = now
-      rl.begin_texture_mode(chrome_rt)
-      rl.clear_background(rl.Color(0, 0, 0, 0))
-      self._draw_provider_badge(rl.Rectangle(12.0, 12.0, map_w, map_h))
-      self._draw_info_panel(rl.Rectangle(0.0, 0.0, PANEL_WIDTH, PANEL_HEIGHT))
-      rl.end_texture_mode()
-
-    # Composite: static card backdrop -> live map -> chrome text overlay.
-    self._draw_card(rl.Rectangle(panel_x, panel_y, PANEL_WIDTH, PANEL_HEIGHT))
-    self._blit_rt(map_rt, panel_x + 12, panel_y + 12)
-    self._blit_rt(chrome_rt, panel_x, panel_y)
-
-  def render_split_direct(self, rect: rl.Rectangle) -> None:
+  def _draw_split_scene(self, rect: rl.Rectangle) -> None:
     local_rect = rl.Rectangle(rect.x, rect.y, rect.width, rect.height)
-    map_rect = rl.Rectangle(rect.x + 8, rect.y + 8, rect.width - 16, rect.height - 16)
+    map_rect = local_rect
     self._map_viewport_width = map_rect.width
     self._map_viewport_height = map_rect.height
-    self._draw_panel_shell(local_rect)
+    rotation = self.display_bearing % 360.0
+    bearing = self.display_bearing if min(rotation, 360.0 - rotation) > 0.2 else 0.0
+    self._map_camera = (self.display_center_latitude, self.display_center_longitude, self.display_zoom, bearing)
     self._draw_map_surface(map_rect, draw_fade=False)
-    self._draw_provider_badge(map_rect)
-    self._draw_split_header(local_rect)
-    self._draw_split_footer(local_rect)
+
+  def _refresh_split_texture(self, width: int, height: int) -> None:
+    target = self._ensure_rt("_split_rt", width, height)
+    if target is None:
+      return
+    rl.begin_texture_mode(target)
+    try:
+      rl.clear_background(rl.BLANK)
+      self._draw_split_scene(rl.Rectangle(0, 0, width, height))
+    finally:
+      rl.end_texture_mode()
+    self._last_split_render = time.monotonic()
 
   def render_split(self, rect: rl.Rectangle) -> None:
-    self.render_split_direct(rect)
+    width, height = int(rect.width), int(rect.height)
+    resized = self._split_rt is None or self._split_rt.texture.width != width or self._split_rt.texture.height != height
+    interval = PANEL_RENDER_INTERVAL if self._has_render_fix else 1.0
+    if resized or time.monotonic() - self._last_split_render >= interval:
+      gui_app.queue_render_job(self, lambda: self._refresh_split_texture(width, height))
+    if resized:
+      self._draw_fallback_background(rect)
+      return
+    self._blit_rt(self._split_rt, rect.x, rect.y)
+    self._draw_live_pointer(rect)

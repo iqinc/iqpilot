@@ -274,8 +274,4 @@ class BootCard(AlertCard):
       super().__init__(alert_text_1, alert_text_2, alert_status, AlertSize.mid, Tier.LOWER, VisualAlert.none, AudibleAlert.none, 5.0)
 
 
-class AlertBase(AlertCard):
-  pass
-
-
 NULL_ALERT = AlertCard("", "", AlertStatus.normal, AlertSize.none, Tier.LOWEST, VisualAlert.none, AudibleAlert.none, 0.0)

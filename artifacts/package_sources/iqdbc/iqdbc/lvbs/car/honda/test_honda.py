@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from iqdbc.can import CANParser
 from iqdbc.car import Bus, gen_empty_fingerprint
-from iqdbc.car.structs import CarParams, CarState
+from iqdbc.car.structs import CarParams, CarState, IQCarState as IQCarStateStruct
 from iqdbc.car.car_helpers import interfaces
 from iqdbc.car.honda.values import CAR
 from iqdbc.lvbs.car.honda.iq_carstate import IQCarState
@@ -36,12 +36,13 @@ class TestHondaGasInterceptor:
     parser = CANParser("acura_ilx_2016_can_generated", [], 0)
     state = IQCarState(CP, CP_IQ)
     ret = CarState()
+    ret_iq = IQCarStateStruct()
 
-    state.update(ret, {Bus.pt: parser, Bus.cam: parser})
+    state.update(ret, ret_iq, {Bus.pt: parser, Bus.cam: parser})
     assert "GAS_SENSOR" in parser.vl
     assert not ret.gasPressed
 
     parser.vl["GAS_SENSOR"]["INTERCEPTOR_GAS"] = 493
     parser.vl["GAS_SENSOR"]["INTERCEPTOR_GAS2"] = 493
-    state.update(ret, {Bus.pt: parser, Bus.cam: parser})
+    state.update(ret, ret_iq, {Bus.pt: parser, Bus.cam: parser})
     assert ret.gasPressed

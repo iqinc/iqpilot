@@ -2,6 +2,7 @@ from iqdbc.car.volkswagen.mebutils import map_speed_to_acc_tempolimit
 from iqdbc.car.volkswagen.values import VolkswagenFlags
 from iqdbc.car.volkswagen.speed_limit_manager import PSD_TYPE_CURV_SPEED
 from iqdbc.car.common.conversions import Conversions as CV
+from iqdbc.car import structs
 
 ACCEL_INACTIVE = 3.01
 ACCEL_OVERRIDE = 0.00
@@ -164,6 +165,12 @@ def acc_control_value(main_switch_on, acc_faulted, long_active, override):
     acc_control = ACC_CTRL_DISABLED # long control deactivated state
 
   return acc_control
+
+
+def acc_starting(long_active, long_control_state, accel, esp_hold, v_ego, override):
+  return (long_active and not override and accel > 0.0
+          and long_control_state == structs.CarControl.Actuators.LongControlState.pid
+          and (esp_hold or v_ego < 0.25))
 
 
 def acc_hold_type(main_switch_on, acc_faulted, long_active, starting, stopping, esp_hold, v_ego,

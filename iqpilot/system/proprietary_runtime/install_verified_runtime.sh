@@ -18,9 +18,6 @@ if [ ! -x "${RUNNER_SRC}" ]; then
 fi
 
 if [ ! -f "${EXT_SRC}" ]; then
-  # No locally-built _verified_import.so staged in the tree. This is the NORMAL prebuilt/release case:
-  # the .so is gitignored and ships baked into the OS image at /usr/libexec/iqpilot, so there is
-  # nothing to install from /data. Quietly no-op and let the OS-baked verified runtime be used.
   exit 0
 fi
 

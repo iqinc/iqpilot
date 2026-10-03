@@ -15,6 +15,7 @@ from iqpilot.selfdrive.ui.mici.onroad.driver_state import DriverStateRenderer
 from iqpilot.selfdrive.ui.mici.onroad.hud_renderer import HudRenderer
 from iqpilot.selfdrive.ui.mici.onroad.model_renderer import ModelRenderer
 from iqpilot.selfdrive.ui.mici.onroad.confidence_ball import ConfidenceBall
+from iqpilot.selfdrive.ui.mici.onroad.boost_bar import BoostBar
 from iqpilot.selfdrive.ui.mici.onroad.cameraview import CameraView
 from iqpilot.system.ui.lib.application import FontWeight, gui_app, MousePos, MouseEvent
 from iqpilot.system.ui.widgets.label import UnifiedLabel
@@ -25,12 +26,11 @@ from iqpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraCo
 from iqpilot.common.transformations.orientation import rot_from_euler
 from iqpilot.selfdrive.locationd.calibration_helpers import get_calibrated_rpy
 from enum import IntEnum
-from iqpilot.ui.onroad.augmented_road_view import BORDER_COLORS_IQ
 from iqpilot.system.ui.lib.multilang import tr
+from iqpilot.ui.mici.onroad.navigation import MiciNavigation
 
 if gui_app.iqpilot_ui():
   from iqpilot.ui.mici.onroad.hud_renderer import IQMiciHudRenderer as HudRenderer
-  from iqpilot.ui.mici.onroad.road_label import RoadNameRendererMici
   from iqpilot.selfdrive.ui.ui_state import OnroadTimerStatus
 
 OpState = log.SelfdriveState.OpenpilotState
@@ -45,16 +45,16 @@ class BookmarkState(IntEnum):
   DRAGGING = 1
   TRIGGERED = 2
 
-WIDE_CAM_MAX_SPEED = 5.0  # m/s (10 mph)
-ROAD_CAM_MIN_SPEED = 10  # m/s (25 mph)
+WIDE_CAM_MAX_SPEED = 5.0  # m/s (11 mph)
+ROAD_CAM_MIN_SPEED = 10.0  # m/s (22 mph)
 
 CAM_Y_OFFSET = 20
-MICI_BORDER_COLOR = rl.Color(0x0C, 0x94, 0x96, 0xFF)
 MICI_BORDER_THICKNESS = 50
 MICI_BORDER_ROUNDNESS = 0.2 * 1.02
-MICI_BORDER_BOTTOM_ONLY_HEIGHT = 95
 MICI_EXPERIMENTAL_ICON_SIZE = 28
-MICI_EXPERIMENTAL_ICON_SPACING = 8
+MICI_EXPERIMENTAL_ICON_SLOT = 60
+MICI_EXPERIMENTAL_ICON_MARGIN_X = 16
+MICI_EXPERIMENTAL_ICON_MARGIN_Y = 10
 
 
 class BookmarkIcon(Widget):
@@ -175,19 +175,20 @@ class AugmentedRoadView(CameraView):
     self._iq_dynamic_mode: bool = False
     self._iq_dynamic_refresh: int = 0
 
+    self._navigation = MiciNavigation()
     self._model_renderer = ModelRenderer()
     self._hud_renderer = HudRenderer()
     self._alert_renderer = AlertRenderer()
     self._driver_state_renderer = DriverStateRenderer()
     self._confidence_ball = ConfidenceBall()
-    self._road_name = RoadNameRendererMici() if gui_app.iqpilot_ui() else None
+    self._boost_bar = BoostBar()
     self._experimental_txt = gui_app.texture("icons_mici/experimental_mode_mici.png",
                                              MICI_EXPERIMENTAL_ICON_SIZE,
                                              MICI_EXPERIMENTAL_ICON_SIZE)
-    self._iqdynamic_txt = gui_app.texture("icons_mici/iqdynamic_mode_mici.png",
+    self._iqdynamic_txt = gui_app.texture("icons_mici/iqdynamic_mode_mici_28.png",
                                           MICI_EXPERIMENTAL_ICON_SIZE,
                                           MICI_EXPERIMENTAL_ICON_SIZE)
-    self._iqstandard_txt = gui_app.texture("icons_mici/iqstandard_mode_mici.png",
+    self._iqstandard_txt = gui_app.texture("icons_mici/iqstandard_mode_mici_28.png",
                                            MICI_EXPERIMENTAL_ICON_SIZE,
                                            MICI_EXPERIMENTAL_ICON_SIZE)
     self._offroad_label = UnifiedLabel(tr("start the car to\nuse IQ.Pilot"), 54, FontWeight.DISPLAY,
@@ -204,6 +205,7 @@ class AugmentedRoadView(CameraView):
 
   def _update_state(self):
     super()._update_state()
+    self._navigation.update()
     # IQDynamicMode only changes from the settings UI; don't pay a Params syscall every frame on
     # the onroad hot path. Refresh ~1s (60 frames), matching model_renderer's throttled reads.
     self._iq_dynamic_refresh -= 1
@@ -218,17 +220,15 @@ class AugmentedRoadView(CameraView):
       self._offroad_label.set_text(tr("start the car to\nuse IQ.Pilot"))
 
   def _handle_mouse_release(self, mouse_pos: MousePos):
+    if self._navigation.active and rl.check_collision_point_rec(mouse_pos, self._content_rect):
+      self._navigation.tap()
+      return
     # Don't trigger click callback if bookmark was triggered
     if not self._bookmark_icon.interacting():
       super()._handle_mouse_release(mouse_pos)
 
   def _render(self, _):
     start_draw = time.monotonic()
-    self._switch_stream_if_needed(ui_state.sm)
-
-    # Update calibration before rendering
-    self._update_calibration()
-
     # Create inner content area with border padding
     self._content_rect = rl.Rectangle(
       self.rect.x,
@@ -236,6 +236,15 @@ class AugmentedRoadView(CameraView):
       self.rect.width - SIDE_PANEL_WIDTH,
       self.rect.height,
     )
+
+    if self._navigation.active:
+      self._navigation.render(self._content_rect)
+      self._alert_renderer.render(self._content_rect)
+      self._side_panel().render(self.rect)
+      return
+
+    self._switch_stream_if_needed(ui_state.sm)
+    self._update_calibration()
 
     # Enable scissor mode to clip all rendering within content rectangle boundaries
     # This creates a rendering viewport that prevents graphics from drawing outside the border
@@ -268,13 +277,10 @@ class AugmentedRoadView(CameraView):
     if ui_state.started:
       self._alert_renderer.render(self._content_rect)
     self._hud_renderer.render(self._content_rect)
-    if self._road_name is not None and alert_to_render is None:
-      self._road_name.update()
-      self._road_name.render(self._content_rect)
     # don't draw the experimental/IQ.Dynamic icon over alert text (it falls back to the
     # top-left alert anchor when the DMoji is hidden while disengaged)
     if alert_to_render is None:
-      self._draw_experimental_icon(should_draw_dmoji)
+      self._draw_experimental_icon()
 
     # End clipping region
     rl.end_scissor_mode()
@@ -283,7 +289,7 @@ class AugmentedRoadView(CameraView):
 
     # Custom UI extension point - add custom overlays here
     # Use self._content_rect for positioning within camera bounds
-    self._confidence_ball.render(self.rect)
+    self._side_panel().render(self.rect)
 
     self._bookmark_icon.render(self.rect)
 
@@ -304,7 +310,7 @@ class AugmentedRoadView(CameraView):
       rl.draw_rectangle(int(self.rect.x), int(self.rect.y), int(self.rect.width), int(self.rect.height), rl.Color(0, 0, 0, 175))
       self._offroad_label.render(self._content_rect)
 
-  def _draw_experimental_icon(self, draw_below_driver_state: bool) -> None:
+  def _draw_experimental_icon(self) -> None:
     if not ui_state.started:
       return
 
@@ -316,44 +322,17 @@ class AugmentedRoadView(CameraView):
     else:
       icon = self._iqstandard_txt
 
-    if draw_below_driver_state:
-      pos_x = self._rect.x + 16 + (self._driver_state_renderer.rect.width - icon.width) / 2
-      pos_y = self._rect.y + 10 + self._driver_state_renderer.rect.height + MICI_EXPERIMENTAL_ICON_SPACING
-    else:
-      pos_x = self._rect.x + 18
-      pos_y = self._rect.y + 18
-
+    slot_x = self._content_rect.x + self._content_rect.width - MICI_EXPERIMENTAL_ICON_MARGIN_X - MICI_EXPERIMENTAL_ICON_SLOT
+    slot_y = self._content_rect.y + MICI_EXPERIMENTAL_ICON_MARGIN_Y
+    pos_x = slot_x + (MICI_EXPERIMENTAL_ICON_SLOT - icon.width) / 2
+    pos_y = slot_y + (MICI_EXPERIMENTAL_ICON_SLOT - icon.height) / 2
     rl.draw_texture(icon, int(pos_x), int(pos_y), rl.WHITE)
+
+  def _side_panel(self):
+    return self._boost_bar if ui_state.gas_override_boost else self._confidence_ball
 
   def _draw_border(self):
     rl.draw_rectangle_rounded_lines_ex(self._content_rect, MICI_BORDER_ROUNDNESS, 10, MICI_BORDER_THICKNESS, rl.BLACK)
-
-    aol = ui_state.sm["iqState"].aol
-    ss_enabled = ui_state.sm["selfdriveState"].enabled
-    if aol.active and ss_enabled:
-      rl.draw_rectangle_rounded_lines_ex(self._content_rect, MICI_BORDER_ROUNDNESS, 10, MICI_BORDER_THICKNESS, MICI_BORDER_COLOR)
-      self._reblacken_border_edges()
-    elif aol.active and not ss_enabled:
-      clip_y = int(self._content_rect.y + self._content_rect.height - MICI_BORDER_BOTTOM_ONLY_HEIGHT)
-      rl.begin_scissor_mode(int(self._content_rect.x), clip_y,
-                            int(self._content_rect.width), MICI_BORDER_BOTTOM_ONLY_HEIGHT)
-      border_color = BORDER_COLORS_IQ[UIStatus.LAT_ONLY] if ui_state.status != UIStatus.OVERRIDE else rl.Color(0x89, 0x92, 0x8D, 0xFF)
-      rl.draw_rectangle_rounded_lines_ex(self._content_rect, MICI_BORDER_ROUNDNESS, 10, MICI_BORDER_THICKNESS, border_color)
-      rl.end_scissor_mode()
-      self._reblacken_border_edges()
-
-  def _reblacken_border_edges(self):
-    cr = self._content_rect
-    r = int(MICI_BORDER_ROUNDNESS * min(cr.width, cr.height) / 2) + MICI_BORDER_THICKNESS + 6
-    regions = (
-      (cr.x, cr.y, r, r),                                                  # top-left corner
-      (cr.x, cr.y + cr.height - r, r, r),                                  # bottom-left corner
-      (cr.x + cr.width - r, cr.y, r + SIDE_PANEL_WIDTH, cr.height),        # right edge + both right corners
-    )
-    for rx, ry, rw, rh in regions:
-      rl.begin_scissor_mode(int(rx), int(ry), int(rw), int(rh))
-      rl.draw_rectangle_rounded_lines_ex(cr, MICI_BORDER_ROUNDNESS, 10, MICI_BORDER_THICKNESS, rl.BLACK)
-      rl.end_scissor_mode()
 
   def _switch_stream_if_needed(self, sm):
     if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
@@ -368,8 +347,7 @@ class AugmentedRoadView(CameraView):
     else:
       target = ROAD_CAM
 
-    if self.stream_type != target:
-      self.switch_stream(target)
+    self.switch_stream(target)
 
   def _update_calibration(self):
     # Update device camera if not already set

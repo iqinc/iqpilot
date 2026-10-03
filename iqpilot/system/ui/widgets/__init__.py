@@ -16,14 +16,21 @@ from iqpilot.system.ui.lib.application import gui_app, MousePos, MAX_TOUCH_SLOTS
 W = TypeVar('W', bound='Widget')
 
 _device = None
+_device_unavailable = False
 
 
 def device_awake() -> bool:
-  global _device
+  global _device, _device_unavailable
   if _device is None:
+    if _device_unavailable:
+      return True
     try:
       from iqpilot.selfdrive.ui.ui_state import device
       _device = device
+    # The setup zipapp has no msgq, and a failed import is never cached, so retrying costs ~70 ms per widget per frame.
+    except ModuleNotFoundError:
+      _device_unavailable = True
+      return True
     except Exception:
       return True
   return _device.awake

@@ -6,19 +6,18 @@ from iqpilot.cereal import log
 from iqdbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 from iqpilot.common.realtime import DT_MDL
 from iqpilot.common.swaglog import cloudlog
-# WARNING: imports outside of constants will not trigger a rebuild
 from iqpilot.selfdrive.iqmodeld.config import index_function, ModelConstants
-from iqpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU  # legacy lead extrapolation (newLeadMpc=False)
+from iqpilot.selfdrive.controls.radard import _LEAD_ACCEL_TAU
 from iqpilot.common.params import Params, UnknownKeyName
 
-LEAD_T_IDXS_MODEL = np.array(ModelConstants.LEAD_T_IDXS)  # [0, 2, 4, 6, 8, 10]s
+LEAD_T_IDXS_MODEL = np.array(ModelConstants.LEAD_T_IDXS)
 
-if __name__ == '__main__':  # generating code
+if __name__ == '__main__':
+  from casadi import SX, vertcat
   from iqpilot.third_party.acados.acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 else:
   from iqpilot.selfdrive.controls.lib.longitudinal_mpc_lib.c_generated_code.acados_ocp_solver_pyx import AcadosOcpSolverCython
 
-from casadi import SX, vertcat
 
 MODEL_NAME = 'long'
 LONG_MPC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -46,8 +45,6 @@ LEAD_DANGER_FACTOR = 0.75
 LIMIT_COST = 1e6
 ACADOS_SOLVER_TYPE = 'SQP_RTI'
 
-# Fewer timestamps don't hurt performance and lead to
-# much better convergence of the MPC with low iterations
 N = 12
 MAX_T = 10.0
 T_IDXS_LST = [index_function(idx, max_val=MAX_T, max_idx=N) for idx in range(N+1)]
@@ -91,30 +88,20 @@ def get_safe_obstacle_distance(v_ego, t_follow):
 def gen_long_model():
   model = AcadosModel()
   model.name = MODEL_NAME
-
-  # states
   x_ego, v_ego, a_ego = SX.sym('x_ego'), SX.sym('v_ego'), SX.sym('a_ego')
   model.x = vertcat(x_ego, v_ego, a_ego)
-
-  # controls
   j_ego = SX.sym('j_ego')
   model.u = vertcat(j_ego)
-
-  # xdot
   x_ego_dot = SX.sym('x_ego_dot')
   v_ego_dot = SX.sym('v_ego_dot')
   a_ego_dot = SX.sym('a_ego_dot')
   model.xdot = vertcat(x_ego_dot, v_ego_dot, a_ego_dot)
-
-  # live parameters
   a_min = SX.sym('a_min')
   a_max = SX.sym('a_max')
   x_obstacle = SX.sym('x_obstacle')
   lead_t_follow = SX.sym('lead_t_follow')
   lead_danger_factor = SX.sym('lead_danger_factor')
   model.p = vertcat(a_min, a_max, x_obstacle, lead_t_follow, lead_danger_factor)
-
-  # dynamics model
   f_expl = vertcat(v_ego, a_ego, j_ego)
   model.f_impl_expr = model.xdot - f_expl
   model.f_expl_expr = f_expl
@@ -125,11 +112,7 @@ def gen_long_ocp():
   ocp.model = gen_long_model()
 
   Tf = T_IDXS[-1]
-
-  # set dimensions
   ocp.dims.N = N
-
-  # set cost module
   ocp.cost.cost_type = 'NONLINEAR_LS'
   ocp.cost.cost_type_e = 'NONLINEAR_LS'
 
@@ -152,10 +135,6 @@ def gen_long_ocp():
 
   desired_dist_comfort = get_safe_obstacle_distance(v_ego, lead_t_follow)
 
-  # The main cost in normal operation is how close you are to the "desired" distance
-  # from an obstacle at every timestep. This obstacle can be a lead car
-  # or other object. In e2e mode we can use x_position targets as a cost
-  # instead.
   costs = [((x_obstacle - x_ego) - (desired_dist_comfort)) / (v_ego + 10.),
            x_ego,
            v_ego,
@@ -164,9 +143,6 @@ def gen_long_ocp():
   ocp.model.cost_y_expr = vertcat(*costs)
   ocp.model.cost_y_expr_e = vertcat(*costs[:-1])
 
-  # Constraints on speed, acceleration and desired distance to
-  # the obstacle, which is treated as a slack constraint so it
-  # behaves like an asymmetrical cost.
   constraints = vertcat(v_ego,
                         (a_ego - a_min),
                         (a_max - a_ego),
@@ -178,7 +154,6 @@ def gen_long_ocp():
   ocp.parameter_values = np.array([-1.2, 1.2, 0.0, get_T_FOLLOW(), LEAD_DANGER_FACTOR])
 
 
-  # We put all constraint cost weights to 0 and only set them at runtime
   cost_weights = np.zeros(CONSTR_DIM)
   ocp.cost.zl = cost_weights
   ocp.cost.Zl = cost_weights
@@ -189,22 +164,15 @@ def gen_long_ocp():
   ocp.constraints.uh = 1e4*np.ones(CONSTR_DIM)
   ocp.constraints.idxsh = np.arange(CONSTR_DIM)
 
-  # The HPIPM solver can give decent solutions even when it is stopped early
-  # Which is critical for our purpose where compute time is strictly bounded
-  # We use HPIPM in the SPEED_ABS mode, which ensures fastest runtime. This
-  # does not cause issues since the problem is well bounded.
   ocp.solver_options.qp_solver = 'PARTIAL_CONDENSING_HPIPM'
   ocp.solver_options.hessian_approx = 'GAUSS_NEWTON'
   ocp.solver_options.integrator_type = 'ERK'
   ocp.solver_options.nlp_solver_type = ACADOS_SOLVER_TYPE
   ocp.solver_options.qp_solver_cond_N = 1
 
-  # More iterations take too much time and less lead to inaccurate convergence in
-  # some situations. Ideally we would run just 1 iteration to ensure fixed runtime.
   ocp.solver_options.qp_solver_iter_max = 10
   ocp.solver_options.qp_tol = 1e-3
 
-  # set prediction horizon
   ocp.solver_options.tf = Tf
   ocp.solver_options.shooting_nodes = T_IDXS
 
@@ -249,7 +217,6 @@ class LongitudinalMpc:
     self.status = False
     self.crash_cnt = 0.0
     self.solution_status = 0
-    # timers
     self.solve_time = 0.0
     self.time_qp_solution = 0.0
     self.time_linearization = 0.0
@@ -263,11 +230,7 @@ class LongitudinalMpc:
     W = np.asfortranarray(np.diag(cost_weights))
     for i in range(N):
       self.solver.cost_set(i, 'W', W)
-    # Setting the slice without the copy make the array not contiguous,
-    # causing issues with the C interface.
     self.solver.cost_set(N, 'W', np.copy(W[:COST_E_DIM, :COST_E_DIM]))
-
-    # Set L2 slack cost on lower bound constraints
     Zl = np.array(constraint_cost_weights)
     for i in range(N):
       self.solver.cost_set(i, 'Zl', Zl)
@@ -282,7 +245,7 @@ class LongitudinalMpc:
     v_prev = self.x0[1]
     self.x0[1] = v
     self.x0[2] = a
-    if abs(v_prev - v) > 2.:  # probably only helps if v < v_prev
+    if abs(v_prev - v) > 2.:
       for i in range(N+1):
         self.solver.set(i, 'x', self.x0)
 
@@ -295,8 +258,6 @@ class LongitudinalMpc:
     return lead_xv
 
   def process_lead_legacy(self, lead):
-    # behavior before PR #37824 (newLeadMpc=False): one immediate radar lead prediction
-    # extrapolated forward with acceleration decaying to 0
     v_ego = self.x0[1]
     if lead is not None and lead.status:
       x_lead = lead.dRel
@@ -304,14 +265,11 @@ class LongitudinalMpc:
       a_lead = lead.aLeadK
       a_lead_tau = lead.aLeadTau
     else:
-      # Fake a fast lead car, so mpc can keep running in the same mode
       x_lead = 50.0
       v_lead = v_ego + 10.0
       a_lead = 0.0
       a_lead_tau = _LEAD_ACCEL_TAU
 
-    # MPC will not converge if immediate crash is expected
-    # Clip lead distance to what is still possible to brake for
     min_x_lead = MIN_X_LEAD_FACTOR * (v_ego + v_lead) * (v_ego - v_lead) / (-ACCEL_MIN * 2)
     x_lead = np.clip(x_lead, min_x_lead, 1e8)
     v_lead = np.clip(v_lead, 0.0, 1e8)
@@ -333,10 +291,17 @@ class LongitudinalMpc:
     if not valid_model_lead:
       return self.process_lead_legacy(radar_lead)
 
-    x_lead_traj = float(radar_lead.dRel) + (x_model - x_model[0])
-    v_lead_traj = float(radar_lead.vLead) + (v_model - v_model[0])
+    pulling_away = radar_lead.vRel > LEAD_PULLAWAY_VREL and radar_lead.aLeadK > LEAD_PULLAWAY_ABRAKE
+    displacement = x_model - x_model[0]
+    v_delta = v_model - v_model[0]
+    if not pulling_away:
+      # the model predicts a stopped or braking lead driving off again; until radar confirms it the plan would aim through the lead
+      displacement = np.minimum(displacement, max(float(radar_lead.vLead), 0.0) * LEAD_T_IDXS_MODEL)
+      v_delta = np.minimum(v_delta, 0.0)
 
-    # MPC won't converge on immediate crashes; lift h=0 to the minimum braking distance.
+    x_lead_traj = float(radar_lead.dRel) + displacement
+    v_lead_traj = float(radar_lead.vLead) + v_delta
+
     v_lead_0 = v_lead_traj[0]
     min_x_lead = MIN_X_LEAD_FACTOR * (v_ego + v_lead_0) * (v_ego - v_lead_0) / (-ACCEL_MIN * 2)
     x_lead_traj[0] = max(x_lead_traj[0], min_x_lead)
@@ -344,8 +309,7 @@ class LongitudinalMpc:
 
     x_lead_mpc = np.maximum.accumulate(np.interp(T_IDXS, LEAD_T_IDXS_MODEL, x_lead_traj))
     v_lead_mpc = np.interp(T_IDXS, LEAD_T_IDXS_MODEL, v_lead_traj)
-    if radar_lead.status and radar_lead.vRel > LEAD_PULLAWAY_VREL and radar_lead.aLeadK > LEAD_PULLAWAY_ABRAKE:
-      # ty spysyweeb for lead pull away fix phantom launch braking so you don't ram the lead in edge cases.
+    if pulling_away:
       radar_velocity_floor = np.full_like(T_IDXS, float(radar_lead.vLead))
       radar_distance_floor = float(radar_lead.dRel) + float(radar_lead.vLead) * T_IDXS
       v_lead_mpc = np.maximum(v_lead_mpc, radar_velocity_floor)
@@ -364,16 +328,12 @@ class LongitudinalMpc:
       lead_xv_0 = self.process_lead(model_lead_0, radarstate.leadOne)
       lead_xv_1 = self.process_lead(model_lead_1, radarstate.leadTwo)
     else:
-      # pre-PR behavior: radar lead extrapolated with accel decay
       self.status = radarstate.leadOne.status or radarstate.leadTwo.status
       lead_xv_0 = self.process_lead_legacy(radarstate.leadOne)
       lead_xv_1 = self.process_lead_legacy(radarstate.leadTwo)
     self.lead_xv_0 = lead_xv_0
     self.lead_xv_1 = lead_xv_1
 
-    # To estimate a safe distance from a moving lead, we calculate how much stopping
-    # distance that lead needs as a minimum. We can add that to the current distance
-    # and then treat that as a stopped car/obstacle at this new distance.
     lead_0_obstacle = lead_xv_0[:,0] + get_stopped_equivalence_factor(lead_xv_0[:,1])
     lead_1_obstacle = lead_xv_1[:,0] + get_stopped_equivalence_factor(lead_xv_1[:,1])
 

@@ -75,7 +75,6 @@ DEFAULT_OUT = Path("/tmp/mici_preview")
 
 # ── Color palette for the preview chrome ──────────────────────────────────
 CHROME_BG = rl.Color(18, 18, 22, 255)       # dark bg behind the MICI canvas
-LABEL_COLOR = rl.Color(160, 160, 160, 200)  # panel label text
 
 # ── All available panels ───────────────────────────────────────────────────
 ALL_PANELS = [
@@ -144,6 +143,7 @@ def _patch_mock_state():
   mp.put("NeuralNetworkFeedForward",  False)
   mp.put("IQLaneChangeTimer",       0)      # nudge
   mp.put("IQLaneChangeBsmDelay",    False)
+  mp.put("IQEdgeGuard",             False)
 
   # ── Visuals (correct param keys matching visuals.py) ─────────────────────
   mp.put("IQBlindSpotAlerts",             True)
@@ -173,7 +173,7 @@ def _patch_mock_state():
   # ── Cruise ────────────────────────────────────────────────────────────────
   mp.put("ExperimentalMode",      False)
   mp.put("IQDynamicMode",         False)
-  mp.put("LongitudinalPersonality", 1)   # 0=aggressive,1=standard,2=relaxed,3=stock
+  mp.put("LongitudinalPersonality", 1)
   mp.put("IQSpeedAssistMode",        0)     # 0=off
 
   # ── Misc / system ─────────────────────────────────────────────────────────
@@ -207,10 +207,20 @@ def _patch_mock_state():
     activeBundle = _MockBundle()
     selectedBundle = None   # None = not downloading
 
+  from iqpilot.cereal import log as _log
+  class _MockDeviceState:
+    networkType = _log.DeviceState.NetworkType.wifi
+    networkStrength = type("NS", (), {"raw": 3})()
+    egpuDockPresent = True
+    started = False
+    freeSpacePercent = 50.0
+    memoryUsagePercent = 40
+
   class _MockSM:
     """Minimal SubMaster-like dict that returns sensible defaults."""
     _data = {
       "iqModelManager": _MockModelManager(),
+      "deviceState": _MockDeviceState(),
     }
     def __getitem__(self, key):
       return self._data.get(key, type("Empty", (), {"enabled": False})())
@@ -257,7 +267,7 @@ def _patch_mock_state():
   _mock_ui_state = MockUIState()
 
   # iqpilot.selfdrive.ui.ui_state  (base openpilot layer — hosts the IQ UI state classes/enums)
-  from enum import Enum, IntEnum
+  from enum import Enum
   class _UIStatus(Enum):
     DISENGAGED = "disengaged"
     ENGAGED = "engaged"
@@ -270,15 +280,10 @@ def _patch_mock_state():
     PAUSE = 1
     RESUME = 2
 
-  class _OnroadBrightness(IntEnum):
-    AUTO = 0
-    AUTO_DARK = 1
-
   mock_base_ui_mod = types.ModuleType("iqpilot.selfdrive.ui.ui_state")
   mock_base_ui_mod.ui_state = _mock_ui_state
   mock_base_ui_mod.UIStatus = _UIStatus
   mock_base_ui_mod.OnroadTimerStatus = _OnroadTimerStatus
-  mock_base_ui_mod.OnroadBrightness = _OnroadBrightness
   mock_base_ui_mod.device = type("MockDevice", (), {"awake": True})()
   sys.modules["iqpilot.selfdrive.ui.ui_state"] = mock_base_ui_mod
 
@@ -330,47 +335,17 @@ def load_panel(name: str):
     widget = cls()
   widget.set_rect(rect)
   widget.show_event()
+
+  eg = os.environ.get("IQ_EGPU_STATE")
+  mc = os.environ.get("IQ_MAC_STATE")
+  if (eg or mc) and hasattr(widget, "_egpu_state"):
+    widget._egpu_state = eg or None
+    widget._mac_state = mc or None
+    widget._egpu_progress = float(os.environ.get("IQ_EGPU_PROGRESS", "0") or 0)
+    widget._mac_progress = float(os.environ.get("IQ_MAC_PROGRESS", "0") or 0)
+    widget._update_dock_status = lambda: None
+
   return widget
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Rendering helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _draw_chrome(panel_name: str, scale: float, canvas_x: int, canvas_y: int):
-  """Draw the preview window chrome: background, label, dimension hint."""
-  # Nothing to draw outside the canvas — the window IS the canvas (+ padding)
-  pass
-
-
-def _render_frame(widget, render_tex: rl.RenderTexture, canvas_x: int, canvas_y: int, scale: float, panel_name: str):
-  """
-  Render one frame:
-    1. Draw the MICI widget into render_tex (536×240 offscreen)
-    2. Blit the texture into the window at the correct position + scale
-    3. Draw chrome overlays (panel label, grid, etc.)
-  """
-  # Draw into the MICI-sized render texture
-  rl.begin_texture_mode(render_tex)
-  rl.clear_background(rl.Color(0, 0, 0, 255))
-  widget.render(rl.Rectangle(0, 0, MICI_W, MICI_H))
-  rl.end_texture_mode()
-
-  # Blit to screen (flip Y because OpenGL textures are upside-down)
-  src = rl.Rectangle(0, 0, MICI_W, -MICI_H)   # negative H = flip
-  dst = rl.Rectangle(canvas_x, canvas_y, MICI_W * scale, MICI_H * scale)
-  rl.draw_texture_pro(render_tex.texture, src, dst, rl.Vector2(0, 0), 0, rl.WHITE)
-
-  # Panel name label bottom-left
-  rl.draw_text(panel_name.upper(), canvas_x + 6, canvas_y + int(MICI_H * scale) + 6,
-               14, rl.Color(120, 120, 120, 180))
-
-  # Dimension hint bottom-right
-  hint = f"{MICI_W}×{MICI_H}  (×{scale:.1f})"
-  hint_w = rl.measure_text(hint, 12)
-  win_w = rl.get_screen_width()
-  rl.draw_text(hint, win_w - hint_w - 8, canvas_y + int(MICI_H * scale) + 6,
-               12, rl.Color(80, 80, 80, 160))
 
 
 # ─────────────────────────────────────────────────────────────────────────────

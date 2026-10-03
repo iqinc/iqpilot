@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import signal
+import select
 import subprocess
 import tempfile
 import threading
@@ -185,6 +186,8 @@ class _StreamFrameWorker:
     self._need_seek = True
     self._seek_to = 0
     self._stop = False
+    self._proc_lock = threading.Lock()
+    self._proc: subprocess.Popen | None = None
     self._status = status or tr("Loading video")
     self._thread = threading.Thread(target=self._run, daemon=True)
     self._thread.start()
@@ -205,16 +208,27 @@ class _StreamFrameWorker:
   def stop(self) -> None:
     with self._cv:
       self._stop = True
+      self._buf.clear()
       self._cv.notify_all()
-    self._thread.join(timeout=1.5)
-    if self._proxy is not None:
-      self._proxy.stop()
-    for pl in (self._playlist, self._hw_playlist):
-      if pl:
-        try:
-          os.unlink(pl)
-        except OSError:
-          pass
+    # Unblock IO before joining; the worker reaps the process.
+    with self._proc_lock:
+      if self._proc is not None:
+        self._signal_stop(self._proc)
+    self._thread.join(timeout=0.2)
+
+  @staticmethod
+  def _signal_stop(proc) -> None:
+    try:
+      os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+      pass
+
+  def _start_process(self, *args, **kwargs):
+    with self._proc_lock:
+      if self._stop:
+        raise InterruptedError("Playback closed")
+      self._proc = subprocess.Popen(*args, **kwargs)
+      return self._proc
 
   def request_frame(self, frame_idx: int) -> None:
     frame_idx = max(0, min(self.total_frames - 1, int(frame_idx)))
@@ -222,7 +236,8 @@ class _StreamFrameWorker:
       self._target = frame_idx
       # Seek (restart ffmpeg) on a backward move or a big forward jump; otherwise let the
       # sequential decode catch up from the buffer.
-      if frame_idx < self._run_start or frame_idx > self._base + SEEK_AHEAD_FRAMES:
+      oldest = min(self._buf) if self._buf else self._run_start
+      if frame_idx < oldest or frame_idx > self._base + SEEK_AHEAD_FRAMES:
         self._need_seek = True
         self._seek_to = frame_idx
       self._cv.notify_all()
@@ -252,10 +267,16 @@ class _StreamFrameWorker:
     if self._dims is not None or self._ffprobe is None or not self._sources:
       return self._dims
     try:
-      out = subprocess.run(
+      probe = self._start_process(
         [self._ffprobe, "-v", "quiet", "-select_streams", "v:0", "-show_entries",
          "stream=width,height", "-of", "csv=p=0:s=x", self._sources[0]],
-        capture_output=True, text=True, timeout=20).stdout.strip()
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, start_new_session=True)
+      try:
+        out = probe.communicate(timeout=20)[0].strip()
+      finally:
+        self._kill(probe)
+        with self._proc_lock:
+          self._proc = None
       # A TS can report the stream twice; take the first non-empty line.
       line = next((ln for ln in out.splitlines() if "x" in ln), "")
       w, h = (int(v) for v in line.split("x")[:2])
@@ -296,10 +317,10 @@ class _StreamFrameWorker:
         pass
       # New session so we can kill the WHOLE pipe (ffmpeg + v4l_decode) as a group; killing just
       # the shell would orphan them and leave v4l_decode holding /dev/video32 (-> next decode hangs).
-      return subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+      return self._start_process(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               bufsize=0, start_new_session=True)
 
-    cmd = [self._ffmpeg, "-hide_banner", "-loglevel", "error"]
+    cmd = [self._ffmpeg, "-hide_banner", "-loglevel", "error", "-threads", "2"]
     playlist = self._playlist
     if self._proxy is not None:
       # concat playlists only open local files by default; allow the proxy's http entries.
@@ -322,7 +343,7 @@ class _StreamFrameWorker:
       cmd += ["-ss", f"{start_s:.3f}"]
     cmd += ["-f", "concat", "-safe", "0", "-i", playlist,
             "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+    return self._start_process(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
                             start_new_session=True)
 
   @staticmethod
@@ -330,7 +351,7 @@ class _StreamFrameWorker:
     if proc is None:
       return
     try:
-      os.killpg(os.getpgid(proc.pid), signal.SIGKILL)  # whole pipe group
+      os.killpg(proc.pid, signal.SIGKILL)  # whole pipe group
     except Exception:
       try:
         proc.kill()
@@ -340,22 +361,53 @@ class _StreamFrameWorker:
       proc.wait(timeout=1.0)  # reap so it doesn't linger as a zombie
     except Exception:
       pass
+    if proc.stdout is not None:
+      proc.stdout.close()
 
-  @staticmethod
-  def _read_into(pipe, arr) -> bool:
+  def _read_into(self, pipe, arr) -> bool:
     # Read one frame straight into the numpy buffer — no bytes concat/copy (a ~7MB memcpy/frame
     # otherwise, which halved decode throughput).
     mv = memoryview(arr).cast("B")  # flat byte view so slicing is by bytes, not rows
     n = arr.nbytes
     got = 0
+    deadline = time.monotonic() + 10.0
     while got < n:
-      r = pipe.readinto(mv[got:])
+      with self._cv:
+        if self._stop or self._need_seek:
+          return False
+      if time.monotonic() >= deadline:
+        self._set_status(tr("Video decoder stalled — seek or reopen the route"))
+        return False
+      if not select.select([pipe], [], [], 0.1)[0]:
+        continue
+      r = os.readv(pipe.fileno(), [mv[got:]])
       if not r:
         return False
       got += r
     return True
 
   def _run(self) -> None:
+    try:
+      self._decode_loop()
+    except Exception:
+      if not self._stop:
+        self._set_status(tr("Unable to load video"))
+    finally:
+      with self._proc_lock:
+        proc, self._proc = self._proc, None
+      self._kill(proc)
+      with self._cv:
+        self._buf.clear()
+      if self._proxy is not None:
+        self._proxy.stop()
+      for playlist in (self._playlist, self._hw_playlist):
+        if playlist:
+          try:
+            os.unlink(playlist)
+          except OSError:
+            pass
+
+  def _decode_loop(self) -> None:
     if self._ffmpeg is None or self._playlist is None:
       self._set_status(tr("Unable to load video"))
       return
@@ -365,14 +417,16 @@ class _StreamFrameWorker:
     for _ in range(2):
       if dims is not None or self._stop:
         break
-      time.sleep(2.0)
+      with self._cv:
+        if not self._stop:
+          self._cv.wait(2.0)
       dims = self._probe_dims()
     if dims is None:
       self._set_status(tr("Unable to load video"))
       return
     w, h = dims
     frame_bytes = w * h * 3
-    self._prebuffer = max(8, min(30, PREBUFFER_BYTES // max(1, frame_bytes)))
+    self._prebuffer = max(1, min(30, PREBUFFER_BYTES // max(1, frame_bytes)))
     proc: subprocess.Popen | None = None
     try:
       while not self._stop:
@@ -392,14 +446,18 @@ class _StreamFrameWorker:
 
         with self._cv:
           while (not self._stop and not self._need_seek
-                 and self._base - self._target > self._prebuffer):
+                 and self._base - self._target >= self._prebuffer):
             self._cv.wait(0.1)
           if self._stop or self._need_seek:
             continue
 
         frame = np.empty((h, w, 3), dtype=np.uint8)
-        if not self._read_into(proc.stdout, frame):  # end of the concatenated stream
-          self._set_status("")
+        if not self._read_into(proc.stdout, frame):
+          # A shell pipeline may still have live children after stdout closes.
+          self._kill(proc)
+          with self._proc_lock:
+            self._proc = None
+          proc = None
           with self._cv:
             while not self._stop and not self._need_seek:
               self._cv.wait(0.2)
@@ -410,7 +468,7 @@ class _StreamFrameWorker:
             continue  # a seek landed mid-read; drop this frame and restart
           self._buf[self._base] = frame
           # Keep the buffer bounded to the most recently decoded frames (they arrive in order).
-          over = len(self._buf) - (self._prebuffer + 16)
+          over = len(self._buf) - self._prebuffer
           if over > 0:
             for k in sorted(self._buf)[:over]:
               del self._buf[k]
@@ -419,6 +477,8 @@ class _StreamFrameWorker:
         self._set_status("")
     finally:
       self._kill(proc)
+      with self._proc_lock:
+        self._proc = None
 
 
 class _RouteAudioPlayer:
@@ -450,6 +510,10 @@ class _RouteAudioPlayer:
         try:
           proc.kill()
         except Exception:
+          pass
+        try:
+          proc.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
           pass
     self._ff = self._ap = None
 
@@ -542,6 +606,7 @@ class VideoPlayerLayout(Widget):
     self._on_share_cb = cb
 
   def set_route(self, route: str | None) -> None:
+    self._cancel_miles_computation()
     self._stop_worker()
     self._stop_audio()
     self._clear_texture()
@@ -637,29 +702,37 @@ class VideoPlayerLayout(Widget):
 
   def _start_miles_computation(self, route: str) -> None:
     # Integrating vEgo over the qlogs is slow (reads every segment), so compute off the UI thread.
+    self._cancel_miles_computation()
+    cancel = self._miles_cancel = threading.Event()
     self._miles_route = route
 
     def _worker():
       try:
-        miles = compute_route_distance_miles(route)
+        miles = compute_route_distance_miles(route, cancel=cancel)
       except Exception:
         miles = None
-      if self._miles_route == route:
+      if not cancel.is_set() and self._miles_route == route:
         self._distance_miles = miles
 
     self._miles_thread = threading.Thread(target=_worker, daemon=True)
     self._miles_thread.start()
 
+  def _cancel_miles_computation(self):
+    if cancel := getattr(self, "_miles_cancel", None):
+      cancel.set()
+
   def show_event(self):
     super().show_event()
-    # Watching a recording is active use — suppress the offroad inactivity timeout that would
-    # otherwise blank the screen / bounce back to home mid-playback.
+    # Keep the display awake during playback.
     device.set_override_interactive_timeout(24 * 60 * 60)
 
   def hide_event(self):
     super().hide_event()
     self._stop_worker()
     self._stop_audio()
+    self._cancel_miles_computation()
+    self._clear_texture()
+    self._playing = False
     device.set_override_interactive_timeout(None)
 
   def _stop_worker(self) -> None:

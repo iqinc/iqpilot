@@ -7,7 +7,6 @@ from __future__ import annotations
 from abc import ABC
 from collections.abc import Callable
 
-import numpy as np
 
 from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import ModelType, NumpyDict
 from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import RunnerRoot

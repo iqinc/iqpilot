@@ -8,11 +8,3 @@ BORDER_COLORS_IQ = {
   UIStatus.LAT_ONLY: rl.Color(0x0C, 0x94, 0x96, 0xFF),
   UIStatus.LONG_ONLY: rl.Color(0x96, 0x1C, 0xA8, 0xFF),
 }
-
-
-class AugmentedRoadViewIQ:
-  def __init__(self):
-    pass
-
-  def update_fade_out_bottom_overlay(self, _content_rect):
-    pass

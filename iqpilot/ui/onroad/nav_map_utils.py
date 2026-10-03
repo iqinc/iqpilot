@@ -1,9 +1,64 @@
 import math
-from urllib.parse import quote
 
 EARTH_RADIUS_M = 6378137.0
 TILE_SIZE = 256.0
 NAV_DRIVE_ZOOM_BOOST = 1.0
+
+
+class MapMarkerMotion:
+  def __init__(self):
+    self.pose = None
+    self.predicted = None
+    self.fix = None
+    self.updated_at = 0.0
+
+  def update(self, now, fix_time, latitude, longitude, heading, speed, yaw_rate, motion_valid):
+    target = (latitude, longitude, heading)
+    if not all(math.isfinite(value) for value in target):
+      return self.pose
+    dt = max(0.0, now - self.updated_at)
+    fix = (fix_time, *target)
+    reset = self.pose is None or dt > 0.5 or now < self.updated_at
+    if self.pose is not None and fix != self.fix:
+      north = math.radians(latitude - self.pose[0]) * EARTH_RADIUS_M
+      east = math.radians((longitude - self.pose[1] + 180) % 360 - 180) * EARTH_RADIUS_M * math.cos(math.radians(latitude))
+      reset |= math.hypot(north, east) > 50.0
+    if reset or fix != self.fix:
+      self.predicted = target
+    elif motion_valid and math.isfinite(speed) and math.isfinite(yaw_rate) and speed > 0.1:
+      elapsed = min(dt, max(0.0, fix_time + 1.25 - self.updated_at))
+      lat, lon, bearing = self.predicted
+      turn = -math.degrees(yaw_rate) * elapsed
+      lat, lon = destination_point(lat, lon, bearing + turn * 0.5, speed * elapsed)
+      self.predicted = (lat, (lon + 180) % 360 - 180, (bearing + turn) % 360)
+    if reset:
+      self.pose = target
+    else:
+      alpha = -math.expm1(-dt / 0.06)
+      lat, lon, bearing = self.pose
+      target_lat, target_lon, target_bearing = self.predicted
+      self.pose = (
+        lat + (target_lat - lat) * alpha,
+        (lon + ((target_lon - lon + 180) % 360 - 180) * alpha + 180) % 360 - 180,
+        (bearing + ((target_bearing - bearing + 180) % 360 - 180) * alpha) % 360,
+      )
+    self.fix = fix
+    self.updated_at = now
+    return self.pose
+
+
+def closest_polyline_segment(points, x, y):
+  best_index, best_fraction, best_distance = 0, 0.0, math.inf
+  for index in range(len(points) - 1):
+    ax, ay = points[index]
+    bx, by = points[index + 1]
+    dx, dy = bx - ax, by - ay
+    length_squared = dx * dx + dy * dy
+    fraction = min(1.0, max(0.0, ((x - ax) * dx + (y - ay) * dy) / length_squared)) if length_squared else 0.0
+    distance = (x - ax - fraction * dx) ** 2 + (y - ay - fraction * dy) ** 2
+    if distance < best_distance:
+      best_index, best_fraction, best_distance = index, fraction, distance
+  return best_index, best_fraction
 
 def _mercator_normalized(latitude: float, longitude: float) -> tuple[float, float]:
   x = (longitude + 180.0) / 360.0
@@ -45,7 +100,7 @@ def fit_zoom_for_points(points, width: float, height: float, max_zoom: float = 1
   if len(coords) < 2:
     return max_zoom
 
-  xs, ys = zip(*[_mercator_normalized(lat, lon) for lat, lon in coords])
+  xs, ys = zip(*[_mercator_normalized(lat, lon) for lat, lon in coords], strict=True)
   span_x = max(max(xs) - min(xs), 1e-6)
   span_y = max(max(ys) - min(ys), 1e-6)
 
@@ -69,21 +124,11 @@ def choose_nav_camera(current_latitude: float, current_longitude: float, bearing
   center_latitude, center_longitude = destination_point(current_latitude, current_longitude, bearing_deg, lookahead_m)
   return center_latitude, center_longitude, zoom
 
-def build_mapbox_static_url(latitude: float, longitude: float, zoom: float, bearing: float,
-                            width: int, height: int, points=None) -> str:
-  overlay = ""
-  if points:
-    overlay = f"path-7+34d17a-0.85({encode_polyline(points)})/"
-  return (
-    f"https://api.mapbox.com/styles/v1/mapbox/navigation-night-v1/static/"
-    f"{overlay}{longitude:.6f},{latitude:.6f},{zoom:.2f},{bearing:.1f},0/{width}x{height}@2x"
-  )
-
 def build_mapbox_tile_url(z: int, x: int, y: int, tile_size: int = 256, scale: int = 2,
                           style: str = "navigation-night-v1") -> str:
   suffix = f"@{scale}x" if scale > 1 else ""
   return (
-    f"https://api.mapbox.com/styles/v1/mapbox/{style}/tiles/"
+    f"https://api.mapbox.com/styles/v1/mapbox/{style}/tiles/" +
     f"{tile_size}/{z}/{x}/{y}{suffix}"
   )
 
@@ -94,27 +139,6 @@ def mercator_world_px_at_zoom(latitude: float, longitude: float, z: int, tile_si
   world_size = tile_world_size(z, tile_size)
   nx, ny = _mercator_normalized(latitude, longitude)
   return nx * world_size, ny * world_size
-
-def encode_polyline(points) -> str:
-  result = []
-  last_lat = 0
-  last_lon = 0
-
-  for point in points:
-    lat = int(round(float(point.latitude if hasattr(point, "latitude") else point[0]) * 1e5))
-    lon = int(round(float(point.longitude if hasattr(point, "longitude") else point[1]) * 1e5))
-
-    for value in (lat - last_lat, lon - last_lon):
-      shifted = ~(value << 1) if value < 0 else (value << 1)
-      while shifted >= 0x20:
-        result.append(chr((0x20 | (shifted & 0x1f)) + 63))
-        shifted >>= 5
-      result.append(chr(shifted + 63))
-
-    last_lat = lat
-    last_lon = lon
-
-  return quote("".join(result), safe="")
 
 def project_nav_point(latitude: float, longitude: float, center_latitude: float, center_longitude: float,
                       zoom: float, bearing_deg: float, width: float, height: float,
@@ -133,38 +157,14 @@ def project_nav_point(latitude: float, longitude: float, center_latitude: float,
 
 def project_nav_polyline(points, center_latitude: float, center_longitude: float, zoom: float, bearing_deg: float,
                          width: float, height: float, anchor_x: float = 0.5, anchor_y: float = 0.5) -> list[tuple[float, float]]:
+  center_x, center_y = mercator_world_px(center_latitude, center_longitude, zoom)
+  theta = math.radians(bearing_deg)
+  cos_theta, sin_theta = math.cos(theta), math.sin(theta)
+  origin_x, origin_y = width * anchor_x, height * anchor_y
   projected = []
   for point in points:
-    projected.append(
-      project_nav_point(
-        float(point.latitude),
-        float(point.longitude),
-        center_latitude,
-        center_longitude,
-        zoom,
-        bearing_deg,
-        width,
-        height,
-        anchor_x=anchor_x,
-        anchor_y=anchor_y,
-      )
-    )
+    x, y = mercator_world_px(float(point.latitude), float(point.longitude), zoom)
+    dx, dy = x - center_x, y - center_y
+    projected.append((origin_x + dx * cos_theta + dy * sin_theta,
+                      origin_y - dx * sin_theta + dy * cos_theta))
   return projected
-
-def solar_elevation_deg(latitude: float, longitude: float, unix_time: float) -> float:
-  days = unix_time / 86400.0 - 10957.5
-  mean_longitude = math.radians((280.460 + 0.9856474 * days) % 360.0)
-  mean_anomaly = math.radians((357.528 + 0.9856003 * days) % 360.0)
-  ecliptic_longitude = mean_longitude + math.radians(1.915) * math.sin(mean_anomaly) \
-      + math.radians(0.020) * math.sin(2.0 * mean_anomaly)
-  obliquity = math.radians(23.439 - 0.0000004 * days)
-  declination = math.asin(math.sin(obliquity) * math.sin(ecliptic_longitude))
-  right_ascension = math.atan2(math.cos(obliquity) * math.sin(ecliptic_longitude), math.cos(ecliptic_longitude))
-  gmst_deg = (280.46061837 + 360.98564736629 * days) % 360.0
-  hour_angle = math.radians(gmst_deg) + math.radians(longitude) - right_ascension
-  lat_rad = math.radians(latitude)
-  elevation = math.asin(
-    math.sin(lat_rad) * math.sin(declination)
-    + math.cos(lat_rad) * math.cos(declination) * math.cos(hour_angle)
-  )
-  return math.degrees(elevation)

@@ -1,4 +1,5 @@
 import math
+from collections import deque
 from enum import StrEnum, auto
 
 from iqpilot.cereal import car, messaging
@@ -10,6 +11,13 @@ from iqdbc.car.interfaces import ACCEL_MIN, ACCEL_MAX
 
 MIN_EXCESSIVE_ACTUATION_COUNT = int(0.25 / DT_CTRL)
 MIN_LATERAL_ENGAGE_BUFFER = int(1 / DT_CTRL)
+
+STEER_SHORTFALL_MIN_SPEED = 5.0
+STEER_SHORTFALL_TURN_ACCEL = 1.0
+STEER_SHORTFALL_MIN_ACCEL = 0.5
+STEER_SHORTFALL_RATIO = 0.25
+STEER_SHORTFALL_TIME = 1.0
+STEER_SHORTFALL_DELAY_BOUNDS = (0.1, 1.0)
 
 
 class ExcessiveActuationType(StrEnum):
@@ -53,3 +61,23 @@ class ExcessiveActuationCheck:
         excessive_type = ExcessiveActuationType.LATERAL
 
     return excessive_type
+
+
+class SteerShortfallCheck:
+  def __init__(self):
+    self._desired_curvatures: deque[float] = deque(maxlen=int(STEER_SHORTFALL_DELAY_BOUNDS[1] / DT_CTRL) + 1)
+    self._shortfall_frames = 0
+
+  def update(self, desired_curvature: float, v_ego: float, actual_lateral_accel: float, response_delay: float, eligible: bool) -> bool:
+    self._desired_curvatures.append(desired_curvature)
+    delay = min(max(response_delay, STEER_SHORTFALL_DELAY_BOUNDS[0]), STEER_SHORTFALL_DELAY_BOUNDS[1])
+    lag_frames = min(int(round(delay / DT_CTRL)), len(self._desired_curvatures) - 1)
+    desired_lateral_accel = self._desired_curvatures[-1 - lag_frames] * v_ego ** 2
+
+    shortfall = abs(desired_lateral_accel) - actual_lateral_accel * math.copysign(1.0, desired_lateral_accel)
+    falling_short = (eligible and v_ego > STEER_SHORTFALL_MIN_SPEED and
+                     abs(desired_lateral_accel) > STEER_SHORTFALL_TURN_ACCEL and
+                     shortfall > max(STEER_SHORTFALL_MIN_ACCEL, STEER_SHORTFALL_RATIO * abs(desired_lateral_accel)))
+
+    self._shortfall_frames = self._shortfall_frames + 1 if falling_short else 0
+    return self._shortfall_frames >= int(STEER_SHORTFALL_TIME / DT_CTRL)

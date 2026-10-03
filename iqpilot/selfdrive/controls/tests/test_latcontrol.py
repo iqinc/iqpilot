@@ -25,11 +25,13 @@ class TestLatControl:
 
   @staticmethod
   def build_pq_controller():
-    car_name = TOYOTA.TOYOTA_RAV4
+    car_name = VOLKSWAGEN.VOLKSWAGEN_PASSAT_NMS
     CarInterface = interfaces[car_name]
     CP = CarInterface.get_non_essential_params(car_name)
     CP_IQ = CarInterface.get_non_essential_params_iq(CP, car_name)
-    CI = CarInterface(CP, CP_IQ)
+    CI = CarInterface.__new__(CarInterface)
+    CI.CP = CP
+    CI.CP_IQ = CP_IQ
     iqpilot_interfaces.apply_iq_car_config(CI)
     return CP, LatControlTorquePQ(CP.as_reader(), convert_to_capnp(CP_IQ).as_reader(), CI, DT_CTRL)
 
@@ -112,20 +114,19 @@ class TestLatControl:
       CarInterface = interfaces[car_name]
       assert not is_vw_mqb_torque(CarInterface.get_non_essential_params(car_name))
 
-  def test_pq_controller_inactive_lookahead_and_slew_reset(self):
+  def test_pq_controller_inactive_slew_reset(self):
     CP, controller = self.build_pq_controller()
-    controller.curvature_lookahead_enabled = True
     controller.lateral_acceleration_slew_limiter.enabled = True
     VM = VehicleModel(CP)
     CS = car.CarState.new_message(vEgo=30)
     params = log.VehicleParameters.new_message()
     pose = Pose.from_live_pose(generate_deviceMotion().deviceMotion)
 
-    torque, angle, lac_log = controller.update(False, CS, VM, params, False, 0.001, pose, False, 0.2, lookahead_curvature=0.002)
+    torque, angle, lac_log = controller.update(False, CS, VM, params, False, 0.001, pose, False, 0.2)
     assert torque == 0.0
     assert angle == 0.0
     assert not lac_log.active
-    assert controller.lateral_acceleration_slew_limiter.a_lim == 1.8
+    assert controller.lateral_acceleration_slew_limiter.a_lim == 0.9
 
   def test_pq_live_torque_update_freeze_and_unfreeze(self, monkeypatch):
     _, controller = self.build_pq_controller()

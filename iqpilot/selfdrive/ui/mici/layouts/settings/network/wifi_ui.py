@@ -2,7 +2,6 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 """
 import math
-import numpy as np
 import pyray as rl
 from collections.abc import Callable
 
@@ -35,7 +34,7 @@ class LoadingAnimation(Widget):
     for i in range(3):
       x = base_x + (i - 1) * self.SPACING
       y = int(base_y + min(math.sin((rl.get_time() - i * 0.2) * 4) * self.Y_MAG, 0))
-      alpha = int(np.interp(base_y - y, [0, self.Y_MAG], [255 * 0.45, 255 * 0.9]))
+      alpha = int(255 * 0.45 + min(max(base_y - y, 0), self.Y_MAG) * ((255 * 0.9 - 255 * 0.45) / self.Y_MAG))
       rl.draw_circle(x, y, self.RADIUS, rl.Color(255, 255, 255, alpha))
 
 
@@ -80,7 +79,7 @@ class ForgetButton(Widget):
   def __init__(self, forget_network: Callable):
     super().__init__()
     self._forget_network = forget_network
-    self._bg_txt = gui_app.texture("icons_mici/settings/network/new/forget_button.png", 84, 84)
+    self._bg_txt = gui_app.texture("icons_mici/setup/small_slider/slider_red_circle.png", 84, 84)
     self._bg_pressed_txt = gui_app.texture("icons_mici/settings/network/new/forget_button_pressed.png", 84, 84)
     self._trash_txt = gui_app.texture("icons_mici/settings/network/new/trash.png", 29, 35)
     self.set_rect(rl.Rectangle(0, 0, 84 + self.MARGIN * 2, 84 + self.MARGIN * 2))

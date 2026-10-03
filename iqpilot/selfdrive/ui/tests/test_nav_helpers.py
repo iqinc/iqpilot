@@ -1,7 +1,7 @@
 import json
 
 from iqpilot.common.params import Params
-from iqpilot.selfdrive.ui.lib.nav_helpers import current_or_last_gps_position, resolve_mapbox_token
+from iqpilot.selfdrive.ui.lib.nav_helpers import active_navigation_route, current_or_last_gps_position, resolve_mapbox_token
 
 
 def test_resolve_mapbox_token_reads_param(tmp_path):
@@ -69,3 +69,16 @@ def test_current_or_last_gps_position_rejects_zero_position(tmp_path):
   params.put("LastGPSPosition", "{}")
 
   assert current_or_last_gps_position(params) == (0.0, 0.0, 0.0, False)
+
+
+def test_route_preview_requires_current_destination_and_engine_acceptance(tmp_path):
+  params = Params(tmp_path.as_posix())
+  params.put("NavigationDestination", {"latitude": 41.0, "longitude": -87.0})
+  params.put("NavigationRenderRoute", {"active": True, "destinationLatitude": 41.0, "destinationLongitude": -87.0})
+  assert active_navigation_route(params) is None
+  params.put_bool("NavigationActive", True)
+  assert active_navigation_route(params) is not None
+  params.put("NavigationDestination", {"latitude": 42.0, "longitude": -87.0})
+  assert active_navigation_route(params) is None
+  params.remove("NavigationDestination")
+  assert active_navigation_route(params) is None

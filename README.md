@@ -27,9 +27,9 @@
 
 #### Installing Via SSH:
 #### Once you are connected to your device via SSH, you can paste the following command below to install IQ.Pilot:
-`cd .. && rm -rf openpilot && git clone https://git.konn3kt.com/IQ.Lvbs/IQ.Pilot openpilot -b release && cd openpilot && sudo reboot`
+`cd .. && rm -rf openpilot && git clone --depth 1 --single-branch --no-tags --branch release https://git.konn3kt.com/IQ.Lvbs/IQ.Pilot openpilot && cd openpilot && sudo reboot`
 #### If you'd like to backup your previous installation as well, paste the following command below to install IQ.Pilot:
-`cd .. && mv openpilot openpilot_backup_X && git clone https://git.konn3kt.com/IQ.Lvbs/IQ.Pilot -b release && cd openpilot && sudo reboot`
+`cd .. && mv openpilot openpilot_backup_X && git clone --depth 1 --single-branch --no-tags --branch release https://git.konn3kt.com/IQ.Lvbs/IQ.Pilot openpilot && cd openpilot && sudo reboot`
 #### Alternatively, you can use your existing fork's built in tools to switch your branch as well: 
 `git remote add iqpilot https://git.konn3kt.com/IQ.Lvbs/IQ.Pilot && iq switch iqpilot release`
 
@@ -41,7 +41,6 @@
 |---|---|---------------------------------------------------------------------------------------------------------------------------------------------------|
 | `beta` | Pre-release | Preview of the next release in progress. Expect bugs. Use it if you want early access, just know things can break.                                |
 | `release` | **Stable 1.0c** | Current stable production release of IQ.Pilot.                                                                                                    |
-| `release-meb` | **Stable 1.0c** | Up to date with `release`, built specifically for VW MEB and MQBevo platform vehicles (ID.4, ID.3, ID.5, Golf MK8, Tiguan/Atlas 2024+, and more). |
 
 ---
 #### Side Note: Beta's are releases of IQ.Pilot that are released publically for beta testing by the IQ.Pilot team, expect bugs, and unstable behavior, for stability please use release.

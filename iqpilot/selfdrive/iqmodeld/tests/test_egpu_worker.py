@@ -272,6 +272,74 @@ class TestChannelContract:
     assert sent["modelV2"].modelV2.frameDropPerc == 0.0
     assert sent["cameraOdometry"].valid
 
+  def test_selector_big_flag_follows_payload_then_source(self):
+    from iqpilot.selfdrive.iqmodeld.modeld_selector import _patch_and_send
+
+    sent = {}
+
+    class PM:
+      def send(self, service, msg):
+        sent[service] = msg
+
+    payload = make_big_channel_payload(42, True, 0.03, 25.0, self._real_msgs())
+    _patch_and_send(PM(), payload, frame_drop_perc=0.0, selector_dropped=0, target=42, source_lag=0)
+    assert sent["modelV2"].modelV2.big and sent["drivingModelData"].drivingModelData.big
+
+    small_on_mac = {**make_big_channel_payload(43, True, 0.03, 25.0, self._real_msgs()), "source": "mac_big", "big": False}
+    _patch_and_send(PM(), small_on_mac, frame_drop_perc=0.0, selector_dropped=0, target=43, source_lag=0)
+    assert not sent["modelV2"].modelV2.big and not sent["drivingModelData"].drivingModelData.big
+
+  def _small_payload(self, position_y):
+    import iqpilot.cereal.messaging as messaging
+    msgs = self._real_msgs()
+    small = messaging.new_message("modelV2")
+    small.modelV2.position.x = [0.0, 10.0, 20.0]
+    small.modelV2.position.y = position_y
+    small.modelV2.position.z = [0.0, 0.0, 0.0]
+    msgs["modelV2"] = small.to_bytes()
+    return {"source": "small", "frame_id": 42, "live_calib_seen": True, "model_execution_time": 0.02, "msgs": msgs}
+
+  @pytest.mark.parametrize("source", ["egpu_big", "mac_big"])
+  def test_selector_publishes_backup_path_while_big_drives(self, source):
+    from iqpilot.selfdrive.iqmodeld.modeld_selector import _patch_and_send
+
+    sent = {}
+
+    class PM:
+      def send(self, service, msg):
+        sent[service] = msg
+
+    payload = {**make_big_channel_payload(42, True, 0.03, 25.0, self._real_msgs()), "source": source, "big": True}
+    _patch_and_send(PM(), payload, frame_drop_perc=0.0, selector_dropped=0, target=42, source_lag=0,
+                    backup_payload=self._small_payload([0.0, 0.5, 1.5]))
+    path = sent["iqDriveModelData"].iqDriveModelData.backupPath
+    assert list(path.x) == [0.0, 10.0, 20.0]
+    assert list(path.y) == [0.0, 0.5, 1.5]
+    assert list(path.z) == [0.0, 0.0, 0.0]
+
+  def test_selector_has_no_backup_path_without_a_big_model(self):
+    from iqpilot.cereal.messaging import log_from_bytes
+    from iqpilot.selfdrive.iqmodeld.modeld_selector import _patch_and_send
+
+    sent = {}
+
+    class PM:
+      def send(self, service, msg):
+        sent[service] = msg
+
+    def backup_len():
+      msg = sent["iqDriveModelData"]
+      msg = log_from_bytes(msg) if isinstance(msg, bytes) else msg
+      return len(msg.iqDriveModelData.backupPath.x)
+
+    small = self._small_payload([0.0, 0.5, 1.5])
+    _patch_and_send(PM(), small, frame_drop_perc=0.0, selector_dropped=0, target=42, source_lag=0)
+    assert backup_len() == 0
+
+    small_on_mac = {**make_big_channel_payload(42, True, 0.03, 25.0, self._real_msgs()), "source": "mac_big", "big": False}
+    _patch_and_send(PM(), small_on_mac, frame_drop_perc=0.0, selector_dropped=0, target=42, source_lag=0, backup_payload=small)
+    assert backup_len() == 0
+
   def test_selector_lag_patches_frame_id(self):
     from iqpilot.selfdrive.iqmodeld.modeld_selector import _patch_and_send
 

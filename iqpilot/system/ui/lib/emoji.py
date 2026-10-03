@@ -1,5 +1,6 @@
 import io
 import re
+from collections import OrderedDict
 
 from PIL import Image, ImageDraw, ImageFont
 import pyray as rl
@@ -7,7 +8,8 @@ import pyray as rl
 from iqpilot.system.ui.lib.application import FONT_DIR
 
 _emoji_font: ImageFont.FreeTypeFont | None = None
-_cache: dict[str, rl.Texture] = {}
+MAX_CACHE_ENTRIES = 256
+_cache: OrderedDict[str, rl.Texture] = OrderedDict()
 
 EMOJI_REGEX = re.compile(
 """[\U0001F600-\U0001F64F
@@ -52,6 +54,9 @@ def find_emoji(text):
   return [(m.start(), m.end(), m.group()) for m in EMOJI_REGEX.finditer(text)]
 
 def emoji_tex(emoji):
+  if emoji in _cache:
+    _cache.move_to_end(emoji)
+    return _cache[emoji]
   if emoji not in _cache:
     font = _load_emoji_font()
     if font is None:
@@ -63,5 +68,21 @@ def emoji_tex(emoji):
       img.save(buffer, format="PNG")
       l = buffer.tell()
       buffer.seek(0)
-      _cache[emoji] = rl.load_texture_from_image(rl.load_image_from_memory(".png", buffer.getvalue(), l))
+      image = rl.load_image_from_memory(".png", buffer.getvalue(), l)
+      try:
+        _cache[emoji] = rl.load_texture_from_image(image)
+      finally:
+        rl.unload_image(image)
+    if len(_cache) > MAX_CACHE_ENTRIES:
+      rl.rl_draw_render_batch_active()
+      rl.unload_texture(_cache.popitem(last=False)[1])
   return _cache.get(emoji)
+
+
+def clear_cache():
+  global _emoji_font, _emoji_font_loaded
+  for texture in _cache.values():
+    rl.unload_texture(texture)
+  _cache.clear()
+  _emoji_font = None
+  _emoji_font_loaded = False

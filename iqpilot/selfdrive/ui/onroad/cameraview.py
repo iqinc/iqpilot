@@ -7,7 +7,8 @@ from msgq.visionipc import VisionIpcClient, VisionBuf
 from iqpilot.common.swaglog import cloudlog
 from iqpilot.system.hardware import EGL_DMA_BUF_SUPPORTED
 from iqpilot.system.ui.lib.application import gui_app
-from iqpilot.system.ui.lib.egl import init_egl, create_egl_image, destroy_egl_image, bind_egl_image_to_texture, EGLImage
+from iqpilot.system.ui.lib.egl import (init_egl, create_egl_image, destroy_egl_image, bind_egl_image_to_texture,
+                                       create_external_texture, destroy_external_texture, EGLImage)
 from iqpilot.system.ui.widgets import Widget
 from iqpilot.selfdrive.ui.ui_state import ui_state
 
@@ -67,6 +68,8 @@ else:
 
 
 class CameraView(Widget):
+  _fragment_shader = FRAME_FRAGMENT_SHADER
+
   def __init__(self, name: str, stream_type: VisionStreamType):
     super().__init__()
     self._name = name
@@ -82,8 +85,7 @@ class CameraView(Widget):
 
     self._texture_needs_update = True
     self.last_connection_attempt: float = 0.0
-    self.shader = rl.load_shader_from_memory(VERTEX_SHADER, FRAME_FRAGMENT_SHADER)
-    self._texture1_loc: int = rl.get_shader_location(self.shader, "texture1") if not EGL_DMA_BUF_SUPPORTED else -1
+    self._initialize_shader(stream_type)
 
     self.frame: VisionBuf | None = None
     self.texture_y: rl.Texture | None = None
@@ -92,6 +94,7 @@ class CameraView(Widget):
     # EGL resources
     self.egl_images: dict[int, EGLImage] = {}
     self.egl_texture: rl.Texture | None = None
+    self._external_texture_id = 0
 
     self._placeholder_color: rl.Color | None = None
 
@@ -100,21 +103,26 @@ class CameraView(Widget):
       if not init_egl():
         raise RuntimeError("Failed to initialize EGL")
 
-      # Create a 1x1 pixel placeholder texture for EGL image binding
-      temp_image = rl.gen_image_color(1, 1, rl.BLACK)
-      self.egl_texture = rl.load_texture_from_image(temp_image)
-      rl.unload_image(temp_image)
-
     ui_state.add_offroad_transition_callback(self._offroad_transition)
 
+  def _initialize_shader(self, stream_type: VisionStreamType) -> None:
+    self.shader = rl.load_shader_from_memory(VERTEX_SHADER, self._fragment_shader)
+    self._texture1_loc: int = rl.get_shader_location(self.shader, "texture1") if not EGL_DMA_BUF_SUPPORTED else -1
+
+  def _update_texture_color_filtering(self) -> None:
+    pass
+
   def _offroad_transition(self):
-    # Reconnect if not first time going onroad
-    if ui_state.is_onroad() and self.frame is not None:
+    if self.frame is not None or self._switching or (self.client and self.client.num_buffers):
       # Prevent old frames from showing when going onroad. Qt has a separate thread
       # which drains the VisionIpcClient SubSocket for us. Re-connecting is not enough
       # and only clears internal buffers, not the message queue.
+      self._clear_textures()
       self.frame = None
       self.available_streams.clear()
+      self._target_client = None
+      self._target_stream_type = None
+      self._switching = False
       if self.client:
         del self.client
       self.client = VisionIpcClient(self._name, self._stream_type, conflate=True)
@@ -125,6 +133,9 @@ class CameraView(Widget):
 
   def switch_stream(self, stream_type: VisionStreamType) -> None:
     if self._stream_type == stream_type:
+      self._target_client = None
+      self._target_stream_type = None
+      self._switching = False
       return
 
     if self._switching and self._target_stream_type == stream_type:
@@ -144,20 +155,20 @@ class CameraView(Widget):
     return self._stream_type
 
   def close(self) -> None:
+    ui_state.remove_offroad_transition_callback(self._offroad_transition)
     self._clear_textures()
-
-    # Clean up EGL texture
-    if EGL_DMA_BUF_SUPPORTED and self.egl_texture:
-      rl.unload_texture(self.egl_texture)
-      self.egl_texture = None
 
     # Clean up shader
     if self.shader and self.shader.id:
       rl.unload_shader(self.shader)
+      self.shader.id = 0
 
     self.frame = None
     self.available_streams.clear()
     self.client = None
+    self._target_client = None
+    self._target_stream_type = None
+    self._switching = False
 
   def __del__(self):
     self.close()
@@ -251,10 +262,11 @@ class CameraView(Widget):
     self.egl_texture.height = self.frame.height
 
     # Bind the EGL image to our texture
-    bind_egl_image_to_texture(self.egl_texture.id, egl_image)
+    bind_egl_image_to_texture(self._external_texture_id, egl_image)
 
     # Render with shader
     rl.begin_shader_mode(self.shader)
+    self._update_texture_color_filtering()
     rl.draw_texture_pro(self.egl_texture, src_rect, dst_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
     rl.end_shader_mode()
 
@@ -274,6 +286,7 @@ class CameraView(Widget):
 
     # Render with shader
     rl.begin_shader_mode(self.shader)
+    self._update_texture_color_filtering()
     rl.set_shader_value_texture(self.shader, self._texture1_loc, self.texture_uv)
     rl.draw_texture_pro(self.texture_y, src_rect, dst_rect, rl.Vector2(0, 0), 0.0, rl.WHITE)
     rl.end_shader_mode()
@@ -338,7 +351,14 @@ class CameraView(Widget):
 
   def _initialize_textures(self):
     self._clear_textures()
-    if not EGL_DMA_BUF_SUPPORTED:
+    if EGL_DMA_BUF_SUPPORTED:
+      image = rl.gen_image_color(1, 1, rl.BLACK)
+      try:
+        self.egl_texture = rl.load_texture_from_image(image)
+      finally:
+        rl.unload_image(image)
+      self._external_texture_id = create_external_texture()
+    else:
       self.texture_y = rl.load_texture_from_image(rl.Image(None, int(self.client.stride),
         int(self.client.height), 1, rl.PixelFormat.PIXELFORMAT_UNCOMPRESSED_GRAYSCALE))
       self.texture_uv = rl.load_texture_from_image(rl.Image(None, int(self.client.stride // 2),
@@ -358,6 +378,12 @@ class CameraView(Widget):
       for data in self.egl_images.values():
         destroy_egl_image(data)
       self.egl_images = {}
+      if self._external_texture_id:
+        destroy_external_texture(self._external_texture_id)
+        self._external_texture_id = 0
+      if self.egl_texture:
+        rl.unload_texture(self.egl_texture)
+        self.egl_texture = None
 
 
 if __name__ == "__main__":

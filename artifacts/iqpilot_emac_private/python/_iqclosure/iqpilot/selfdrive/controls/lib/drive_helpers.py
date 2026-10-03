@@ -27,12 +27,9 @@ def smooth_value(val, prev_val, tau, dt=DT_MDL):
   alpha = 1 - np.exp(-dt/tau) if tau > 0 else 1
   return alpha * val + (1 - alpha) * prev_val
 
-# "Model smoothing": when the policy's own predicted uncertainty (plan_stds) for the
-# 1s-ahead lateral position spikes, temporarily lengthen the desiredCurvature smoothing
-# time constant so a noisy/uncertain model output doesn't jerk the wheel.
-MODEL_SMOOTHING_STD_LOW = 0.15  # m, plan y_std at 1s below which no extra smoothing is added
-MODEL_SMOOTHING_STD_HIGH = 0.25  # m, plan y_std at 1s at/above which the full max_extra_seconds is added
-MODEL_SMOOTHING_MAX_TOTAL_SEC = 0.60  # hard ceiling on base + dynamic lat smoothing seconds
+MODEL_SMOOTHING_STD_LOW = 0.15
+MODEL_SMOOTHING_STD_HIGH = 0.25
+MODEL_SMOOTHING_MAX_TOTAL_SEC = 0.60
 
 def dynamic_lat_smooth_extra_seconds(y_std_1s: float, max_extra_seconds: float) -> float:
   if max_extra_seconds <= 0.0:

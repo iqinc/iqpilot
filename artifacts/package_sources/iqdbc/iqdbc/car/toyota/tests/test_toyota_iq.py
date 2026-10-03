@@ -1,7 +1,7 @@
 from iqdbc.car import gen_empty_fingerprint, structs
 from iqdbc.car.toyota.interface import CarInterface
 from iqdbc.car.toyota.values import CAR, ToyotaFlags
-from iqdbc.lvbs.car.toyota.values import ToyotaFlagsIQ
+from iqdbc.lvbs.car.toyota.values import ToyotaFlagsIQ, ToyotaSafetyFlagsIQ
 
 
 def test_secoc_toyota_not_dashcam_on_release():
@@ -34,3 +34,11 @@ def test_smart_dsu_clears_disable_radar_on_radar_acc_toyota():
   assert not (cp.flags & ToyotaFlags.DISABLE_RADAR.value)
   assert cp.alphaLongitudinalAvailable
   assert cp.openpilotLongitudinalControl
+
+
+def test_lkas_hud_safety_flag_tracks_tss2():
+  for candidate, expected in ((CAR.TOYOTA_CHR_TSS2, True), (CAR.TOYOTA_PRIUS_V, False)):
+    fingerprint = gen_empty_fingerprint()
+    cp = CarInterface.get_params(candidate, fingerprint, [], False, False, False)
+    cp_iq = CarInterface.get_params_iq(cp, candidate, fingerprint, [], False, False, False)
+    assert bool(cp_iq.iqSafetyFlags & ToyotaSafetyFlagsIQ.LKAS_HUD) is expected

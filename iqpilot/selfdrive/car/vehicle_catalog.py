@@ -14,7 +14,6 @@ _CANDIDATE_PARTS = (
   ("iqpilot", "selfdrive", "car", CATALOG_FILENAME),
 )
 
-# in-memory (car-interface) field  ->  on-disk compact key
 _ATTR_TO_KEY = (
   ("platform", "id"),
   ("make", "mk"),

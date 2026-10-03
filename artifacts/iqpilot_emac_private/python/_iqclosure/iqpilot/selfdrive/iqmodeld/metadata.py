@@ -6,6 +6,8 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
+import numpy as np
+
 from iqpilot.cereal import custom
 from tinygrad.nn.onnx import OnnxPBParser
 
@@ -80,11 +82,26 @@ def build_metadata_record(model_path):
   parsed = TelemetryEnvelopeParser(model_path).parse()
   props = parsed["metadata_props"]
   graph = parsed["graph"]
+  output_shapes = _graph_shape_table(graph, "output")
+  output_len = _lookup_metadata(props, "output_len")
+  if output_len is None and "outputs" in output_shapes:
+    output_len = output_shapes["outputs"][-1]
   return {
     "model_checkpoint": _lookup_metadata(props, "model_checkpoint"),
     "output_slices": _decoded_slices(props),
     "input_shapes": _graph_shape_table(graph, "input"),
-    "output_shapes": _graph_shape_table(graph, "output"),
+    "input_dtypes": {item["name"]: np.dtype(item["parsed_type"].dtype.fmt).name for item in graph["input"]},
+    "output_shapes": output_shapes,
+    "output_len": int(output_len) if output_len is not None else None,
+    "cot_decode": _lookup_metadata(props, "cot_decode"),
+    "cot_vocab": _lookup_metadata(props, "cot_vocab"),
+    "cot_max_length": _lookup_metadata(props, "cot_max_length"),
+    "reasoning_states": _lookup_metadata(props, "reasoning_states"),
+    **{name: _lookup_metadata(props, name) for name in (
+      "map_tile_style", "map_tile_contract", "speed_limit_contract", "drive_profile_contract",
+      "cot_decode_mode", "cot_constraint", "cot_templates", "cot_legality_mask", "cot_bank_sha256",
+      "cot_display", "cot_bank", "reasoning_classes", "reasoning_output_contract",
+    )},
   }
 
 

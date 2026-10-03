@@ -362,14 +362,14 @@ void draw_custom_series_preview(const AppSession &session, CustomSeriesEditorSta
       ImPlot::SetupAxisFormat(ImAxis_X1, "%.1f");
       ImPlot::SetupAxisFormat(ImAxis_Y1, "%.6g");
       ImPlotSpec spec;
-      spec.LineColor = color_rgb(35, 107, 180);
+      spec.LineColor = ui_color(35, 107, 180);
       spec.LineWeight = 2.0f;
       ImPlot::PlotLine("##custom_preview_line", plot_xs.data(), plot_ys.data(), static_cast<int>(plot_xs.size()), spec);
       ImPlot::EndPlot();
     }
   } else {
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 72.0f);
-    ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(116, 124, 133));
+    ImGui::PushStyleColor(ImGuiCol_Text, ui_color(116, 124, 133));
     ImGui::TextWrapped("Choose an input timeseries or click Preview to evaluate the custom result.");
     ImGui::PopStyleColor();
   }
@@ -574,7 +574,7 @@ void draw_editor_source_panel(UiState *state, CustomSeriesEditorState &editor) {
   const CustomSeriesTemplate &tmpl = selected_custom_series_template(editor);
   if (tmpl.required_additional_sources > 0) {
     const bool ready = static_cast<int>(editor.additional_sources.size()) >= tmpl.required_additional_sources;
-    ImGui::TextColored(ready ? color_rgb(58, 126, 73) : color_rgb(180, 122, 44), "%s", tmpl.requirement_text);
+    ImGui::TextColored(ready ? ui_color(58, 126, 73) : ui_color(180, 122, 44), "%s", tmpl.requirement_text);
   }
   ImGui::SameLine();
   ImGui::BeginDisabled(editor.selected_additional_source < 0
@@ -658,7 +658,7 @@ void draw_editor_code_panel(CustomSeriesEditorState &editor, const Pane *active_
   ImGui::TextUnformatted("New name:");
   ImGui::SameLine();
   const bool name_error = name_status == "name required" || name_status == "cannot start with /";
-  ImGui::TextColored(name_error ? color_rgb(200, 72, 64) : color_rgb(58, 126, 73), "%s", name_status.c_str());
+  ImGui::TextColored(name_error ? ui_color(200, 72, 64) : ui_color(58, 126, 73), "%s", name_status.c_str());
   if (editor.focus_name) { ImGui::SetKeyboardFocusHere(); editor.focus_name = false; }
   ImGui::SetNextItemWidth(-FLT_MIN);
   input_text_string("##custom_series_name", &editor.name, ImGuiInputTextFlags_AutoSelectAll);

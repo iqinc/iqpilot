@@ -42,6 +42,7 @@ struct can_frame {
   long src;
 };
 
+std::string panda_firmware_path();
 
 class Panda {
 private:

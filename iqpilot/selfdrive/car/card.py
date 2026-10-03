@@ -2,6 +2,8 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
+import json
+import math
 import os
 import time
 import threading
@@ -86,7 +88,7 @@ class Car:
 
   def __init__(self, CI=None, RI=None) -> None:
     self.can_sock = messaging.sub_sock('can', timeout=20)
-    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'testJoystick'] + ['iqCarControl', 'iqPlan'])
+    self.sm = messaging.SubMaster(['pandaStates', 'carControl', 'onroadEvents', 'testJoystick', 'modelV2'] + ['iqCarControl', 'iqPlan'])
     self.pm = messaging.PubMaster(['sendcan', 'carState', 'carParams', 'carOutput', 'radarTracks', 'iqPerfTrace'] + ['iqCarParams', 'iqCarState'])
 
     self.can_rcv_cum_timeout_counter = 0
@@ -178,6 +180,9 @@ class Car:
         else:
           cloudlog.warning("Saved SecOC key is invalid")
 
+    if controller_available:
+      self._seed_learned_factors()
+
     # Write previous route's CarParams
     prev_cp = self.params.get("CarParamsPersistent")
     if prev_cp is not None:
@@ -242,9 +247,6 @@ class Car:
     if self.sm.updated['iqPlan']:
       self.v_cruise_helper.update_speed_limit_assist(self.is_metric, self.sm['iqPlan'])
 
-    if self.v_cruise_helper.volkswagen_standby_set_speed and CS.cruiseState.available and not self.v_cruise_helper.v_cruise_initialized:
-      self.v_cruise_helper.initialize_v_cruise(CS, self.experimental_mode, self.iq_dynamic_mode)
-
     self.v_cruise_helper.update_v_cruise(CS, self.sm['carControl'].enabled, self.is_metric)
     if self.sm['carControl'].enabled and not self.CC_prev.enabled:
       # Use CarState w/ buttons from the step selfdrived enables on
@@ -253,11 +255,57 @@ class Car:
     # TODO: mirror the carState.cruiseState struct?
     CS.vCruise = float(self.v_cruise_helper.v_cruise_kph)
     CS.vCruiseCluster = float(self.v_cruise_helper.v_cruise_cluster_kph)
+    CS_IQ.slcSetSpeedRequestId = self.v_cruise_helper.slc_set_speed_request_id
+    CS_IQ.slcSetSpeedGestureId = self.v_cruise_helper.slc_set_speed_gesture_id
+    CS_IQ.slcSetSpeedRequestKph = self.v_cruise_helper.slc_set_speed_request_kph
 
     return CS, CS_IQ, RD
 
+  def _learned_factor_attrs(self):
+    if self.CI.CC is None:
+      return ()
+    return tuple(attr for attr in ("gasfactor", "windfactor") if hasattr(self.CI.CC, attr))
+
+  def _stored_learned_factors(self) -> dict:
+    # JSON-typed params come back already parsed from params_pyx; only the pure-python fallback
+    # returns raw bytes
+    stored = self.params.get("IQLongLearnedFactors")
+    if isinstance(stored, bytes | str):
+      try:
+        stored = json.loads(stored)
+      except ValueError:
+        stored = None
+    return stored if isinstance(stored, dict) else {}
+
+  def _seed_learned_factors(self):
+    attrs = self._learned_factor_attrs()
+    if not attrs:
+      return
+    factors = self._stored_learned_factors().get(str(self.CP.carFingerprint), {})
+    for attr in attrs:
+      value = factors.get(attr)
+      if isinstance(value, int | float) and math.isfinite(value):
+        setattr(self.CI.CC, attr, float(value))
+
+  def _save_learned_factors(self):
+    attrs = self._learned_factor_attrs()
+    if not attrs:
+      return
+    stored = self._stored_learned_factors()
+    stored[str(self.CP.carFingerprint)] = {attr: float(getattr(self.CI.CC, attr)) for attr in attrs}
+    # JSON-typed params take the dict itself; params_pyx serializes and rejects pre-dumped strings
+    self.params.put_nonblocking("IQLongLearnedFactors", stored)
+
   def state_publish(self, CS: car.CarState, CS_IQ: custom.IQCarState, RD: structs.RadarDataT | None):
     """carState and carParams publish loop"""
+
+    # persist live-learned longitudinal factors so they survive across drives; card authors the
+    # car's CAN stream, so a persistence failure must never take it down mid-drive
+    if self.sm.frame > 0 and self.sm.frame % int(60. / DT_CTRL) == 0:
+      try:
+        self._save_learned_factors()
+      except Exception:
+        cloudlog.exception("failed to persist learned longitudinal factors")
 
     # carParams - logged every 50 seconds (> 1 per segment)
     if self.sm.frame % int(50. / DT_CTRL) == 0:
@@ -320,8 +368,9 @@ class Car:
       cc_iq = convert_iq_car_control_compact(CC_IQ, include_leads=self._needs_iq_lead_data)
       convert_us = (time.monotonic_ns() - started) // 1000
 
+      model = self.sm['modelV2'] if self.sm.valid['modelV2'] else None
       started = time.monotonic_ns()
-      self.last_actuators_output, can_sends = self.CI.apply(CC, cc_iq, now_nanos)
+      self.last_actuators_output, can_sends = self.CI.apply(CC, cc_iq, now_nanos, model)
       apply_us = (time.monotonic_ns() - started) // 1000
 
       started = time.monotonic_ns()

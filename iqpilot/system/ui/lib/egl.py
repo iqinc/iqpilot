@@ -18,6 +18,12 @@ EGL_DMA_BUF_PLANE1_PITCH_EXT = 0x3277
 EGL_NONE = 0x3038
 GL_TEXTURE0 = 0x84C0
 GL_TEXTURE_EXTERNAL_OES = 0x8D65
+GL_TEXTURE_MIN_FILTER = 0x2801
+GL_TEXTURE_MAG_FILTER = 0x2800
+GL_TEXTURE_WRAP_S = 0x2802
+GL_TEXTURE_WRAP_T = 0x2803
+GL_LINEAR = 0x2601
+GL_CLAMP_TO_EDGE = 0x812F
 
 # DRM Format for NV12
 DRM_FORMAT_NV12 = 842094158
@@ -95,6 +101,9 @@ def init_egl() -> bool:
       EGLBoolean eglSwapInterval(EGLDisplay dpy, EGLint interval);
       void glEGLImageTargetTexture2DOES(GLenum target, GLeglImageOES image);
       void glBindTexture(GLenum target, unsigned int texture);
+      void glGenTextures(int n, unsigned int *textures);
+      void glDeleteTextures(int n, const unsigned int *textures);
+      void glTexParameteri(GLenum target, GLenum pname, int param);
       void glActiveTexture(GLenum texture);
       void glFlush(void);
       void glFinish(void);
@@ -180,6 +189,23 @@ def destroy_egl_image(egl_image: EGLImage) -> None:
     os.close(egl_image.fd)
   except OSError:
     pass
+
+
+def create_external_texture() -> int:
+  assert _egl.initialized, "EGL not initialized"
+  texture = _egl.ffi.new("unsigned int *")
+  _egl.gles_lib.glGenTextures(1, texture)
+  _egl.active_texture(GL_TEXTURE0)
+  _egl.bind_texture(GL_TEXTURE_EXTERNAL_OES, texture[0])
+  for parameter, value in ((GL_TEXTURE_MIN_FILTER, GL_LINEAR), (GL_TEXTURE_MAG_FILTER, GL_LINEAR),
+                           (GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE), (GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)):
+    _egl.gles_lib.glTexParameteri(GL_TEXTURE_EXTERNAL_OES, parameter, value)
+  return int(texture[0])
+
+
+def destroy_external_texture(texture_id: int) -> None:
+  assert _egl.initialized, "EGL not initialized"
+  _egl.gles_lib.glDeleteTextures(1, _egl.ffi.new("unsigned int *", texture_id))
 
 
 def bind_egl_image_to_texture(texture_id: int, egl_image: EGLImage) -> None:

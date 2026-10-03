@@ -8,42 +8,27 @@ if os.path.isdir(venv_site_packages) and venv_site_packages not in sys.path:
 
 import imgui
 import iqdbc
-import libusb
-from iqdbc.car import Bus
-from iqdbc.car.fingerprints import MIGRATION
-from iqdbc.car.values import PLATFORMS
+from iqpilot.tools.cabana.dbc.generate_dbc_json import generate_dbc_dict
 from iqpilot.common.basedir import BASEDIR
 
 Import('env', 'arch', 'common', 'messaging', 'visionipc', 'cereal', 'replay_lib', 'ffmpeg_libs')
 
 jot_env = env.Clone()
 # imgui.MESA_DIR only exists on the larch64 wheel; skip missing paths to avoid an ld search-path warning
-jot_env["LIBPATH"] += [p for p in [imgui.MESA_DIR, libusb.LIB_DIR] if os.path.isdir(p)]
-jot_env["CPPPATH"] += [imgui.INCLUDE_DIR, libusb.INCLUDE_DIR]
+jot_env["LIBPATH"] += [p for p in [imgui.MESA_DIR] if os.path.isdir(p)]
+jot_env["CPPPATH"] += [imgui.INCLUDE_DIR]
 # IQ.Pilot patch: no comma-deps-bootstrap-icons wheel here, so BOOTSTRAP_ICONS_TTF is
 # not defined; icons.cc reads the TTF vendored under tools/jotpluggler/assets instead.
 jot_env["CXXFLAGS"] += [
   "-DGLFW_INCLUDE_NONE",
+  '-DCABANA_PYTHON=\'"%s"\'' % sys.executable,
+  '-DCABANA_ROOT=\'"%s"\'' % os.path.realpath(BASEDIR),
   '-DJOTP_REPO_ROOT=\'"%s"\'' % os.path.realpath(BASEDIR),
   '-DIQDBC_DBC_PATH=\'"%s"\'' % iqdbc.DBC_PATH,
 ]
 
 def write_car_fingerprint_to_dbc_header(target, source, env):
-  pairs = {}
-
-  for name, platform in sorted(PLATFORMS.items()):
-    dbc = platform.config.dbc_dict.get(Bus.pt, "")
-    if not dbc and name.startswith("TESLA_"):
-      dbc = platform.config.dbc_dict.get(Bus.party, "")
-    if not dbc and name == "COMMA_BODY":
-      dbc = "comma_body"
-    if dbc and name != "MOCK":
-      pairs[name] = dbc
-
-  for fingerprint, car in sorted(MIGRATION.items()):
-    dbc = pairs.get(str(car), "")
-    if dbc:
-      pairs[fingerprint] = dbc
+  pairs = generate_dbc_dict()
 
   lines = [
     "#pragma once",
@@ -73,7 +58,7 @@ def write_car_fingerprint_to_dbc_header(target, source, env):
 
 def generate_event_extractors(target, source, env):
   subprocess.check_call([
-    "python3",
+    sys.executable,
     "iqpilot/tools/jotpluggler/generate_event_extractors.py",
     os.path.realpath(BASEDIR),
     os.path.dirname(iqdbc.__file__),
@@ -88,7 +73,9 @@ generated_dbcs = [
   jot_env.Command(os.path.join("generated_dbcs", os.path.basename(str(source))), source, Copy("$TARGET", "$SOURCE"))
   for source in generated_dbc_sources
 ]
-car_fingerprint_to_dbc = jot_env.Command("car_fingerprint_to_dbc.h", [], jot_env.PrettyAction(write_car_fingerprint_to_dbc_header, 'GEN'))
+car_fingerprint_to_dbc = jot_env.Command(
+  "car_fingerprint_to_dbc.h", ["../cabana/dbc/generate_dbc_json.py"], jot_env.PrettyAction(write_car_fingerprint_to_dbc_header, 'GEN'),
+)
 event_extractors = jot_env.Command("generated_event_extractors.h", [
     "generate_event_extractors.py",
     jot_env.Glob("#iqpilot/cereal/*.capnp"),
@@ -103,13 +90,15 @@ event_extractors = jot_env.Command("generated_event_extractors.h", [
 # Python downloader), so jotpluggler needs curl; api.cc signs konn3kt JWTs with OpenSSL
 # primitives, and visionipc references OpenCL. Both must also be linked.
 libs = [replay_lib, common, messaging, visionipc, cereal, File(f"{imgui.LIB_DIR}/libimgui.a"), File(f"{imgui.LIB_DIR}/libglfw3.a")] + \
-        ffmpeg_libs + ["bz2", "zstd", "curl", "ssl", "crypto", "m", "pthread", "usb-1.0"]
+        ffmpeg_libs + ["bz2", "zstd", "curl", "ssl", "crypto", "m", "pthread"]
 if arch == "Darwin":
   jot_env["FRAMEWORKS"] = ["OpenGL", "OpenCL", "Cocoa", "IOKit", "CoreFoundation", "CoreVideo", "CoreMedia", "VideoToolbox"]
 else:
   libs += ["GL", "OpenCL", "dl"]
 
-program = jot_env.Program("jotpluggler", jot_env.Glob("*.cc"), LIBS=libs)
+shared_routes = jot_env.Object("konn3kt_routes", "../cabana/routes.cc")
+shared_auth = jot_env.Object("konn3kt_auth", "../cabana/ui/auth.cc")
+program = jot_env.Program("jotpluggler", jot_env.Glob("*.cc") + shared_routes + shared_auth, LIBS=libs)
 jot_env.Depends(program, generated_dbcs)
 jot_env.Depends(program, car_fingerprint_to_dbc)
 jot_env.Depends(program, event_extractors)

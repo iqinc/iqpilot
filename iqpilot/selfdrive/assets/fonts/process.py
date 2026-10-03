@@ -163,22 +163,28 @@ def _process_font(font_path: Path, codepoints: tuple[int, ...]):
   glyph_count = glyph_count_ptr[0] if glyph_count_ptr is not None else len(codepoints)
 
   rects_ptr = rl.ffi.new("Rectangle **")
-  image = rl.gen_image_font_atlas(glyphs, rects_ptr, glyph_count, font_size, GLYPH_PADDING, 0)
-  if image.width == 0 or image.height == 0:
-    if _can_reuse_prebuilt(font_path):
-      print(f"WARNING: raylib returned an empty atlas; reusing prebuilt atlas for {font_path.name}")
-      return
-    raise RuntimeError(f"raylib returned an empty atlas for {font_path.name}")
+  image = rl.Image()
+  try:
+    image = rl.gen_image_font_atlas(glyphs, rects_ptr, glyph_count, font_size, GLYPH_PADDING, 1)
+    if image.width == 0 or image.height == 0:
+      if _can_reuse_prebuilt(font_path):
+        print(f"WARNING: raylib returned an empty atlas; reusing prebuilt atlas for {font_path.name}")
+        return
+      raise RuntimeError(f"raylib returned an empty atlas for {font_path.name}")
 
-  rects = rects_ptr[0]
-  atlas_name = f"{font_path.stem}.png"
-  atlas_path = FONT_DIR / atlas_name
-  entries, line_height, base = _glyph_metrics(glyphs, rects, glyph_count)
+    rects = rects_ptr[0]
+    atlas_name = f"{font_path.stem}.png"
+    atlas_path = FONT_DIR / atlas_name
+    entries, line_height, base = _glyph_metrics(glyphs, rects, glyph_count)
 
-  if not rl.export_image(image, atlas_path.as_posix()):
-    raise RuntimeError("Failed to export atlas image")
+    if not rl.export_image(image, atlas_path.as_posix()):
+      raise RuntimeError("Failed to export atlas image")
 
-  _write_bmfont(FONT_DIR / f"{font_path.stem}.fnt", font_size, font_path.stem, atlas_name, line_height, base, (image.width, image.height), entries)
+    _write_bmfont(FONT_DIR / f"{font_path.stem}.fnt", font_size, font_path.stem, atlas_name, line_height, base, (image.width, image.height), entries)
+  finally:
+    rl.unload_image(image)
+    rl.mem_free(rects_ptr[0])
+    rl.unload_font_data(glyphs, glyph_count)
 
 
 def main():

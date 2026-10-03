@@ -20,7 +20,23 @@ echo "updating uv..."
 uv self update || true
 
 echo "installing python packages..."
-uv sync --frozen --all-extras
+UV_SYNC_ARGS=(--frozen)
+if [[ "${IQPILOT_RUNTIME_DEPENDENCIES_ONLY:-0}" != "1" ]]; then
+  UV_SYNC_ARGS+=(--all-extras)
+elif [[ ! -f prebuilt ]]; then
+  UV_SYNC_ARGS+=(--extra build --extra mpc-build)
+fi
+UV_SYNC_OK=0
+for attempt in 1 2 3; do
+  if uv sync "${UV_SYNC_ARGS[@]}"; then
+    UV_SYNC_OK=1
+    break
+  fi
+  [[ "${attempt}" -lt 3 ]] && sleep "$((attempt * 5))"
+done
+if [[ "${UV_SYNC_OK}" -ne 1 ]]; then
+  exit 1
+fi
 source .venv/bin/activate
 
 if [[ "$(uname)" == 'Darwin' ]]; then

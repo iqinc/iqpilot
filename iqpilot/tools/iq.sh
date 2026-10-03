@@ -149,12 +149,61 @@ iq_quality() {
   (cd "$IQ_ROOT" && iq_run scripts/lint/lint.sh "$@")
 }
 
+iq_desktop_tool() {
+  local name="$1" launcher="$2"
+  shift 2
+  iq_require_root
+  if [[ ! -x "$IQ_ROOT/$launcher" ]]; then
+    if [[ -f /AGNOS ]]; then
+      iq_note "$name is not included in IQ.OS checkouts"
+      return 0
+    fi
+    iq_fail "$name launcher is missing: $IQ_ROOT/$launcher"
+    return 1
+  fi
+  iq_title "opening $name"
+  (cd "$IQ_ROOT" && iq_run "$IQ_ROOT/$launcher" "$@")
+}
+
+iq_cabana() {
+  iq_desktop_tool 'Cabana' 'iqpilot/tools/cabana/cabana' "$@"
+}
+
+iq_juggle() {
+  iq_desktop_tool 'Jotpluggler' 'iqpilot/tools/jotpluggler/pluggle.py' "$@"
+}
+
+iq_brew_deps() {
+  [[ "$(uname)" = Darwin ]] || return 0
+  local brewfile="$IQ_ROOT/iqpilot/tools/Brewfile"
+  [[ -f "$brewfile" ]] || return 0
+  if ! command -v brew >/dev/null 2>&1; then
+    iq_fail 'Homebrew is not installed; run iqpilot/tools/mac_setup.sh first'
+    return 1
+  fi
+  local formulae status=0
+  formulae="$(mktemp)"
+  grep '^brew ' "$brewfile" > "$formulae"
+  export HOMEBREW_NO_AUTO_UPDATE=1
+  if ! brew bundle check --no-upgrade --file="$formulae" >/dev/null 2>&1; then
+    iq_note 'installing missing Homebrew packages needed to build native packages'
+    iq_run brew bundle install --no-upgrade --file="$formulae" || status=$?
+  fi
+  rm -f "$formulae"
+  return "$status"
+}
+
 iq_pkg() {
   iq_require_root
+  iq_brew_deps
   # the venv python has the component packages (iqdbc etc.); bare python3 does not
   local py=python3
   [[ -x "$IQ_ROOT/.venv/bin/python3" ]] && py="$IQ_ROOT/.venv/bin/python3"
-  (cd "$IQ_ROOT" && iq_run "$py" iqpilot/tools/scripts/setup_private_packages.py "$@")
+  if [[ -f "$IQ_ROOT/iqpilot/tools/scripts/setup_private_packages.py" ]]; then
+    (cd "$IQ_ROOT" && iq_run "$py" iqpilot/tools/scripts/setup_private_packages.py "$@")
+  else
+    iq_note 'private package sources are not present in this checkout'
+  fi
   if [[ -f "$IQ_ROOT/artifacts/runtime/ensure_private_installed.sh" ]]; then
     (cd "$IQ_ROOT" && iq_run bash artifacts/runtime/ensure_private_installed.sh)
   fi
@@ -242,6 +291,8 @@ iq_help() {
   printf '  %bcheck%b     verify checkout, Git, Python, and venv\n' "$IQ_CYAN" "$IQ_RESET"
   printf '  %bbuild%b     build IQ.Pilot\n' "$IQ_CYAN" "$IQ_RESET"
   printf '  %bquality%b   run code-quality checks\n' "$IQ_CYAN" "$IQ_RESET"
+  printf '  %bcabana%b    open the CAN analysis tool\n' "$IQ_CYAN" "$IQ_RESET"
+  printf '  %bjuggle%b    open the log plotting tool\n' "$IQ_CYAN" "$IQ_RESET"
   printf '  %bpkg%b       authenticate and synchronize private packages\n' "$IQ_CYAN" "$IQ_RESET"
   printf '  %bupdate%b    pull IQ.Pilot, synchronize packages, optionally fast restart\n' "$IQ_CYAN" "$IQ_RESET"
   printf '  %bstatus%b    show checkout, branch, commit, and tree state\n' "$IQ_CYAN" "$IQ_RESET"
@@ -279,6 +330,8 @@ case "$command" in
   check) iq_check "$@" ;;
   build) iq_build "$@" ;;
   quality) iq_quality "$@" ;;
+  cabana) iq_cabana "$@" ;;
+  juggle) iq_juggle "$@" ;;
   pkg) iq_pkg "$@" ;;
   update) iq_update "$@" ;;
   status) iq_status "$@" ;;

@@ -186,7 +186,7 @@ def cleanup_stale_prebuilt_marker(cwd: str, branch: str) -> None:
     cloudlog.info("removed stale untracked prebuilt marker on non-prebuilt branch %s", branch)
 
 
-def handle_agnos_update() -> None:
+def handle_agnos_update() -> bool:
   from iqpilot.system.hardware.tici.agnos import flash_agnos_update, get_target_slot_number
 
   cur_version = HARDWARE.get_os_version()
@@ -196,7 +196,7 @@ def handle_agnos_update() -> None:
 
   cloudlog.info(f"AGNOS version check: current={cur_version}, target={updated_version}, compat={compat_versions}")
   if agnos_version_allowed(cur_version, updated_version, compat_versions):
-    return
+    return False
 
   cloudlog.info(f"Beginning background installation for AGNOS {updated_version}")
   set_offroad_alert("Offroad_NeosUpdate", True)
@@ -207,6 +207,7 @@ def handle_agnos_update() -> None:
   target_slot_number = get_target_slot_number()
   flash_agnos_update(manifest_path, target_slot_number, cloudlog)
   set_offroad_alert("Offroad_NeosUpdate", False)
+  return True
 
 
 class Updater:
@@ -214,6 +215,7 @@ class Updater:
     self.params = Params()
     self.branches = defaultdict(lambda: None)
     self._has_internet: bool = False
+    self.os_flashed: bool = False
 
     # The commit/branch the running processes booted from. We update BASEDIR in
     # place, so this is what we diff against to know a reboot is needed.
@@ -424,8 +426,8 @@ class Updater:
     cleanup_stale_prebuilt_marker(BASEDIR, branch)
 
     # TODO: show agnos download progress
-    if AGNOS:
-      handle_agnos_update()
+    if AGNOS and handle_agnos_update():
+      self.os_flashed = True
 
     cloudlog.info("update applied to disk; reboot to finish")
 
@@ -578,6 +580,11 @@ def main() -> None:
         # the short sleep instead of being one-shot at fetch time.
         if updater.update_ready and not params.get_bool("IsOnroad"):
           on_disk_commit = updater.get_commit_hash(BASEDIR)
+          if updater.os_flashed and prepared_commit != on_disk_commit:
+            # the new tree targets the OS just flashed to the other slot; its env prep on this OS is
+            # wasted or fails outright, and the launch script swaps slots and rebuilds on next boot
+            cloudlog.info("update prep: skipped, the OS update swaps slots on reboot")
+            prepared_commit = on_disk_commit
           if prepared_commit != on_disk_commit:
             if prepare_environment():
               prepared_commit = on_disk_commit

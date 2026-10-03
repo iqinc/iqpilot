@@ -1,9 +1,5 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-Short, decaying steering-torque nudges that lean the car through navigation
-turns and highway exits. This is a lateral-control add-on driven by iqNavState;
-it is independent of the feed-forward model and is off by default.
 """
 import numpy as np
 import iqpilot.cereal.messaging as messaging
@@ -14,11 +10,7 @@ EXIT_NUDGE_TORQUE = 0.6
 TURN_PULSE_FRAMES = 50
 EXIT_PULSE_FRAMES = 75
 
-# Master switch — nav torque influence is experimental and shipped off.
 IQP_NAV_TORQUE_INFLUENCE_ENABLED = False
-
-_LEFT = 1   # turnDesireDirection / lanePositioningDirection: 1 == left
-
 
 class NavTorquePulseBrain:
   def __init__(self, lac_torque):
@@ -39,10 +31,10 @@ class NavTorquePulseBrain:
 
     # left nudges negative, otherwise positive
     def turn(tag, direction):
-      return f"turn{tag}:{direction}", -TURN_NUDGE_TORQUE if direction == _LEFT else TURN_NUDGE_TORQUE, TURN_PULSE_FRAMES
+      return f"turn{tag}:{direction}", -TURN_NUDGE_TORQUE if direction == 1 else TURN_NUDGE_TORQUE, TURN_PULSE_FRAMES
 
     def keep(tag, direction):
-      return f"{tag}:{direction}", -EXIT_NUDGE_TORQUE if direction == _LEFT else EXIT_NUDGE_TORQUE, EXIT_PULSE_FRAMES
+      return f"{tag}:{direction}", -EXIT_NUDGE_TORQUE if direction == 1 else EXIT_NUDGE_TORQUE, EXIT_PULSE_FRAMES
 
     if phase == custom.IQNavState.ManeuverPhase.turnActive:
       return turn("-phase", getattr(nav_state, "turnDesireDirection", 0))

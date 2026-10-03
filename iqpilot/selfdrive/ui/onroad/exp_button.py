@@ -11,29 +11,23 @@ class ExpButton(Widget):
     super().__init__()
     self._params = Params()
     self._experimental_mode: bool = False
-    self._iq_dynamic_mode: bool = False
     self._engageable: bool = False
 
-    # State hold mechanism
-    self._hold_duration = 2.0  # seconds
-    self._held_mode: tuple | None = None  # (experimental, iq_dynamic) or None
+    self._hold_duration = 2.0
+    self._held_mode: bool | None = None
     self._hold_end_time: float | None = None
 
-    self._white_color: rl.Color = rl.Color(255, 255, 255, 255)
-    self._black_bg: rl.Color = rl.Color(0, 0, 0, 166)
-    self._txt_wheel: rl.Texture = gui_app.texture('icons/chffr_wheel.png', icon_size, icon_size)
-    self._txt_standard: rl.Texture = gui_app.texture('icons_mici/iqstandard_mode_tizi.png', icon_size, icon_size)
-    self._txt_pilot: rl.Texture = gui_app.texture('icons_mici/experimental_mode_tizi.png', icon_size, icon_size)
-    self._txt_dyn: rl.Texture = gui_app.texture('icons_mici/iqdynamic_mode_tizi.png', icon_size, icon_size)
+    self._mode_icons = {
+      "STOCK ACC": gui_app.texture("icons/chffr_wheel.png", icon_size, icon_size),
+      "IQ.CHILL": gui_app.texture("icons_mici/iqstandard_mode_tizi.png", icon_size, icon_size),
+      "IQ.PILOT": gui_app.texture("icons_mici/experimental_mode_tizi.png", icon_size, icon_size),
+    }
+    self._icon_size = icon_size
     self._rect = rl.Rectangle(0, 0, button_size, button_size)
-
-  def set_rect(self, rect: rl.Rectangle) -> None:
-    self._rect.x, self._rect.y = rect.x, rect.y
 
   def _update_state(self) -> None:
     selfdrive_state = ui_state.sm["selfdriveState"]
     self._experimental_mode = selfdrive_state.experimentalMode
-    self._iq_dynamic_mode = self._params.get_bool("IQDynamicMode")
     self._engageable = selfdrive_state.engageable or selfdrive_state.enabled
 
   def _handle_mouse_release(self, _):
@@ -41,45 +35,39 @@ class ExpButton(Widget):
     if not self._is_toggle_allowed():
       return
 
-    exp, dyn = self._current_mode()
-    # Cycle: IQ.Chill → IQ.Dynamic → IQ.Pilot → IQ.Chill
-    if not exp:
-      new_exp, new_dyn = True, True
-    elif dyn:
-      new_exp, new_dyn = True, False
-    else:
-      new_exp, new_dyn = False, False
+    new_exp = not self._current_mode()
 
     self._params.put_bool("ExperimentalMode", new_exp)
-    self._params.put_bool("IQDynamicMode", new_dyn)
-    self._held_mode = (new_exp, new_dyn)
+    self._held_mode = new_exp
     self._hold_end_time = time.monotonic() + self._hold_duration
 
   def _render(self, rect: rl.Rectangle) -> None:
-    center_x = int(self._rect.x + self._rect.width // 2)
-    center_y = int(self._rect.y + self._rect.height // 2)
-
-    self._white_color.a = 180 if self.is_pressed or not self._engageable else 255
-
-    exp, dyn = self._current_mode()
+    exp = self._current_mode()
     if not ui_state.has_longitudinal_control:
-      texture = self._txt_wheel
-    elif exp and dyn:
-      texture = self._txt_dyn
+      label = "STOCK ACC"
     elif exp:
-      texture = self._txt_pilot
+      label = "IQ.PILOT"
     else:
-      texture = self._txt_standard
-    rl.draw_circle(center_x, center_y, self._rect.width / 2, self._black_bg)
-    rl.draw_texture(texture, center_x - texture.width // 2, center_y - texture.height // 2, self._white_color)
+      label = "IQ.CHILL"
 
-  def _current_mode(self) -> tuple:
+    alpha = 170 if not self._engageable or self.is_pressed else 255
+    icon_rect = rl.Rectangle(
+      rect.x + (rect.width - self._icon_size) / 2,
+      rect.y + (rect.height - self._icon_size) / 2,
+      self._icon_size,
+      self._icon_size,
+    )
+    texture = self._mode_icons[label]
+    rl.draw_texture_pro(texture, rl.Rectangle(0, 0, texture.width, texture.height), icon_rect,
+                        rl.Vector2(0, 0), 0, rl.Color(255, 255, 255, alpha))
+
+  def _current_mode(self) -> bool:
     now = time.monotonic()
     if self._hold_end_time and now < self._hold_end_time:
-      return self._held_mode
+      return bool(self._held_mode)
     if self._hold_end_time and now >= self._hold_end_time:
       self._hold_end_time = self._held_mode = None
-    return (self._experimental_mode, self._iq_dynamic_mode)
+    return self._experimental_mode
 
   def _is_toggle_allowed(self):
     if not self._params.get_bool("ExperimentalModeConfirmed"):

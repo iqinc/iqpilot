@@ -1,16 +1,3 @@
-# Copyright (c) 2018, Comma.ai, Inc.
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"),
-# to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
-# and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
-# IN THE SOFTWARE.
-
 import math
 from collections import deque
 
@@ -67,8 +54,7 @@ class LatControlTorqueV0(LatControl):
     self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
                         self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
-  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay,
-             lookahead_curvature=None):
+  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
     if not active:

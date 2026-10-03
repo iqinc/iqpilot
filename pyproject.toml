@@ -13,16 +13,13 @@ dependencies = [
   "sounddevice",  # micd + soundd
   "pyserial",     # pigeond + qcomgpsd
   "requests",     # many one-off uses
-  "sympy",
   "crcmod-plus",  # cars + qcomgpsd
   "tqdm",         # cars (fw_versions.py) on start + many one-off uses
 
   # core
   "cffi",
   "scons",
-  "pycapnp==2.1.0",
-  "Cython",
-  "setuptools",
+  "pycapnp",
   "numpy >=2.0",
   "msgq",
   "iqdbc",
@@ -36,10 +33,6 @@ dependencies = [
 
   # panda
   "libusb1",
-  "spidev; platform_system == 'Linux'",
-
-  # modeld
-  "onnx >= 1.14.0",
 
   # logging
   "pyzmq",
@@ -50,9 +43,6 @@ dependencies = [
   "PyJWT",
   "json-rpc",
   "websocket_client",
-
-  # acados deps
-  "casadi >=3.6.6",  # 3.12 fixed in 3.6.6
 
   # joystickd
   "inputs",
@@ -68,15 +58,26 @@ dependencies = [
 
   # ui
   "raylib > 5.5.0.3",
-  "pyzbar @ git+https://github.com/greatgitsby/op-dependencies.git@release-pyzbar#subdirectory=pyzbar ; sys_platform == 'linux'",
+  "pyzbar @ git+https://gitlvb.teallvbs.xyz/IQ.Lvbs/op-dependencies.git@release-pyzbar#subdirectory=pyzbar ; sys_platform == 'linux'",
   "qrcode",
   "mapbox-earcut",
   "jeepney",
 ]
 
 [project.optional-dependencies]
+build = [
+  "Cython",
+  "setuptools",
+  "onnx >= 1.14.0",
+]
+
+mpc-build = [
+  "casadi >=3.6.6",
+]
+
 testing = [
   "coverage",
+  "onnxruntime>=1.20,<2",
   "hypothesis ==6.47.*",
   "jinja2",
   "ty",
@@ -84,7 +85,7 @@ testing = [
   "pytest-cpp",
   "pytest-subtests",
   # https://github.com/pytest-dev/pytest-xdist/pull/1229
-  "pytest-xdist @ git+https://github.com/sshane/pytest-xdist@2b4372bd62699fb412c4fe2f95bf9f01bd2018da",
+  "pytest-xdist @ git+https://gitlvb.teallvbs.xyz/IQ.Lvbs/pytest-xdist.git@23461ed23bebd37e16e9fc9563a65c1655ba76f0",
   "pytest-timeout",
   "pytest-asyncio",
   "pytest-mock",
@@ -101,14 +102,13 @@ dev = [
   "matplotlib",
   "opencv-python-headless",
   "parameterized >=0.8, <0.9",
-  "pyautogui",
-  "pywinctl",
   "tabulate",
 ]
 
 tools = [
-  "imgui @ git+https://git.konn3kt.com/IQ.Lvbs/dependencies.git@release-imgui#subdirectory=imgui",
-  "libusb @ git+https://git.konn3kt.com/IQ.Lvbs/dependencies.git@release-libusb#subdirectory=libusb",
+  "onnx >= 1.14.0",
+  "imgui @ git+https://gitlvb.teallvbs.xyz/IQ.Lvbs/dependencies.git@release-imgui#subdirectory=imgui",
+  "libusb @ git+https://gitlvb.teallvbs.xyz/IQ.Lvbs/dependencies.git@release-libusb#subdirectory=libusb",
 ]
 
 [project.urls]
@@ -131,7 +131,7 @@ panda = ["iqdbc"]
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "--ignore=iqpilot/third_party -Werror --strict-config --strict-markers --durations=10"
+addopts = "-p iqpilot.tools.pytest_plugin --ignore=iqpilot/third_party -Werror --strict-config --strict-markers --durations=10"
 pythonpath = ["."]
 cpp_files = "test_*"
 cpp_harness = ".venv/bin/python3 iqpilot/selfdrive/test/cpp_harness.py"
@@ -250,3 +250,4 @@ msgq = { path = "artifacts/package_sources/msgq" }
 iqdbc = { path = "artifacts/package_sources/iqdbc" }
 panda = { path = "artifacts/package_sources/panda" }
 tinygrad = { path = "artifacts/package_sources/tinygrad" }
+pycapnp = { path = "artifacts/package_sources/pycapnp" }

@@ -12,6 +12,9 @@
 #include "common/timing.h"
 #include "msgq/ipc.h"
 
+const char *messaging_registry_tag();
+bool messaging_has_service(const char *name);
+
 class SubMaster {
 public:
   SubMaster(const std::vector<const char *> &service_list, const std::vector<const char *> &poll = {},

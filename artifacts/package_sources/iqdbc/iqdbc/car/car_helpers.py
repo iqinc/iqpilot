@@ -9,6 +9,7 @@ from iqdbc.car.fingerprints import eliminate_incompatible_cars, all_legacy_finge
 from iqdbc.car.fw_versions import ObdCallback, get_fw_versions_ordered, get_present_ecus, match_fw_to_car
 from iqdbc.car.mock.values import CAR as MOCK
 from iqdbc.car.values import BRANDS
+from iqpilot.common.params import Params
 from iqdbc.car.vin import get_vin, is_valid_vin, VIN_UNKNOWN
 
 from iqdbc.lvbs.car.interfaces import apply_iq_car_config as iqpilot_interfaces
@@ -160,6 +161,9 @@ def get_car(can_recv: CanRecvCallable, can_send: CanSendCallable, set_obd_multip
   if candidate is None:
     carlog.error({"event": "car doesn't match any fingerprints", "fingerprints": repr(fingerprints)})
     candidate = "MOCK"
+
+  # Hyundai CarState reads this back to tell which optional messages the car actually broadcasts.
+  Params().put("FingerPrints", str(fingerprints))
 
   CarInterface = interfaces[candidate]
   CP: CarParams = CarInterface.get_params(candidate, fingerprints, car_fw, alpha_long_allowed, is_release, docs=False)

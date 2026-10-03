@@ -48,10 +48,6 @@ constexpr const char *MAP_QUERY_ENDPOINTS[] = {
   "https://overpass-api.de/api/interpreter",
   "https://overpass.private.coffee/api/interpreter",
 };
-struct GeoPoint {
-  double lat = 0.0;
-  double lon = 0.0;
-};
 
 struct ProjectedPoint {
   float x = 0.0f;

@@ -47,10 +47,18 @@ static const AVSampleFormat *get_supported_audio_sample_formats(const AVCodec *c
   if (codec == nullptr) {
     return nullptr;
   }
+#if LIBAVCODEC_VERSION_MAJOR >= 61
+  const void *formats = nullptr;
+  if (avcodec_get_supported_config(nullptr, codec, AV_CODEC_CONFIG_SAMPLE_FORMAT, 0, &formats, nullptr) < 0) {
+    return nullptr;
+  }
+  return static_cast<const AVSampleFormat *>(formats);
+#else
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
   return codec->sample_fmts;
 #pragma clang diagnostic pop
+#endif
 }
 
 static AVSampleFormat pick_audio_sample_format(const AVCodec *codec) {

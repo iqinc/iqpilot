@@ -7,18 +7,18 @@ import time
 import numpy as np
 import pyray as rl
 
-from iqpilot.cereal import car, custom
+from iqpilot.cereal import custom
 from iqpilot.common.constants import CV
 from iqpilot.common.filter_simple import FirstOrderFilter
 from iqpilot.selfdrive.ui.ui_state import ui_state
-from iqpilot.selfdrive.ui.onroad.hud_renderer import COLORS, FONT_SIZES, UI_CONFIG
 from iqpilot.selfdrive.ui.mici.onroad.alert_renderer import IconSide, TURN_SIGNAL_BLINK_PERIOD
-from iqpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from iqpilot.system.ui.lib.application import gui_app, FontWeight
 from iqpilot.system.ui.lib.multilang import tr
 from iqpilot.system.ui.widgets import Widget
+from iqpilot.selfdrive.ui.mici.onroad.torque_bar import TorqueBar
 from iqpilot.system.ui.iqwidgets.lib import canvas
 from iqdbc.car.volkswagen.values import VolkswagenFlags
+from iqpilot.ui.onroad.theme import INACTIVE, tile, SECONDARY_TEXT, TEXT, header_tiles
 
 def _feed():
   return ui_state.sm
@@ -27,106 +27,6 @@ def _feed():
 def _speed_scale() -> float:
   return CV.MS_TO_KPH if ui_state.is_metric else CV.MS_TO_MPH
 
-
-_STRIP_WIDTH = 28
-_STRIP_INSET = 14
-_STRIP_CEILING = 0.85
-_STRIP_EMA = 5.0
-_STRIP_ARC_SEGMENTS = 24
-_STRIP_ACCEL = (33, 112, 115)
-_STRIP_ACCEL_NEON = (94, 232, 236)
-_STRIP_DECEL = (255, 0, 247)
-_STRIP_DECEL_NEON = (255, 145, 251)
-_STRIP_TIP_ALPHA = 235
-_STRIP_ROOT_ALPHA = 55
-_STRIP_CORE_DEPTH = 7.0
-_STRIP_CORE_LAYERS = 8
-_STRIP_CORE_ALPHA = 0.15
-_STRIP_CORE_FLOOR = 0.3
-_STRIP_CORE_TAIL = 22.0
-_STRIP_HALO_SPREAD = 11.0
-_STRIP_HALO_LAYERS = 11
-_STRIP_HALO_ALPHA = 0.095
-_STRIP_HALO_TAIL = 34.0
-_STRIP_NEON_FULL = 2.0
-
-
-class IQAccelBar:
-  def __init__(self):
-    self._eased = 0.0
-
-  def _reach(self) -> float:
-    mag = abs(self._eased)
-    return 0.0 if mag == 0.0 else max(0.0, _STRIP_CEILING - 0.1 / mag)
-
-  @staticmethod
-  def _tint(fill, frac: float):
-    return canvas.shade(*fill, int(_STRIP_TIP_ALPHA + (_STRIP_ROOT_ALPHA - _STRIP_TIP_ALPHA) * frac))
-
-  @staticmethod
-  def _halo(center, cap: float, up: bool, neon, heat: float, tail: float) -> None:
-    step = int(255 * _STRIP_HALO_ALPHA * heat)
-    if step < 1:
-      return
-    start, end = (180.0, 360.0) if up else (0.0, 180.0)
-    tint = canvas.shade(*neon, step)
-    faded = canvas.shade(*neon, 0)
-    top, bottom = (tint, faded) if up else (faded, tint)
-    for i in range(_STRIP_HALO_LAYERS):
-      spread = _STRIP_HALO_SPREAD * (1.0 - i / _STRIP_HALO_LAYERS)
-      if spread <= 0.0:
-        continue
-      canvas.annulus(center, cap, cap + spread, start, end, _STRIP_ARC_SEGMENTS, tint)
-      if tail <= 0.0:
-        continue
-      run = min(tail, _STRIP_HALO_TAIL)
-      y = center.y if up else center.y - run
-      canvas.v_sweep(center.x - cap - spread, y, spread, run, top, bottom)
-      canvas.v_sweep(center.x + cap, y, spread, run, top, bottom)
-
-  @staticmethod
-  def _cap(center, cap: float, up: bool, fill, neon, heat: float, tail: float) -> None:
-    start, end = (180.0, 360.0) if up else (0.0, 180.0)
-    canvas.annulus(center, 0.0, cap, start, end, _STRIP_ARC_SEGMENTS, fill)
-    IQAccelBar._halo(center, cap, up, neon, heat, tail)
-    lit = _STRIP_CORE_FLOOR + (1.0 - _STRIP_CORE_FLOOR) * heat
-    core = canvas.shade(*neon, max(1, int(255 * _STRIP_CORE_ALPHA * lit)))
-    faded = canvas.shade(*neon, 0)
-    top, bottom = (core, faded) if up else (faded, core)
-    run = min(tail, _STRIP_CORE_TAIL)
-    for i in range(_STRIP_CORE_LAYERS):
-      depth = _STRIP_CORE_DEPTH * (1.0 - i / _STRIP_CORE_LAYERS)
-      if depth <= 0.0:
-        continue
-      canvas.annulus(center, max(0.0, cap - depth), cap, start, end, _STRIP_ARC_SEGMENTS, core)
-      if run <= 0.0:
-        continue
-      y = center.y if up else center.y - run
-      canvas.v_sweep(center.x - cap, y, depth, run, top, bottom)
-      canvas.v_sweep(center.x + cap - depth, y, depth, run, top, bottom)
-
-  def render(self, rect, sm) -> None:
-    if not ui_state.rocket_fuel:
-      return
-    self._eased += (sm['carState'].aEgo - self._eased) / _STRIP_EMA
-    reach = self._reach() * rect.height / 2.0
-    if reach <= 0.0:
-      return
-    accelerating = self._eased > 0.0
-    mid = rect.y + rect.height / 2.0
-    top = mid - reach if accelerating else mid
-    x = rect.x + _STRIP_INSET
-    cap = min(_STRIP_WIDTH / 2.0, reach / 2.0)
-    fill, neon = (_STRIP_ACCEL, _STRIP_ACCEL_NEON) if accelerating else (_STRIP_DECEL, _STRIP_DECEL_NEON)
-    near = cap / reach
-    frac_top, frac_bottom = (near, 1.0 - near) if accelerating else (1.0 - near, near)
-    heat = min(abs(self._eased) / _STRIP_NEON_FULL, 1.0)
-
-    canvas.v_sweep(x, top + cap, cap * 2.0, reach - cap * 2.0,
-                   self._tint(fill, frac_top), self._tint(fill, frac_bottom))
-    tail = max(0.0, reach / 2.0 - cap)
-    self._cap(canvas.Pt(x + cap, top + cap), cap, True, self._tint(fill, frac_top), neon, heat, tail)
-    self._cap(canvas.Pt(x + cap, top + reach - cap), cap, False, self._tint(fill, frac_bottom), neon, heat, tail)
 
 _BS_INSET = 20
 _BS_DROP = 100
@@ -191,24 +91,39 @@ class IQSpeedOverlay:
   def update(self) -> None:
     self.speed = max(0.0, self._source_speed(_feed()['carState']) * _speed_scale())
 
-  def _stack(self, face, text: str, size: int, rect, top: float, color) -> float:
-    extent = canvas.span(face, text, size)
-    canvas.glyphs(face, text, canvas.Pt(rect.x + (rect.width - extent.x) / 2, top), size, color)
-    return extent.y
-
   def render(self, rect) -> None:
-    top = rect.y + 52
-    number_h = self._stack(self._heavy, str(round(self.speed)), FONT_SIZES.current_speed, rect, top, COLORS.WHITE)
+    _, speed_rect, _ = header_tiles(rect)
+
+    speed = str(round(self.speed))
+    font_size = 174 if len(speed) <= 2 else 152
+    text_width = canvas.span(self._heavy, speed, font_size).x
+    font_size = min(font_size, int(font_size * (speed_rect.width - 20) / max(1, text_width)))
+    extent = canvas.span(self._heavy, speed, font_size)
+    canvas.glyphs(self._heavy, speed,
+                  canvas.Pt(speed_rect.x + (speed_rect.width - extent.x) / 2, speed_rect.y - 4),
+                  font_size, TEXT)
     unit = tr("km/h") if ui_state.is_metric else tr("mph")
-    self._stack(self._mid, unit, FONT_SIZES.speed_unit, rect, top + number_h - 10, COLORS.WHITE_TRANSLUCENT)
+    unit_extent = canvas.span(self._mid, unit, 34)
+    canvas.glyphs(self._mid, unit,
+                  canvas.Pt(speed_rect.x + (speed_rect.width - unit_extent.x) / 2, speed_rect.y + 172),
+                  34, SECONDARY_TEXT)
 
 def clip_to_width(font, words: str, size: int, limit: float) -> str:
+  if not words or limit <= 0:
+    return ""
   if canvas.span(font, words, size).x <= limit:
     return words
-  trimmed = words
-  while len(trimmed) > 3 and canvas.span(font, trimmed + "...", size).x > limit:
-    trimmed = trimmed[:-1]
-  return trimmed + "..."
+  ellipsis = "..."
+  if canvas.span(font, ellipsis, size).x > limit:
+    return ""
+  low, high = 0, len(words)
+  while low < high:
+    middle = (low + high + 1) // 2
+    if canvas.span(font, words[:middle] + ellipsis, size).x <= limit:
+      low = middle
+    else:
+      high = middle - 1
+  return words[:low].rstrip() + ellipsis
 
 
 class RoadNameBanner(Widget):
@@ -227,21 +142,40 @@ class RoadNameBanner(Widget):
     if sm.recv_frame["carState"] < ui_state.started_frame:
       return
     if sm.updated["iqLiveData"]:
-      self.road_name = sm["iqLiveData"].roadName
+      self.road_name = " / ".join(dict.fromkeys(part.strip() for part in sm["iqLiveData"].roadName.split(";") if part.strip()))
 
   def _render(self, rect):
     if not self.road_name or not ui_state.road_name_toggle:
       return
     label = clip_to_width(self._face, self.road_name, self.TYPE_SIZE, rect.width - self.MARGIN)
+    if not label:
+      return
     extent = canvas.span(self._face, label, self.TYPE_SIZE)
+    height = extent.y + 26
     top = min(TorqueBar.resting_bottom(rect, self.TORQUE_SCALE) + self.GAP,
-              rect.y + rect.height - extent.y)
-    canvas.glyphs(self._face, label,
-                  canvas.Pt(rect.x + (rect.width - extent.x) / 2, top),
-                  self.TYPE_SIZE, COLORS.WHITE)
+              rect.y + rect.height - height)
+    banner = rl.Rectangle(rect.x + (rect.width - extent.x) / 2 - 26, top, extent.x + 52, height)
+    tile(banner, INACTIVE)
+    canvas.glyphs(self._face, label, canvas.Pt(banner.x + 26, banner.y + 11), self.TYPE_SIZE, TEXT)
 
 
-RoadNameRenderer = RoadNameBanner
+class RoadNameRenderer(RoadNameBanner):
+  def _render(self, rect):
+    if not self.road_name or not ui_state.road_name_toggle:
+      return
+    width = min(860, rect.width - 1000)
+    if width <= 0:
+      return
+    label = clip_to_width(self._face, self.road_name, 32, width)
+    if not label:
+      return
+    extent = canvas.span(self._face, label, 32)
+    x = rect.x + (rect.width - extent.x) / 2
+    y = rect.y + rect.height - 44
+    canvas.glyphs(self._face, label, canvas.Pt(x + 1, y + 2), 32, rl.BLACK)
+    canvas.glyphs(self._face, label, canvas.Pt(x, y), 32, TEXT)
+
+
 ellipsize = clip_to_width
 
 from dataclasses import dataclass, field
@@ -252,10 +186,10 @@ _WARN = 'blind_spot'
 
 @dataclass(frozen=True)
 class TurnSignalConfig:
-  left_x: int = 80
-  left_y: int = 190
-  right_x: int = 80
-  right_y: int = 190
+  left_x: int = 240
+  left_y: int = 110
+  right_x: int = 240
+  right_y: int = 110
   size: int = 150
 
 class _IndicatorLamp(Widget):
@@ -263,26 +197,19 @@ class _IndicatorLamp(Widget):
     super().__init__()
     self.mode: str | None = None
     self._epoch = 0.0
-    self._glow = FirstOrderFilter(0.0, 0.3, 1 / gui_app.target_fps)
     self._art = {
       _ARROW: gui_app.texture(f'icons_mici/onroad/turn_signal_{direction}.png', 120, 109),
       _WARN: gui_app.texture(f'icons_mici/onroad/blind_spot_{direction}.png', 120, 109),
     }
 
   def set_mode(self, mode: str | None):
-    if mode != self.mode or mode is None:
-      self._epoch = 0.0
+    if mode != self.mode:
+      self._epoch = time.monotonic()
     self.mode = mode
 
   def _pulse(self) -> int:
-    self._glow.dt = 1 / gui_app.target_fps
-    self._glow.update_alpha(0.3)
-    if time.monotonic() - self._epoch > TURN_SIGNAL_BLINK_PERIOD:
-      self._epoch = time.monotonic()
-      self._glow.x = 255 * 2
-    else:
-      self._glow.update(255 * 0.2)
-    return int(min(self._glow.x, 255))
+    phase = (time.monotonic() - self._epoch) / TURN_SIGNAL_BLINK_PERIOD
+    return round(255 * (0.5 + 0.5 * math.cos(math.tau * phase)))
 
   def _render(self, _):
     if self.mode is None:
@@ -351,65 +278,6 @@ class IQTurnSignalOverlay:
   @config.setter
   def config(self, new_config: TurnSignalConfig):
     self._config = new_config
-
-_PROVIDER_TAGS = {0: "", 1: "NAV", 2: "MBX", 3: "VIS", 4: "OSM"}
-_NAV_TEX_W, _NAV_TEX_H = 256, 128
-_NAV_BADGE_W = 160
-_NAV_FONT = 36
-_NAV_SHIFT = -260
-
-class NavInfluenceRenderer(Widget):
-  def __init__(self):
-    super().__init__()
-    self.engaged = False
-    self.valid = False
-    self.provider = 0
-    self.long_override = False
-    self._streak = 0
-    self.font = gui_app.font(FontWeight.BOLD)
-    self._offscreen = rl.load_render_texture(_NAV_TEX_W, _NAV_TEX_H)
-
-  def update(self):
-    sm = _feed()
-    if sm.updated["iqPlan"]:
-      nav = sm["iqPlan"].iqNavState.nav
-      self.engaged = nav.engaged
-      self.valid = nav.valid
-      self.provider = getattr(nav.provider, "raw", nav.provider)
-    if sm.updated["carControl"]:
-      self.long_override = sm["carControl"].cruiseControl.override
-    self._streak = self._streak + 1 if (self.engaged and self.valid) else 0
-
-  def _blinked_off(self) -> bool:
-    fps = gui_app.target_fps
-    return self.engaged and (self._streak % fps) < (fps / 2.5)
-
-  def _bake(self, label: str):
-    extent = canvas.span(self.font, label, _NAV_FONT)
-    badge = canvas.Box((_NAV_TEX_W - _NAV_BADGE_W) // 2, (_NAV_TEX_H - extent.y - 10) // 2,
-                       _NAV_BADGE_W, int(extent.y + 10))
-    rl.begin_texture_mode(self._offscreen)
-    rl.clear_background(canvas.CLEAR)
-    canvas.panel(badge, 0.2, 10, COLORS.OVERRIDE if self.long_override else canvas.shade(0, 255, 0, 255))
-    rl.rl_set_blend_factors(rl.RL_ZERO, rl.RL_ONE_MINUS_SRC_ALPHA, 0x8006)
-    rl.rl_set_blend_mode(rl.BLEND_CUSTOM)
-    canvas.glyphs(self.font, label,
-                  canvas.Pt(badge.x + (badge.width - extent.x) / 2, badge.y + (badge.height - extent.y) / 2),
-                  _NAV_FONT, canvas.WHITE)
-    rl.rl_set_blend_mode(rl.BLEND_ALPHA)
-    rl.end_texture_mode()
-
-  def _render(self, rect):
-    if not self.valid or self._blinked_off():
-      return
-    label = _PROVIDER_TAGS.get(int(self.provider), "NAV")
-    if not label:
-      return
-    self._bake(label)
-    ax = rect.x + rect.width / 2 + _NAV_SHIFT - _NAV_TEX_W / 2
-    ay = (rect.height / 4 - 40) - _NAV_TEX_H / 2
-    canvas.stamp_scaled(self._offscreen.texture, canvas.Box(0, 0, _NAV_TEX_W, -_NAV_TEX_H),
-                        canvas.Box(ax, ay, _NAV_TEX_W, _NAV_TEX_H), canvas.Pt(0, 0), 0, canvas.WHITE)
 
 class ChevronOptions:
   OFF = 0
@@ -490,7 +358,20 @@ class ChevronMetrics:
     lines = self._labels(lead.dRel, lead.vRel, v_ego)
     if not lines:
       return
-    self._stack(lines, marker.center[0], self._top_y(marker.center[1], self._marker_size(lead.dRel), len(lines), rect), rect)
+    if gui_app.big_ui():
+      text = "   |   ".join(lines)
+      width = canvas.span(self._font, text, 34).x
+      x = max(rect.x + _CH_MARGIN, min(marker.center[0] - width / 2, rect.x + rect.width - width - _CH_MARGIN))
+      floor = rect.y + rect.height - (270 if ui_state.torque_bar else _CH_MARGIN)
+      y = marker.center[1] + 32
+      if y + _CH_LINE > floor:
+        y = max(rect.y + _CH_MARGIN, min(marker.center[1] - 32, floor) - _CH_LINE)
+      shadow = canvas.shade(0, 0, 0, int(200 * self._alpha))
+      color = canvas.shade(255, 255, 255, int(255 * self._alpha))
+      canvas.glyphs(self._font, text, canvas.Pt(x + 2, y + 2), 34, shadow)
+      canvas.glyphs(self._font, text, canvas.Pt(x, y), 34, color)
+    else:
+      self._stack(lines, marker.center[0], self._top_y(marker.center[1], self._marker_size(lead.dRel), len(lines), rect), rect)
 
   @staticmethod
   def _active_leads(radar_state, markers):
@@ -516,8 +397,6 @@ _AMBER = canvas.shade(255, 188, 0, 255)
 _GREEN = canvas.shade(0, 255, 0, 255)
 _GREY = canvas.shade(145, 155, 149, 255)
 _G = 9.81
-_BAR_FONT = 38
-_ANGLE_TYPES = (car.CarParams.SteerControlType.angle, car.CarParams.SteerControlType.curvatureDEPRECATED)
 
 
 @dataclass
@@ -558,14 +437,6 @@ def _banded(magnitude, warn, crit, ok):
     return canvas.RED
   return _AMBER if magnitude > warn else ok
 
-def _closing(v_rel):
-  return _banded(-v_rel if v_rel < 0 else 0.0, 0.0, 4.4704, canvas.WHITE)
-
-def _following(d_rel):
-  if d_rel < 5:
-    return canvas.RED
-  return _AMBER if d_rel < 15 else canvas.WHITE
-
 def _steer_tint(sm):
   if not sm['carControl'].latActive:
     return canvas.WHITE
@@ -580,15 +451,6 @@ def _yaw_offset(sm):
 
 def _bank(sm):
   return sm['vehicleParameters'].roll if sm.valid['vehicleParameters'] else 0.0
-
-def _units(is_metric):
-  return (CV.MS_TO_KPH, "km/h") if is_metric else (CV.MS_TO_MPH, "mph")
-
-def _fix(sm):
-  for svc in ('gpsLocationExternal', 'gpsLocation'):
-    if sm.valid[svc]:
-      return sm[svc], svc
-  return None, None
 
 def steering_angle(sm, is_metric):
   deg = sm['carState'].steeringAngleDeg - _yaw_offset(sm)
@@ -623,129 +485,40 @@ def desired_lat_accel(sm, is_metric):
   a = sm['controlsState'].desiredCurvature * sm['carState'].vEgo ** 2 - _bank(sm) * _G
   return Readout("D.L.A.", f"{a:.2f}" if live else "-", "m/s^2", _steer_tint(sm))
 
-def a_ego(sm, is_metric):
-  return Readout("L.ACC.", f"{sm['carState'].aEgo:.1f}", "m/s^2")
-
-def lead_distance(sm, is_metric):
-  lead = sm['radarState'].leadOne
-  return Readout("REL DIST", "-", "m") if not lead.status else Readout("REL DIST", f"{lead.dRel:.0f}", "m", _following(lead.dRel))
-
-def lead_rel_speed(sm, is_metric):
-  lead = sm['radarState'].leadOne
-  k, unit = _units(is_metric)
-  return Readout("REL SPEED", "-", unit) if not lead.status else Readout("REL SPEED", f"{lead.vRel * k:.0f}", unit, _closing(lead.vRel))
-
-def lead_speed(sm, is_metric):
-  lead = sm['radarState'].leadOne
-  k, unit = _units(is_metric)
-  if not lead.status:
-    return Readout("L.S.", "-", unit)
-  return Readout("L.S.", f"{(lead.vRel + sm['carState'].vEgo) * k:.0f}", unit, _closing(lead.vRel))
-
-def friction_coefficient(sm, is_metric):
-  ltp = sm['lateralTorqueParameters']
-  return Readout("FRIC.", f"{ltp.frictionCoefficientFiltered:.3f}", color=_GREEN if ltp.valid else canvas.WHITE)
-
-def lat_accel_factor(sm, is_metric):
-  ltp = sm['lateralTorqueParameters']
-  return Readout("L.A.F.", f"{ltp.latAccelFactorFiltered:.3f}", color=_GREEN if ltp.valid else canvas.WHITE)
-
-def eps_torque(sm, is_metric):
-  return Readout("E.T.", f"{abs(sm['carState'].steeringTorqueEps):.1f}", "N·dm")
-
-_COMPASS = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
-
-def bearing(sm, is_metric):
-  fix, _ = _fix(sm)
-  if fix is None or fix.bearingAccuracyDeg == 180.0:
-    return Readout("B.D.", "OFF | -")
-  heading = _COMPASS[int(((fix.bearingDeg + 22.5) % 360) // 45)]
-  return Readout("B.D.", f"{heading} | {fix.bearingDeg:.0f}°")
-
-def altitude(sm, is_metric):
-  fix, svc = _fix(sm)
-  if fix is None:
-    return Readout("ALT.", "-", "m")
-  acc = fix.horizontalAccuracy if svc == 'gpsLocationExternal' else 1.0
-  return Readout("ALT.", f"{fix.altitude:.1f}" if acc != 0.0 else "-", "m")
-
-def _desired_probe(sm):
-  if sm['controlsState'].lateralControlState.which() == 'angleState':
-    return desired_steering_angle
-  if ui_state.CP is not None and ui_state.CP.steerControlType in _ANGLE_TYPES:
-    return desired_steering_angle
-  if sm['controlsState'].lateralControlState.which() == 'pidState':
-    return desired_steering_pid
-  return desired_lat_accel
-
 class IQDevMetricsOverlay(Widget):
-  DEV_UI_OFF = 0
-  DEV_UI_RIGHT = 1
-  DEV_UI_BOTTOM = 2
-  DEV_UI_BOTH = 3
-  BOTTOM_BAR_HEIGHT = 61
-
   def __init__(self):
     super().__init__()
     self._face = gui_app.font(FontWeight.BOLD)
-    self.dev_ui_mode = self.DEV_UI_OFF
-
-  @staticmethod
-  def get_bottom_dev_ui_offset():
-    return IQDevMetricsOverlay.BOTTOM_BAR_HEIGHT if ui_state.developer_ui != IQDevMetricsOverlay.DEV_UI_OFF else 0
-
-  def _update_state(self) -> None:
-    self.dev_ui_mode = ui_state.developer_ui
+    self._label_face = gui_app.font(FontWeight.MEDIUM)
 
   def _render(self, rect) -> None:
-    if self.dev_ui_mode == self.DEV_UI_OFF:
-      return
     sm = ui_state.sm
-    if sm.recv_frame["carState"] < ui_state.started_frame:
+    if not ui_state.developer_ui or sm.recv_frame["carState"] < ui_state.started_frame:
       return
-    self._paint_bar(rect)
+    accel = f"L.A.  {sm['carState'].aEgo:.1f}"
+    width = canvas.span(self._label_face, accel, 30, 0).x
+    canvas.glyphs(self._label_face, accel, canvas.Pt(rect.x + (rect.width - width) / 2, rect.y + 12), 30, canvas.WHITE)
+    desired = desired_steering_pid if sm['controlsState'].lateralControlState.which() == 'pidState' else desired_steering_angle
+    for fraction, labels, probes in (
+      (0.28, ("D.S.", "R.S."), (desired, steering_angle)),
+      (0.72, ("D.L.A.", "A.L.A."), (desired_lat_accel, actual_lat_accel)),
+    ):
+      center_x = rect.x + rect.width * fraction
+      for row, (label, probe) in enumerate(zip(labels, probes, strict=True)):
+        cell = probe(sm, ui_state.is_metric)
+        y = rect.y + 44 + row * 60
+        label_width = canvas.span(self._label_face, label, 26, 0).x
+        canvas.glyphs(self._label_face, label, canvas.Pt(center_x - 18 - label_width, y + 7), 26, canvas.WHITE)
+        canvas.glyphs(self._face, cell.value, canvas.Pt(center_x + 18, y), 38, cell.color)
 
-  def _gather(self, sm):
-    probes = (_desired_probe(sm), actual_lat_accel, steering_angle, a_ego, lead_speed)
-    cells = [probe(sm, ui_state.is_metric) for probe in probes]
-    for cell in cells:
-      cell.size_up(self._face, _BAR_FONT)
-    return cells
-
-  def _paint_bar(self, rect) -> None:
-    height = self.BOTTOM_BAR_HEIGHT
-    top = int(rect.y + rect.height - height)
-    canvas.slab(rect.x, top, rect.width, height, canvas.shade(0, 0, 0, 100))
-
-    cells = self._gather(ui_state.sm)
-    slack = (rect.width - sum(c.span for c in cells)) / (len(cells) + 1)
-    baseline = top + height // 2 - _BAR_FONT // 2
-
-    cursor = rect.x + slack
-    for cell in cells:
-      self._paint_cell(cursor, baseline, cell)
-      cursor += cell.span + slack
-
-  def _paint_cell(self, x, y, cell) -> None:
-    canvas.glyphs(self._face, cell.tag_text, canvas.Pt(x, y), _BAR_FONT, canvas.WHITE)
-    canvas.glyphs(self._face, cell.value_text, canvas.Pt(x + cell.tag_w, y), _BAR_FONT, cell.color)
-    if cell.unit:
-      canvas.glyphs(self._face, cell.unit_text, canvas.Pt(x + cell.tag_w + cell.value_w, y), _BAR_FONT, canvas.WHITE)
-
-_SL_M_TO_FT = 3.28084
-_SL_M_TO_MI = 0.000621371
-_SL_AHEAD_STEPS = 5
 _SL_ASSIST = custom.IQPlan.SpeedLimit.AssistState
-_SL_SOURCE = custom.IQPlan.SpeedLimit.Source
 _SL_GREY = canvas.shade(145, 155, 149, 255)
 _SL_DARK = canvas.shade(77, 77, 77, 255)
-_SL_PANEL_BG = canvas.shade(0, 0, 0, 180)
-_SL_PANEL_EDGE = canvas.shade(255, 255, 255, 100)
 
 def _dim(color, alpha: float):
   return canvas.with_opacity(color, 255 * alpha)
 
-class IQSpeedLimitOverlay(Widget):
+class SpeedLimitState:
   def __init__(self):
     super().__init__()
     self.speed_limit = 0.0
@@ -754,31 +527,8 @@ class IQSpeedLimitOverlay(Widget):
     self.speed_limit_valid = False
     self.speed_limit_last_valid = False
     self.speed_limit_final_last = 0.0
-    self.speed_limit_source = _SL_SOURCE.none
     self.assist_state = _SL_ASSIST.disabled
-
-    self.ahead_limit = 0.0
-    self.ahead_dist = 0.0
-    self._ahead_prev = 0.0
-    self.ahead_valid = False
-    self._ahead_streak = 0
-
-    self.assist_frame = 0
     self.speed = 0.0
-    self.set_speed = 0.0
-
-    self._bold = gui_app.font(FontWeight.BOLD)
-    self._demi = gui_app.font(FontWeight.SEMI_BOLD)
-    self._norm = gui_app.font(FontWeight.NORMAL)
-    self._pulse_ema = FirstOrderFilter(1.0, 0.5, 1 / gui_app.target_fps)
-
-    px = 90
-    self._up = gui_app.texture("img_plus_arrow_up.png", px, px)
-    self._down = gui_app.texture("img_minus_arrow_down.png", px, px)
-
-  @property
-  def speed_limit_assist_state(self):
-    return self.assist_state
 
   @property
   def _scale(self):
@@ -793,18 +543,7 @@ class IQSpeedLimitOverlay(Widget):
     self.speed_limit_valid = r.speedLimitValid
     self.speed_limit_last_valid = r.speedLimitLastValid
     self.speed_limit_final_last = r.speedLimitFinalLast * k
-    self.speed_limit_source = r.source
     self.assist_state = lp_iq.speedLimit.assist.state
-
-  def _take_ahead(self, lmd):
-    self.ahead_valid = lmd.speedLimitAheadValid
-    self.ahead_limit = lmd.speedLimitAhead * self._scale
-    self.ahead_dist = lmd.speedLimitAheadDistance
-    if self.ahead_dist < self._ahead_prev:
-      self._ahead_streak = min(_SL_AHEAD_STEPS, self._ahead_streak + 1)
-    elif self.ahead_dist > self._ahead_prev:
-      self._ahead_streak = max(0, self._ahead_streak - 1)
-    self._ahead_prev = self.ahead_dist
 
   def update(self):
     sm = _feed()
@@ -812,10 +551,7 @@ class IQSpeedLimitOverlay(Widget):
       return
     if sm.updated["iqPlan"]:
       self._take_plan(sm["iqPlan"])
-    if sm.updated["iqLiveData"]:
-      self._take_ahead(sm["iqLiveData"])
     cs = sm["carState"]
-    self.set_speed = cs.cruiseState.speed * self._scale
     v_ego = cs.vEgoCluster if cs.vEgoCluster != 0.0 else cs.vEgo
     self.speed = max(0.0, v_ego * self._scale)
 
@@ -829,90 +565,3 @@ class IQSpeedLimitOverlay(Widget):
     over = has_limit and round(self.speed_limit_final_last) < round(self.speed)
     tint = canvas.RED if (warn and over) else (_SL_GREY if not self.speed_limit_valid else canvas.BLACK)
     return value, badge, tint, has_limit
-
-  def _render(self, rect):
-    if ui_state.speed_limit_mode == 0:
-      return
-    w = UI_CONFIG.set_speed_width_metric if ui_state.is_metric else UI_CONFIG.set_speed_width_imperial
-    sign = canvas.Box(rect.x + 60 - 6, rect.y + 45 + UI_CONFIG.set_speed_height + 12, w + 12, 160)
-    if self.assist_state == _SL_ASSIST.preActive:
-      self.assist_frame += 1
-      pulse = 0.65 + 0.35 * math.sin(self.assist_frame * math.pi / gui_app.target_fps)
-      self._sign(sign, self._pulse_ema.update(pulse))
-      self._nudge_arrow(sign)
-    else:
-      self.assist_frame = 0
-      self._pulse_ema.update(1.0)
-      self._sign(sign)
-      self._ahead(sign)
-
-  def _sign(self, rect, alpha=1.0):
-    value, badge, tint, has_limit = self._spec()
-    (self._vienna if ui_state.is_metric else self._mutcd)(rect, value, badge, tint, has_limit, alpha)
-
-  def _nudge_arrow(self, sign):
-    delta = round(self.speed_limit_final_last) - round(self.set_speed)
-    if delta == 0:
-      return
-    arrow = self._up if delta > 0 else self._down
-    bounce = int(20 * math.sin(self.assist_frame * 2.0 * math.pi / (gui_app.target_fps * 2.5)))
-    x = sign.x + (sign.width - arrow.width) / 2
-    y = sign.y + (sign.height - arrow.height) / 2 + (bounce if delta > 0 else -bounce)
-    canvas.stamp(arrow, x, y, canvas.WHITE)
-
-  def _vienna(self, rect, value, badge, tint, has_limit, alpha=1.0):
-    hub = canvas.Pt(rect.x + rect.width / 2, rect.y + rect.height / 2)
-    radius = (rect.width + 18) / 2
-    canvas.disc_at(hub, radius, _dim(canvas.WHITE, alpha))
-    canvas.annulus(hub, radius * 0.80, radius, 0, 360, 36, _dim(canvas.RED, alpha))
-    canvas.glyphs_centered(self._bold, value, 70 if len(value) >= 3 else 85, hub, _dim(tint, alpha))
-    if badge and has_limit:
-      br = radius * 0.4
-      bc = canvas.Pt(rect.x + rect.width - br / 2, rect.y + br / 2)
-      canvas.disc_at(bc, br, _dim(canvas.BLACK, alpha))
-      canvas.annulus(bc, br - 3, br, 0, 360, 36, _dim(_SL_DARK, alpha))
-      canvas.glyphs_centered(self._bold, badge, int(br * 2 * (0.5 if len(badge) < 3 else 0.45)), bc, _dim(canvas.WHITE, alpha))
-
-  def _mutcd(self, rect, value, badge, tint, has_limit, alpha=1.0):
-    canvas.panel(rect, 0.35, 10, _dim(canvas.WHITE, alpha))
-    inner = canvas.Box(rect.x + 10, rect.y + 10, rect.width - 20, rect.height - 20)
-    canvas.panel_outline(inner, 0.35, 10, 4, _dim(canvas.BLACK, alpha))
-    mid = rect.x + rect.width / 2
-    canvas.glyphs_centered(self._demi, "SPEED", 40, canvas.Pt(mid, rect.y + 40), _dim(canvas.BLACK, alpha))
-    canvas.glyphs_centered(self._demi, "LIMIT", 40, canvas.Pt(mid, rect.y + 80), _dim(canvas.BLACK, alpha))
-    canvas.glyphs_centered(self._bold, value, 90, canvas.Pt(mid, rect.y + 150), _dim(tint, alpha))
-    if badge and has_limit:
-      side = rect.width * 0.3
-      overlap = side * 0.2
-      chip = canvas.Box(rect.x + rect.width - side / 1.5 + overlap, rect.y - side / 1.25 + overlap, side, side)
-      canvas.panel(chip, 0.35, 10, _dim(canvas.BLACK, alpha))
-      canvas.panel_outline(chip, 0.35, 10, 6, _dim(_SL_DARK, alpha))
-      canvas.glyphs_centered(self._bold, badge, int(side * (0.6 if len(badge) < 3 else 0.475)),
-                             canvas.Pt(chip.x + side / 2, chip.y + side / 2), _dim(canvas.WHITE, alpha))
-
-  def _ahead(self, sign):
-    if not (self.ahead_valid and self.ahead_limit > 0 and self.ahead_limit != self.speed_limit_last and self._ahead_streak > 0):
-      return
-    panel = canvas.Box(sign.x + (sign.width - 170) / 2, sign.y + sign.height + 10, 170, 160)
-    canvas.panel(panel, 0.35, 10, _SL_PANEL_BG)
-    canvas.panel_outline(panel, 0.35, 10, 3, _SL_PANEL_EDGE)
-    mid = panel.x + panel.width / 2
-    canvas.glyphs_centered(self._demi, "AHEAD", 40, canvas.Pt(mid, panel.y + 28), _SL_GREY)
-    canvas.glyphs_centered(self._bold, str(round(self.ahead_limit)), 70, canvas.Pt(mid, panel.y + 82), canvas.WHITE)
-    canvas.glyphs_centered(self._norm, self._dist(self.ahead_dist), 36, canvas.Pt(mid, panel.y + 134), _SL_GREY)
-
-  @staticmethod
-  def _dist(d):
-    if ui_state.is_metric:
-      if d < 50:
-        return tr("Near")
-      if d >= 1000:
-        return f"{d / 1000:.1f} km"
-      return f"{int(round(d, -1) if d < 200 else round(d, -2))} m"
-    ft = d * _SL_M_TO_FT
-    if ft < 100:
-      return tr("Near")
-    if ft >= 900:
-      return f"{d * _SL_M_TO_MI:.1f} mi"
-    step = 50 if ft < 500 else 100
-    return f"{int(round(ft / step) * step)} ft"

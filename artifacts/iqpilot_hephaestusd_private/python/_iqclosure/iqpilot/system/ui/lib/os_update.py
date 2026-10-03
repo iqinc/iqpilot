@@ -77,19 +77,20 @@ def run_agnos_update(install_path: str, device_type: str, progress_cb: ProgressC
     return False
 
   try:
-    total_partitions = max(1, len(json.load(open(manifest))))
+    with open(manifest) as f:
+      total_partitions = max(1, len(json.load(f)))
   except Exception:
     total_partitions = 1
 
   progress_cb(1, "starting")
   try:
     proc = subprocess.Popen(
-      ["python3", agnos_py, "--swap", manifest],
+      [updater_interpreter(install_path), agnos_py, "--swap", manifest],
       cwd=install_path,
       stdout=subprocess.PIPE,
       stderr=subprocess.STDOUT,
       text=True,
-      env={**os.environ, "PYTHONPATH": install_path},
+      env=updater_env(install_path),
     )
   except Exception:
     progress_cb(0, "launch_failed")
@@ -97,22 +98,39 @@ def run_agnos_update(install_path: str, device_type: str, progress_cb: ProgressC
 
   completed = 0
   swapping = False
+  last_error = ""
   assert proc.stdout is not None
-  for line in proc.stdout:
-    line = line.strip()
-    if "Downloading and writing" in line or "Already flashed" in line:
-      completed += 1
-      pct = min(94, int((completed / total_partitions) * 90) + 2)
-      progress_cb(pct, "flashing")
-    elif "Swapping to slot" in line or "AGNOS ready" in line:
-      swapping = True
-      progress_cb(96, "swapping")
-  proc.wait()
+  with proc:
+    for line in proc.stdout:
+      line = line.strip()
+      if "Downloading and writing" in line or "Already flashed" in line:
+        completed += 1
+        pct = min(94, int((completed / total_partitions) * 90) + 2)
+        progress_cb(pct, "flashing")
+      elif "Swapping to slot" in line or "AGNOS ready" in line:
+        swapping = True
+        progress_cb(96, "swapping")
+      elif "Error" in line or "Exception" in line:
+        last_error = line[:160]
   if proc.returncode == 0:
     progress_cb(100, "done")
     return True
-  progress_cb(0, "failed" if not swapping else "swap_failed")
+  reason = "failed" if not swapping else "swap_failed"
+  progress_cb(0, f"{reason}: {last_error}" if last_error else reason)
   return False
+
+
+def updater_interpreter(install_path: str) -> str:
+  venv_python = os.path.join(install_path, ".venv", "bin", "python3")
+  return venv_python if os.access(venv_python, os.X_OK) else "python3"
+
+
+# hephaestusd runs on the system interpreter with the checkout's site-packages on PYTHONPATH; dropping it hides iqdbc from agnos.py.
+def updater_env(install_path: str) -> dict[str, str]:
+  env = dict(os.environ)
+  inherited = env.get("PYTHONPATH", "")
+  env["PYTHONPATH"] = install_path if not inherited else f"{install_path}{os.pathsep}{inherited}"
+  return env
 
 
 class OsUpdateCoordinator:

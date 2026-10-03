@@ -22,7 +22,7 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 USER_AGENT = os.getenv("IQPILOT_HTTP_USER_AGENT", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+                       + "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
 
 
 def _env_int(name: str, default: int) -> int:
@@ -57,14 +57,13 @@ def prune_cache(new_entry: str | None = None) -> None:
     if new_entry:
       manifest[new_entry] = int(time.time())  # noqa: TID251
 
-    sorted_items = sorted(manifest.items(), key=lambda x: x[1])
-    while len(manifest) * CHUNK_SIZE > CACHE_SIZE and sorted_items:
-      key, _ = sorted_items.pop(0)
-      try:
-        os.remove(os.path.join(cache_root, key))
-      except OSError:
-        pass
-      manifest.pop(key, None)
+    if len(manifest) * CHUNK_SIZE > CACHE_SIZE:
+      for key in sorted(manifest, key=manifest.get)[:len(manifest) - CACHE_SIZE // CHUNK_SIZE]:
+        try:
+          os.remove(os.path.join(cache_root, key))
+        except OSError:
+          pass
+        manifest.pop(key, None)
 
     with atomic_write(manifest_path, mode="w", overwrite=True) as f:
       f.write('\n'.join(f"{k} {v}" for k, v in manifest.items()))
@@ -128,10 +127,13 @@ class URLFile:
 
   def get_length_online(self) -> int:
     response = self._request('HEAD', self._url)
-    if not (200 <= response.status <= 299):
-      return -1
-    length = response.headers.get('content-length', 0)
-    return int(length)
+    try:
+      if not (200 <= response.status <= 299):
+        return -1
+      length = response.headers.get('content-length', 0)
+      return int(length)
+    finally:
+      response.release_conn()
 
   def get_length(self) -> int:
     if self._length is not None:
@@ -159,7 +161,7 @@ class URLFile:
     assert file_end != -1, f"Remote file is empty or doesn't exist: {self._url}"
     #  We have to align with chunks we store. Position is the begginiing of the latest chunk that starts before or at our file
     position = (file_begin // CHUNK_SIZE) * CHUNK_SIZE
-    response = b""
+    response = []
     while True:
       self._pos = position
       chunk_number = self._pos / CHUNK_SIZE
@@ -176,12 +178,12 @@ class URLFile:
         with open(full_path, "rb") as cached_file:
           data = cached_file.read()
 
-      response += data[max(0, file_begin - position): min(CHUNK_SIZE, file_end - position)]
+      response.append(data[max(0, file_begin - position): min(CHUNK_SIZE, file_end - position)])
 
       position += CHUNK_SIZE
       if position >= file_end:
         self._pos = file_end
-        return response
+        return b"".join(response)
 
   def read_aux(self, ll: int | None = None) -> bytes:
     if ll is None:

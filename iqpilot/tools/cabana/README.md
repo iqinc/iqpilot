@@ -1,117 +1,37 @@
 # Cabana
 
-Cabana is a tool developed to view raw CAN data. One use for this is creating and editing [CAN Dictionaries](http://socialledge.com/sjsu/index.php/DBC_Format) (DBC files), and the tool provides direct integration with iqdbc (a collection of DBC files), allowing you to load the DBC files direct from source, and save to your fork. In addition, you can load routes from [konn3kt](https://konn3kt.com).
+Cabana is IQ.Pilot's desktop CAN analysis tool. It uses ImGui and GLFW on macOS and Linux without Qt.
 
-## Usage Instructions
+Run it through the project command:
 
 ```bash
-$ ./cabana -h
-Usage: ./cabana [options] route
-
-Options:
-  -h, --help                     Displays help on commandline options.
-  --help-all                     Displays help including Qt specific options.
-  --demo                         use a demo route instead of providing your own
-  --auto                         Auto load the route from the best available source (no video):
-                                 internal, openpilotci, comma_api, car_segments, testing_closet
-  --qcam                         load qcamera
-  --ecam                         load wide road camera
-  --msgq                         read can messages from msgq
-  --panda                        read can messages from panda
-  --panda-serial <panda-serial>  read can messages from panda with given serial
-  --socketcan <socketcan>        read can messages from given SocketCAN device
-  --zmq <ip-address>             read can messages from zmq at the specified ip-address
-                                 messages
-  --data_dir <data_dir>          local directory with routes
-  --no-vipc                      do not output video
-  --dbc <dbc>                    dbc file to open
-
-Arguments:
-  route                          the drive to replay. find your drives at
-                                 konn3kt.com
+iq cabana
 ```
 
-## Examples
+Cabana can open a local route, a Konn3kt route, a Panda, SocketCAN on Linux, local msgq, or a remote ZMQ stream.
 
-### Running Cabana in Demo Mode
-To run Cabana using a built-in demo route, use the following command:
-
-```shell
-cabana --demo
+```bash
+iq cabana "dongle_id|2026-09-02--12-00-00"
+iq cabana --panda
+iq cabana --msgq
+iq cabana --zmq 192.168.1.10
+iq cabana --bridge 192.168.1.10
 ```
 
-### Loading a Specific Route
+The executable is built on demand by `iqpilot/tools/cabana/cabana`. IQ.Pilot prebuilt device checkouts intentionally omit desktop analysis tools.
 
-To load a specific route for replay, provide the route as an argument:
+## Konn3kt authentication
 
-```shell
-cabana "5beb9b58bd12b691/0000010a--a51155e496"
-```
+Choose **Browse Konn3kt routes** to sign in with Google, GitHub, Apple, or Microsoft. Cabana opens Konn3kt's provider endpoint in your browser and returns to the route picker after authentication. The tools helper and replay share `~/.iq/auth.json`.
 
-Replace "5beb9b58bd12b691/0000010a--a51155e496" with your desired route identifier.
+Browser sign-in requires Konn3kt's localhost tools callback support. The matching backend change is in `src/controllers/oauth.rs` in the Konn3kt repository. The callback is restricted to localhost, an explicit port, `/auth`, and a per-login state value; the token arrives in a URL fragment and is validated with `/v1/me` before saving.
 
+## Manual upstream port
 
-### Running Cabana with multiple cameras
-To run Cabana with multiple cameras, use the following command:
+Reviewed upstream master at `5f50bda7ba1a78862d0886c75f03125446bc6f1b` against the previous port baseline `06d76bdb24b9f5f3e69120782e8e3eb54a2f4f7e`.
 
-```shell
-cabana "5beb9b58bd12b691/0000010a--a51155e496" --dcam --ecam
-```
+Ported chart downsampling and range fixes, strict message ID parsing, recorded-message selection, replay/thread shutdown fixes, frame pacing, video crop and startup fixes, native dock panels, dropdowns, signal layout, theme improvements, and the FPS indicator.
 
-### Streaming CAN Messages from a comma Device
+IQ.Pilot retains its launch workspace, IQDBC package integration, C++ Konn3kt route downloads, live CAN proxy and stream modes, and road/driver/wide-road camera mapping. Upstream's Python downloader, Qt migration, binary-wrapper removal, and comma OAuth configuration were excluded.
 
-[SSH into your device](https://github.com/commaai/openpilot/wiki/SSH) and start the bridge with the following command:
-
-```shell
-cd /data/openpilot
-./cereal/messaging/bridge &
-```
-
-Then Run Cabana with the device's IP address:
-
-```shell
-cabana --zmq <ipaddress>
-```
-
-Replace &lt;ipaddress&gt; with your device's IP address.
-
-If you can't run the bridge on the device, `--bridge <ipaddress>` runs
-`cereal/messaging/bridge` locally against the device instead.
-
-### Streaming CAN Messages from a Remote Device over konn3kt
-
-To watch a device that isn't on your network, `tools/cabana/konn3kt_canproxy.py`
-re-publishes its live CAN onto a local ZMQ socket:
-
-```shell
-export KONN3KT_JWT="<your konn3kt jwt>"
-./tools/cabana/konn3kt_canproxy.py <dongle_id>
-cabana --zmq 127.0.0.1
-```
-
-The device must have `CanLiveStreaming` enabled so `canlived` is running. See the
-header of `konn3kt_canproxy.py` for the full topology.
-
-While streaming from the device, Cabana will log the CAN messages to a local directory. By default, this directory is ~/cabana_live_stream/. You can change the log directory in Cabana by navigating to menu -> tools -> settings.
-
-After disconnecting from the device, you can replay the logged CAN messages from the stream selector dialog -> browse local route.
-
-### Streaming CAN Messages from Panda
-
-To read CAN messages from a connected Panda, use the following command:
-
-```shell
-cabana --panda
-```
-
-### Using the Stream Selector Dialog
-
-If you run Cabana without any arguments, a stream selector dialog will pop up, allowing you to choose the stream.
-
-```shell
-cabana
-```
-
-## Additional Information
-
-For more information, see the [openpilot wiki](https://github.com/commaai/openpilot/wiki/Cabana)
+The route browser verifies your session before listing devices or drives. Missing, invalid, expired, or revoked logins return to the provider chooser. Use **Sign in again** to replace a saved login; network failures offer a retry without discarding your token.

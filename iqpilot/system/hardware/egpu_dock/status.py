@@ -1,7 +1,6 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 """
-import time
 
 from iqpilot.system.hardware.usb import EGPU_DOCK_FW_PRODUCT, is_egpu_usb_device
 

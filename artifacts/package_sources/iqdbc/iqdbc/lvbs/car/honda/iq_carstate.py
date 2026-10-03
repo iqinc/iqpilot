@@ -4,6 +4,8 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 from enum import StrEnum
 
 from iqdbc.car import Bus, structs
+from iqdbc.car.common.conversions import Conversions as CV
+from iqdbc.car.honda.values import HONDA_BOSCH, HONDA_BOSCH_CANFD, HONDA_BOSCH_RADARLESS
 from iqdbc.can.parser import CANParser
 from iqdbc.lvbs.car.honda.iq_values import HondaFlagsIQ
 
@@ -13,9 +15,14 @@ class IQCarState:
     self.CP = CP
     self.CP_IQ = CP_IQ
 
-  def update(self, ret: structs.CarState, can_parsers: dict[StrEnum, CANParser]) -> None:
+  def update(self, ret: structs.CarState, ret_iq: structs.IQCarState, can_parsers: dict[StrEnum, CANParser]) -> None:
     cp = can_parsers[Bus.pt]
     cp_cam = can_parsers[Bus.cam]
+
+    if self.CP_IQ.flags & HondaFlagsIQ.HAS_CAMERA_MESSAGES:
+      speed_bus = cp if (self.CP.carFingerprint in (HONDA_BOSCH - HONDA_BOSCH_RADARLESS - HONDA_BOSCH_CANFD)) else cp_cam
+      speed_limit_raw = speed_bus.vl["CAMERA_MESSAGES"]["SPEED_LIMIT_SIGN"] % 32
+      ret_iq.speedLimit = speed_limit_raw * 5.0 * CV.MPH_TO_MS if (1 <= speed_limit_raw <= 17) else 0.0
 
     if self.CP_IQ.flags & HondaFlagsIQ.NIDEC_HYBRID:
       ret.accFaulted = bool(cp.vl["HYBRID_BRAKE_ERROR"]["BRAKE_ERROR_1"] or cp.vl["HYBRID_BRAKE_ERROR"]["BRAKE_ERROR_2"])

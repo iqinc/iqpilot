@@ -106,10 +106,6 @@ def _canonical(value: Any) -> bytes:
   return json.dumps(_json_safe(value), ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
 
 
-def _safe_json(data: dict[str, Any]) -> bytes:
-  return _canonical(data)
-
-
 def _hmac_hex(key: bytes, payload: bytes) -> str:
   return hmac.new(key, payload, hashlib.sha256).hexdigest()
 

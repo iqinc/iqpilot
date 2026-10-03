@@ -117,6 +117,7 @@ def _parse_proc_stat(stat: str) -> ProcStat | None:
 
 class ProcExtra(TypedDict):
   pid: int
+  starttime: int
   name: str
   exe: str
   cmdline: list[str]
@@ -125,9 +126,9 @@ class ProcExtra(TypedDict):
 _proc_cache: dict[int, ProcExtra] = {}
 
 
-def _get_proc_extra(pid: int, name: str) -> ProcExtra:
+def _get_proc_extra(pid: int, name: str, starttime: int) -> ProcExtra:
   cache: ProcExtra | None = _proc_cache.get(pid)
-  if cache is None or cache.get('name') != name:
+  if cache is None or cache.get('name') != name or cache['starttime'] != starttime:
     exe = ''
     cmdline: list[str] = []
     try:
@@ -139,7 +140,7 @@ def _get_proc_extra(pid: int, name: str) -> ProcExtra:
         cmdline = [c.decode('utf-8', errors='replace') for c in f.read().split(b'\0') if c]
     except OSError:
       pass
-    cache = {'pid': pid, 'name': name, 'exe': exe, 'cmdline': cmdline}
+    cache = {'pid': pid, 'starttime': starttime, 'name': name, 'exe': exe, 'cmdline': cmdline}
     _proc_cache[pid] = cache
   return cache
 
@@ -164,6 +165,9 @@ def build_proc_log_message(msg) -> None:
   pl = msg.procLog
 
   procs = _procs()
+  live_pids = {proc['pid'] for proc in procs}
+  for pid in _proc_cache.keys() - live_pids:
+    del _proc_cache[pid]
   l = pl.init('procs', len(procs))
   for i, r in enumerate(procs):
     proc = l[i]
@@ -183,7 +187,7 @@ def build_proc_log_message(msg) -> None:
     proc.processor = r['processor']
     proc.name = r['name']
 
-    extra = _get_proc_extra(r['pid'], r['name'])
+    extra = _get_proc_extra(r['pid'], r['name'], r['starttime'])
     proc.exe = extra['exe']
     cmdline = proc.init('cmdline', len(extra['cmdline']))
     for j, arg in enumerate(extra['cmdline']):

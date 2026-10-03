@@ -7,6 +7,8 @@ from iqpilot.common.params import Params
 from iqpilot.ui.layouts.settings.iq_panels import IQSettingsLayout
 from iqpilot.selfdrive.ui.layouts.home import _format_updater_description
 from iqpilot.selfdrive.ui.ui_state import ui_state
+from iqpilot.ui.onroad.big_model_status import DockStatus, egpu_dock_status
+from iqpilot.ui.layouts.settings.iq_panels import OP
 from iqpilot.selfdrive.ui.widgets.screen_header import ScreenHeader, HEADER_HEIGHT, BACK_BTN_SIZE
 from iqpilot.system.ui.lib.application import gui_app, FontWeight, MouseEvent, MousePos
 from iqpilot.system.ui.lib.multilang import tr
@@ -159,28 +161,20 @@ class SettingsHubLayout(Widget):
     self._night_icon = gui_app.texture("icons/iq/moon.png", 48, 48, keep_aspect_ratio=True)
     self._bell_icon = gui_app.texture("icons/iq/bell.png", 48, 48, keep_aspect_ratio=True)
     self._bell_slash_icon = gui_app.texture("icons/iq/bell-slash.png", 48, 48, keep_aspect_ratio=True)
+    self._dock_icon = gui_app.texture("icons_mici/egpu.png", 52, 40, keep_aspect_ratio=True)
     self._restart_rect = rl.Rectangle(0, 0, 0, 0)
     self._power_rect = rl.Rectangle(0, 0, 0, 0)
     self._offroad_rect = rl.Rectangle(0, 0, 0, 0)
     self._night_rect = rl.Rectangle(0, 0, 0, 0)
     self._silent_rect = rl.Rectangle(0, 0, 0, 0)
+    self._dock_rect = rl.Rectangle(0, 0, 0, 0)
 
-    # Build the grid from the settings panels, skipping ones hidden from navigation (e.g. Cruise).
     panels = self._settings._panels
-    hidden = self._settings._hidden_from_sidebar
-    self._grid_panels = [pt for pt in panels if pt not in hidden]
+    self._grid_panels = list(panels)
     self._pills = [
       SettingsPill(panels[pt].icon, lambda p=pt: tr(panels[p].name), (lambda p=pt: self._open_panel(p)))
       for pt in self._grid_panels
     ]
-
-    # Route the Toggles -> Cruise shortcut into this hub's panel view.
-    cruise_pt = next((pt for pt in panels if pt.name == "CRUISE"), None)
-    toggles_pt = next((pt for pt in panels if pt.name == "TOGGLES"), None)
-    if cruise_pt is not None and toggles_pt is not None:
-      toggles = panels[toggles_pt].instance
-      if hasattr(toggles, "set_cruise_panel_callback"):
-        toggles.set_cruise_panel_callback(lambda: self._open_panel(cruise_pt))
 
   def set_callbacks(self, on_close: Callable[[], None] | None = None):
     self._on_close = on_close
@@ -430,7 +424,9 @@ class SettingsHubLayout(Widget):
 
     # Grid landing
     title = tr("Settings")
-    title_offset = 5 * BUBBLE_SIZE + 4 * 18 + 36
+    dock_status, dock_progress = egpu_dock_status(ui_state.params, ui_state.sm['deviceState'])
+    bubbles = 5 if dock_status == DockStatus.HIDDEN else 6
+    title_offset = bubbles * BUBBLE_SIZE + (bubbles - 1) * 18 + 36
     self._header.set_title(title)
     self._header.set_on_back(self._on_close)
     self._header.set_title_offset(title_offset)  # make room for the bubbles
@@ -476,6 +472,11 @@ class SettingsHubLayout(Widget):
                     int(self._silent_rect.x + (BUBBLE_SIZE - silent_icon.width) / 2),
                     int(cy - silent_icon.height / 2), rl.WHITE)
 
+    self._dock_rect = rl.Rectangle(0, 0, 0, 0)
+    if dock_status != DockStatus.HIDDEN:
+      self._dock_rect = rl.Rectangle(bx + 5 * (BUBBLE_SIZE + 18), cy - BUBBLE_SIZE / 2, BUBBLE_SIZE, BUBBLE_SIZE)
+      self._draw_dock_bubble(dock_status, dock_progress, cy, self.is_pressed and rl.check_collision_point_rec(mouse, self._dock_rect))
+
     # Small version label, top-right of the header row. Its scroll viewport
     # starts after the title, so long branch text does not clip at the bubbles.
     font = gui_app.font(FontWeight.MEDIUM)
@@ -520,6 +521,21 @@ class SettingsHubLayout(Widget):
       ui_state.params.put_bool("NightMode", not ui_state.params.get_bool("NightMode"))
     elif rl.check_collision_point_rec(mouse_pos, self._silent_rect):
       ui_state.params.put_bool("IQAlertSilence", not ui_state.params.get_bool("IQAlertSilence"))
+    elif rl.check_collision_point_rec(mouse_pos, self._dock_rect):
+      self._open_panel(OP.PanelType.MODELS)
+
+  def _draw_dock_bubble(self, status: DockStatus, progress: float, cy: float, pressed: bool):
+    if status == DockStatus.READY:
+      color = BUBBLE_TEAL_PRESSED if pressed else BUBBLE_TEAL
+    elif status == DockStatus.FAULT:
+      color = BUBBLE_RED_PRESSED if pressed else BUBBLE_RED
+    else:
+      color = BUBBLE_GREY_PRESSED if pressed else BUBBLE_GREY
+    center = rl.Vector2(self._dock_rect.x + BUBBLE_SIZE / 2, cy)
+    rl.draw_circle(int(center.x), int(center.y), BUBBLE_SIZE / 2, color)
+    if status == DockStatus.SETUP and progress > 0.0:
+      rl.draw_ring(center, BUBBLE_SIZE / 2 - 6, BUBBLE_SIZE / 2, -90.0, -90.0 + 360.0 * progress, 48, BUBBLE_TEAL)
+    rl.draw_texture(self._dock_icon, int(center.x - self._dock_icon.width / 2), int(cy - self._dock_icon.height / 2), rl.WHITE)
 
   def _reboot_prompt(self):
     if ui_state.engaged:

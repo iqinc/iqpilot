@@ -18,8 +18,6 @@ class SLCVCruise:
     self.slc = SpeedLimitController(self.params)
     self._last_debug_log_t = 0.0
     self._last_debug_signature = None
-
-    # Exposed SLC state (for UI/logging)
     self.controller_enabled = False
     self.mode_assist = False
     self.slc_offset = 0
@@ -94,12 +92,6 @@ class SLCVCruise:
     k3_slc_log(message)
 
   def _get_slc_params(self):
-    """
-    Load SLC parameters from Params.
-
-    Returns:
-      Dictionary of SLC configuration parameters
-    """
     def get_param_bool(key, default=False):
       value = self.params.get_bool(key)
       return value if value is not None else default
@@ -129,14 +121,14 @@ class SLCVCruise:
     override_manual = (override_method == 0)
     override_set_speed = (override_method == 1)
 
-    speed_limit_mode = int(get_param_str("IQSpeedAssistMode", "1"))  # default: SpeedLimitMode.information
+    speed_limit_mode = int(get_param_str("IQSpeedAssistMode", "1"))
     speed_limit_controller = get_param_bool("SpeedLimitController")
     show_speed_limits = get_param_bool("ShowSpeedLimits")
 
-    if speed_limit_mode == 0:  # SpeedLimitMode.off
+    if speed_limit_mode == 0:
       speed_limit_controller = False
       show_speed_limits = False
-    elif speed_limit_mode == 3:  # SpeedLimitMode.control
+    elif speed_limit_mode == 3:
       speed_limit_controller = True
       show_speed_limits = False
     else:
@@ -166,14 +158,12 @@ class SLCVCruise:
 
   @staticmethod
   def _allow_auto_raise(slc_params):
-    # Reuse the existing "confirm higher" toggle as the gate:
-    # disabled confirm => allow SLC to raise cruise to a higher accepted limit.
     return not slc_params["speed_limit_confirmation_higher"]
 
   def update(self, apply_enabled, now, time_validated, v_cruise, v_ego, sm):
     slc_params = self._get_slc_params()
     self.controller_enabled = bool(slc_params["speed_limit_controller"])
-    self.mode_assist = int(slc_params["speed_limit_mode"]) == 3  # SpeedLimitMode.control
+    self.mode_assist = int(slc_params["speed_limit_mode"]) == 3
     is_metric = slc_params["is_metric"]
     v_cruise_cluster = max(sm["carState"].vCruiseCluster * CV.KPH_TO_MS, v_cruise)
     v_cruise_diff = v_cruise_cluster - v_cruise
@@ -189,6 +179,8 @@ class SLCVCruise:
         self._user_max_speed = v_cruise_cluster
     else:
       self._user_max_speed = 0.0
+    if not slc_params["speed_limit_controller"]:
+      self.slc.reset_override(sm)
     if slc_params["speed_limit_controller"]:
       self.slc.update_limits(dashboard_speed_limit, now, time_validated, v_cruise, v_ego, sm, slc_params)
       self.pending_events = list(getattr(self.slc, 'pending_events', []))

@@ -3,7 +3,18 @@ import subprocess
 
 from iqpilot.common.params import Params
 
-SCRIPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "set_usb_storage.sh")
+SCRIPT_NAME = "set_usb_storage.sh"
+
+
+def _script_path() -> str:
+  # signed bundles vendor this module without the shell script beside it
+  sibling = os.path.join(os.path.dirname(os.path.abspath(__file__)), SCRIPT_NAME)
+  if os.path.isfile(sibling):
+    return sibling
+  return os.path.join(os.environ.get("BASEDIR", "/data/iqpilot"), "iqpilot", "system", "hardware", "tici", SCRIPT_NAME)
+
+
+SCRIPT_PATH = _script_path()
 
 
 def apply_usb_storage_state(state: bool):

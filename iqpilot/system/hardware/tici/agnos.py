@@ -36,6 +36,9 @@ IQPILOT_MANIFEST_PUBLIC_KEY = bytes.fromhex("40ae3f81b77506ecc4982a1ca37ba1d6f87
 AGNOS_MANIFEST_FILE = "system/hardware/tici/agnos.json"
 
 LFS_POINTER_MAGIC = b"version https://git-lfs"
+# Cloudflare cuts a proxied response off after ~100 s, so a part slower than ~900 KB/s only completes through range resumes.
+PART_RESUME_LIMIT = 50
+PART_RESUME_DELAY = 2
 
 def _image_auth_module():
   try:
@@ -73,12 +76,28 @@ def _download_headers(url: str) -> dict:
     pass
   return {}
 
-def _open_image_response(url: str) -> requests.Response:
+class RangeNotSupported(requests.exceptions.RequestException):
+  pass
+
+def _ranged_get(url: str, headers: dict, offset: int) -> requests.Response:
+  if offset:
+    headers = {**headers, 'Range': f"bytes={offset}-"}
+  req = requests.get(url, stream=True, headers=headers, timeout=60)
+  req.raise_for_status()
+  if offset and req.status_code != 206:
+    req.close()
+    raise RangeNotSupported(f"server ignored range resume at {offset} for {url}")
+  return req
+
+def _open_image_response(url: str, offset: int = 0) -> requests.Response:
   auth = _download_headers(url)
   req = requests.get(url, stream=True, headers={'Accept-Encoding': None, **auth}, timeout=60)
   req.raise_for_status()
   if int(req.headers.get('content-length') or 0) >= 1024:
-    return req
+    if not offset:
+      return req
+    req.close()
+    return _ranged_get(url, {'Accept-Encoding': None, **auth}, offset)
 
   body = req.content
   if not body.startswith(LFS_POINTER_MAGIC):
@@ -88,10 +107,10 @@ def _open_image_response(url: str) -> requests.Response:
   size = int(meta["size"])
   lfs_base = url.split("/raw/", 1)[0] + ".git/info/lfs"
 
-  req = requests.get(f"{lfs_base}/objects/{oid}", stream=True,
-                     headers={'Accept-Encoding': None, 'Accept': 'application/vnd.git-lfs', **auth}, timeout=60)
-  if req.status_code == 200:
-    return req
+  try:
+    return _ranged_get(f"{lfs_base}/objects/{oid}", {'Accept-Encoding': None, 'Accept': 'application/vnd.git-lfs', **auth}, offset)
+  except (requests.exceptions.HTTPError, RangeNotSupported):
+    pass
 
   batch = requests.post(f"{lfs_base}/objects/batch",
                         data=json.dumps({"operation": "download", "transfers": ["basic"],
@@ -101,10 +120,7 @@ def _open_image_response(url: str) -> requests.Response:
                         timeout=60)
   batch.raise_for_status()
   action = batch.json()["objects"][0]["actions"]["download"]
-  req = requests.get(action["href"], stream=True,
-                     headers={'Accept-Encoding': None, **action.get("header", {})}, timeout=60)
-  req.raise_for_status()
-  return req
+  return _ranged_get(action["href"], {'Accept-Encoding': None, **action.get("header", {})}, offset)
 
 
 def verify_manifest_signature(manifest_path: str) -> None:
@@ -131,8 +147,21 @@ class _ChainedParts:
 
   def iter_content(self, chunk_size: int) -> Generator[bytes, None, None]:
     for u in self.urls:
-      self.req = _open_image_response(u)
-      yield from self.req.iter_content(chunk_size=chunk_size)
+      received = 0
+      resumes = 0
+      while True:
+        try:
+          self.req = _open_image_response(u, received)
+          for chunk in self.req.iter_content(chunk_size=chunk_size):
+            received += len(chunk)
+            yield chunk
+          break
+        except (requests.exceptions.ChunkedEncodingError, requests.exceptions.ConnectionError):
+          resumes += 1
+          if resumes > PART_RESUME_LIMIT:
+            raise
+          print(f"Resuming {u} at {received} bytes ({resumes})", flush=True)
+          time.sleep(PART_RESUME_DELAY)
 
 class StreamingDecompressor:
   def __init__(self, url: str, parts: int = 0) -> None:
@@ -141,7 +170,7 @@ class StreamingDecompressor:
     if parts > 1:
       self.req = _ChainedParts([f"{url}.p{i:02d}" for i in range(parts)])
     else:
-      self.req = _open_image_response(url)
+      self.req = _ChainedParts([url])
     self.it = self.req.iter_content(chunk_size=1024 * 1024)
     self.decompressor = lzma.LZMADecompressor(format=lzma.FORMAT_AUTO)
     self.eof = False

@@ -17,5 +17,5 @@ class ToyotaSafetyFlagsIQ:
   DEFAULT = 0
   UNSUPPORTED_DSU = 1
   GAS_INTERCEPTOR = 2
-
+  LKAS_HUD = 4
 

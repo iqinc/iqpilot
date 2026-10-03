@@ -138,8 +138,9 @@ def create_blinker_control(packer, bus, leftBlinker, rightBlinker):
   return packer.make_can_msg("Blinkmodi_02", bus, values)
 
 
-def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive):
-  priodisp = 0 if fcw_alert else 0 if (acc_hud_status == 4 or decel) else 2 if (acc_hud_status in (3, 2) or leadVisible) else 0
+def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive,
+                           *, priority_boost=False):
+  priodisp = 0 if (fcw_alert or decel or d_unresponsive or acc_hud_status in (6, 7)) else 1 if priority_boost else 2 if acc_hud_status in (3, 4) else 3
   leadDistanceBars = distanceBars + 1 if distanceBars in (1, 2, 3) else 2
   values = {
     "ACA_StaACC": acc_hud_status,

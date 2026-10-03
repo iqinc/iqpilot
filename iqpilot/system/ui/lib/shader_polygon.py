@@ -231,8 +231,3 @@ def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray,
   rl.begin_shader_mode(state.shader)
   rl.draw_triangle_strip(tri_strip, len(tri_strip), rl.WHITE)
   rl.end_shader_mode()
-
-
-def cleanup_shader_resources():
-  state = ShaderState.get_instance()
-  state.cleanup()

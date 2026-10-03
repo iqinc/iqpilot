@@ -40,3 +40,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 #define OBSERVATION_ECEF_ORIENTATION_FROM_GPS 32
 #define OBSERVATION_NO_ACCEL 33
 #define OBSERVATION_ECEF_VEL 35
+
+// GPS fixes are stamped up to ~0.8 s behind the IMU-driven filter time (Quectel offset 0.63 s)
+constexpr double ORBIT_MAX_REWIND_AGE = 0.8;

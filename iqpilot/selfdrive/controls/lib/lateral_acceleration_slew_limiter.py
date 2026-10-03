@@ -1,6 +1,7 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
+"""
 import numpy as np
-
-
 JERK_SPEED_BP = [0.0, 8.0, 20.0, 35.0]
 JERK_MAX_BP = [5.0, 4.0, 2.5, 2.0]
 A_LAT_MAX = 3.0

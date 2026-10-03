@@ -18,8 +18,6 @@ class GapButtonActions:
     self._params = Params()
     self._gap_hold_frames = 0
     self._already_toggled = False
-    # read (and cleared) by the personality-decrement handler in selfdrived so a
-    # release that ends a toggle-hold does not also decrement personality
     self.experimental_mode_switched = False
 
   def update(self, CS, events, experimental_mode) -> None:
@@ -29,10 +27,8 @@ class GapButtonActions:
     self._toggle_experimental_on_long_hold(events, experimental_mode)
 
   def _advance_hold(self, CS) -> None:
-    # once counting, keep incrementing each frame the hold persists
     if self._gap_hold_frames > 0:
       self._gap_hold_frames += 1
-    # a fresh press seeds the counter; a release zeroes it
     for be in CS.buttonEvents:
       if be.type.raw == _GAP_BUTTON:
         self._gap_hold_frames = int(be.pressed)

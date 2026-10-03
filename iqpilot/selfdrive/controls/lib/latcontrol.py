@@ -4,6 +4,8 @@ from iqpilot.selfdrive.locationd.helpers import Pose
 
 
 class LatControl(ABC):
+  supports_legacy_curvature_lookahead = False
+
   def __init__(self, CP, CP_IQ, CI, dt):
     self.dt = dt
     self.sat_limit = CP.steerLimitTimer

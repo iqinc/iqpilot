@@ -42,13 +42,16 @@ INSTALL_H_DIR="$DIR/include"
 rm -rf $INSTALL_H_DIR
 mkdir -p $INSTALL_H_DIR
 
+RAYLIB_REPOSITORY="${RAYLIB_REPOSITORY:-https://gitlvb.teallvbs.xyz/teal/iqraylib.git}"
+
 if [ ! -d raylib_repo ]; then
-  git clone -b master --no-tags https://github.com/commaai/raylib.git raylib_repo
+  git clone -b master --no-tags "$RAYLIB_REPOSITORY" raylib_repo
 fi
 
 cd raylib_repo
 
-COMMIT=${1:-3425bd9d1fb292ede4d80f97a1f4f258f614cffc}
+COMMIT=${1:-f1fa30219bcfe3f0ac6951dbf57ca8afe54edd39}
+git remote set-url origin "$RAYLIB_REPOSITORY"
 git fetch origin $COMMIT
 git reset --hard $COMMIT
 git clean -xdff .

@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../.." >/dev/null && pwd )"
+exec 9>"${ROOT_DIR}/.iqpilot-install.lock"
+flock -x 9
 INSTALL_ROOT="${ROOT_DIR}/.iqpilot"
 BUNDLES_ROOT="${INSTALL_ROOT}/bundles"
 VERIFY_SCRIPT="${ROOT_DIR}/artifacts/runtime/verify_proprietary_bundle.py"

@@ -1,21 +1,35 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
+"""
 import math
 
-from iqpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N, get_curvature_from_plan
-from iqpilot.selfdrive.iqmodeld.config import ModelConstants
+from iqpilot.cereal import log
 
 
-LOOKAHEAD_SECONDS = 0.20
+Selection = log.ControlsState.LateralActionSelection
+ActionSource = log.ModelDataV2.Action.LateralActionSource
+LookaheadContract = log.ModelDataV2.Action.LegacyLookahead.Contract
 
 
-def get_lookahead_curvature(model_v2, v_ego: float, lat_delay: float) -> float | None:
-  try:
-    yaws = model_v2.orientation.z
-    yaw_rates = model_v2.orientationRate.z
-    if len(yaws) < CONTROL_N or len(yaw_rates) < CONTROL_N:
-      return None
-    if not all(math.isfinite(value) for value in yaws) or not all(math.isfinite(value) for value in yaw_rates):
-      return None
-    horizon = max(0.0, lat_delay) + LOOKAHEAD_SECONDS
-    return get_curvature_from_plan(yaws, yaw_rates, ModelConstants.T_IDXS, v_ego, horizon)
-  except (AttributeError, TypeError, ValueError):
-    return None
+def select_lateral_curvature(model_v2, active: bool, current_curvature: float, maneuver_curvature: float | None,
+                             lookahead_enabled: bool, controller_eligible: bool) -> tuple[float, int]:
+  if not active:
+    return current_curvature, Selection.inactive
+  if maneuver_curvature is not None:
+    return maneuver_curvature, Selection.maneuver
+
+  action = model_v2.action
+  curvature = action.desiredCurvature
+  if not lookahead_enabled:
+    return curvature, Selection.lookaheadDisabled
+  if not controller_eligible:
+    return curvature, Selection.controllerUnsupported
+  if action.lateralActionSource.raw != ActionSource.plan:
+    return curvature, Selection.modelUnsupported
+
+  candidate = action.legacyLookahead
+  if candidate.contract.raw != LookaheadContract.planOrientationV1:
+    return curvature, Selection.modelUnsupported
+  if not math.isfinite(candidate.desiredCurvature) or not math.isfinite(candidate.horizonSeconds) or candidate.horizonSeconds <= 0.0:
+    return curvature, Selection.invalidLookahead
+  return candidate.desiredCurvature, Selection.legacyLookahead

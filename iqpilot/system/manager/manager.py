@@ -42,6 +42,12 @@ def update_modeld_watchdog(deadline: float | None, started: bool, model_updated:
   return deadline
 
 
+def apply_curvature_controller_default(params: Params) -> None:
+  if not params.get_bool("EnableCurvatureControllerDefaultApplied"):
+    params.put_bool("EnableCurvatureController", True)
+    params.put_bool("EnableCurvatureControllerDefaultApplied", True)
+
+
 def manager_init() -> None:
   heal_param_perms()
   save_bootlog()
@@ -90,13 +96,18 @@ def manager_init() -> None:
       initialized_defaults[k] = params.get(k)
 
   try:
-    from iqpilot.selfdrive.iqmodeld.models.helpers import seed_default_bundle_if_unset
-    seed_default_bundle_if_unset(params)
+    from iqpilot.selfdrive.iqmodeld.models.helpers import initialize_active_model
+    initialize_active_model(params)
   except Exception:
     cloudlog.exception("failed to seed default model bundle")
   for k, value in initialized_defaults.items():
     if value is not None and params.get(k) is None:
       params.put(k, value)
+
+  from iqpilot.common.ui_defaults import apply_ui_defaults
+  apply_ui_defaults(params)
+
+  apply_curvature_controller_default(params)
 
   # Create folders needed for msgq
   try:

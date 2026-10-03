@@ -109,3 +109,55 @@ def test_desire_pulse_rising_edge_only_once():
   second = state.push_and_materialize(warped, held, zeros2, zeros2)
   assert state.desire_q[-1].max() == 0.0
   assert second["desire_pulse"][0, -1, 3] == 1.0
+
+
+HISTORY_SPEC = {
+  "img": ((1, 12, 128, 256), "uint8"),
+  "big_img": ((1, 12, 128, 256), "uint8"),
+  "features_buffer": ((1, 8, 32, 512), "float32"),
+  "desire_pulse": ((1, 33, 8), "float32"),
+  "traffic_convention": ((1, 33, 4), "float32"),
+  "action_t": ((1, 33, 2), "float32"),
+}
+
+
+def test_history_spec_materializes_speed_history_and_feature_order():
+  fs = 4
+  state = EmacInputState(fs, HISTORY_SPEC)
+  warped = np.zeros((2, 6, 128, 256), dtype=np.uint8)
+  desire = np.zeros(8, dtype=np.float32)
+  seen = []
+  for frame in range(1, 41):
+    traffic = np.array([1.0, 0.0, frame / 30.0, 0.5], dtype=np.float32)
+    mat = state.push_and_materialize(warped, desire, traffic, np.array([0.2, 0.3], dtype=np.float32))
+    hidden = np.full((1, 32 * 512), float(frame), dtype=np.float32)
+    state.note_hidden_state(np.concatenate([np.zeros(10, dtype=np.float32), hidden.ravel()]), slice(10, 10 + 32 * 512))
+    seen.append(mat)
+    assert mat["traffic_convention"].shape == (1, 33, 4)
+    assert mat["action_t"].shape == (1, 33, 2)
+    assert mat["features_buffer"].shape == (1, 8, 32, 512)
+  first = seen[0]["traffic_convention"][0]
+  assert np.allclose(first[:, 2], 1 / 30.0) and np.allclose(first[:, 0], 1.0)
+  last = seen[-1]["traffic_convention"][0]
+  assert np.allclose(last[-1], [1.0, 0.0, 40 / 30.0, 0.5])
+  assert np.allclose(last[-2, 2], 36 / 30.0) and np.allclose(last[-9, 2], 8 / 30.0)
+  assert np.allclose(seen[-1]["action_t"][0], [[0.2, 0.3]] * 33)
+  feats = seen[-1]["features_buffer"][0, :, 0, 0]
+  assert np.allclose(feats, [40 - 4 * (8 - i) for i in range(8)])
+
+
+def test_two_column_spec_truncates_wide_wire_traffic():
+  state = EmacInputState(FRAME_SKIP)
+  mat = state.push_and_materialize(np.zeros((2, 6, 128, 256), dtype=np.uint8), np.zeros(8, dtype=np.float32),
+                                   np.array([0.0, 1.0, 0.7, 0.1], dtype=np.float32), np.array([0.2, 0.3], dtype=np.float32))
+  assert mat["traffic_convention"].shape == (1, 2) and np.allclose(mat["traffic_convention"][0], [0.0, 1.0])
+  assert mat["action_t"].shape == (1, 2)
+
+
+def test_split_state_fits_wide_wire_traffic_to_policy_width():
+  from iqpilot.selfdrive.iqmodeld.emac_input_state import SplitInputState
+  state = SplitInputState(FRAME_SKIP, (1, 12, 128, 256), (1, 25, 512), (1, 25, 8))
+  state.materialize_vision(np.zeros((2, 6, 128, 256), dtype=np.uint8), np.zeros(8, dtype=np.float32))
+  out = state.materialize_policy(np.zeros(512, dtype=np.float32), np.array([0.0, 1.0, 0.7, 0.1], dtype=np.float32))
+  assert out["traffic_convention"].shape == (1, 2) and np.allclose(out["traffic_convention"][0], [0.0, 1.0])
+  assert "action_t" not in out

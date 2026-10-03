@@ -115,9 +115,12 @@ class CarInterfaceBase(ABC, CarInterfaceBaseIQ):
     dbc_names = {bus: cp.dbc_name for bus, cp in self.can_parsers.items()}
     self.CC: CarControllerBase = self.CarController(dbc_names, CP, CP_IQ)
 
-  def apply(self, c: structs.CarControl, c_iq: structs.IQCarControl, now_nanos: int | None = None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
+  def apply(self, c: structs.CarControl, c_iq: structs.IQCarControl, now_nanos: int | None = None,
+            model=None) -> tuple[structs.CarControl.Actuators, list[CanData]]:
     if now_nanos is None:
       now_nanos = int(time.monotonic() * 1e9)
+    # modelV2 for cars that render it on the dash; an attr so every CarController.update keeps its signature
+    self.CC.model = model
     return self.CC.update(c, c_iq, self.CS, now_nanos)
 
   @staticmethod
@@ -432,6 +435,7 @@ class CarControllerBase(ABC):
     self.CP_IQ = CP_IQ
     self.frame = 0
     self.secoc_key: bytes = b"00" * 16
+    self.model = None
 
   @abstractmethod
   def update(self, CC: structs.CarControl, CC_IQ: structs.IQCarControl, CS: CarStateBase, now_nanos: int) -> tuple[structs.CarControl.Actuators, list[CanData]]:

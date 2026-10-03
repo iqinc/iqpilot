@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 import pyray as rl
 from iqpilot.system.ui.lib.text_measure import measure_text_cached
 from iqpilot.system.ui.lib.application import font_fallback
@@ -37,7 +39,8 @@ def _break_long_word(font: rl.Font, word: str, font_size: int, max_width: int, s
   return parts
 
 
-_cache: dict[int, list[str]] = {}
+MAX_CACHE_ENTRIES = 1024
+_cache: OrderedDict[int, list[str]] = OrderedDict()
 
 
 def wrap_text(font: rl.Font, text: str, font_size: int, max_width: int, spacing: float = 0) -> list[str]:
@@ -45,6 +48,7 @@ def wrap_text(font: rl.Font, text: str, font_size: int, max_width: int, spacing:
   spacing = round(spacing, 4)
   key = hash((font.texture.id, text, font_size, max_width, spacing))
   if key in _cache:
+    _cache.move_to_end(key)
     return _cache[key]
 
   if not text or max_width <= 0:
@@ -104,4 +108,6 @@ def wrap_text(font: rl.Font, text: str, font_size: int, max_width: int, spacing:
     all_lines.extend(lines)
 
   _cache[key] = all_lines
+  if len(_cache) > MAX_CACHE_ENTRIES:
+    _cache.popitem(last=False)
   return all_lines

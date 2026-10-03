@@ -6,7 +6,7 @@ import shutil
 import signal
 import subprocess
 import time
-import glob
+from collections.abc import Iterable
 from typing import NoReturn
 
 import iqpilot.system.sentry as sentry
@@ -24,14 +24,6 @@ APPORT_DIR = "/var/crash/"
 def safe_fn(s):
   extra = ['_']
   return "".join(c for c in s if c.isalnum() or c in extra).rstrip()
-
-
-def clear_apport_folder():
-  for f in glob.glob(APPORT_DIR + '*'):
-    try:
-      os.remove(f)
-    except Exception:
-      pass
 
 
 def get_apport_stacktrace(fn):
@@ -58,42 +50,38 @@ def get_tombstones():
   return files
 
 
+def read_apport_metadata(lines: Iterable[str]) -> tuple[str, str, str]:
+  section = ""
+  retained = []
+  fields = {}
+  for line in lines:
+    if line and not line[0].isspace():
+      key, separator, value = line.partition(":")
+      if separator and key.replace("_", "").isalnum():
+        section = key
+        if key in {"ExecutablePath", "Signal"}:
+          fields[key] = value.strip()
+    if section not in {"CoreDump", "ProcMaps"}:
+      retained.append(line)
+  return "".join(retained), fields.get("ExecutablePath", ""), fields.get("Signal", "")
+
+
 def report_tombstone_apport(fn):
   f_size = os.path.getsize(fn)
   if f_size > MAX_SIZE:
     cloudlog.error(f"Tombstone {fn} too big, {f_size}. Skipping...")
     return
 
-  message = ""  # One line description of the crash
-  contents = ""  # Full file contents without coredump
-  path = ""  # File path relative to openpilot directory
-
-  proc_maps = False
-
   with open(fn) as f:
-    for line in f:
-      if "CoreDump" in line:
-        break
-      elif "ProcMaps" in line:
-        proc_maps = True
-      elif "ProcStatus" in line:
-        proc_maps = False
-
-      if not proc_maps:
-        contents += line
-
-      if "ExecutablePath" in line:
-        path = line.strip().split(': ')[-1]
-        path = path.replace('/data/openpilot/', '')
-        message += path
-      elif "Signal" in line:
-        message += " - " + line.strip()
-
-        try:
-          sig_num = int(line.strip().split(': ')[-1])
-          message += " (" + signal.Signals(sig_num).name + ")"
-        except ValueError:
-          pass
+    contents, executable, crash_signal = read_apport_metadata(f)
+  path = executable.removeprefix('/data/openpilot/')
+  message = path
+  if crash_signal:
+    message += f" - Signal: {crash_signal}"
+    try:
+      message += f" ({signal.Signals(int(crash_signal)).name})"
+    except ValueError:
+      pass
 
   stacktrace = get_apport_stacktrace(fn)
   stacktrace_s = stacktrace.split('\n')
@@ -140,35 +128,27 @@ def report_tombstone_apport(fn):
     pass
 
 
+def collect_crash_reports(completed: set[tuple[str, int]]) -> None:
+  current = set(get_tombstones())
+  completed.intersection_update(current)
+  for filename, stamp in sorted(current - completed):
+    try:
+      if filename.endswith('.crash'):
+        cloudlog.info(f"collecting crash report {filename}")
+        report_tombstone_apport(filename)
+      else:
+        cloudlog.error(f"unsupported crash report format: {filename}")
+    except Exception:
+      cloudlog.exception(f"crash report collection failed: {filename}")
+      continue
+    completed.add((filename, stamp))
+
+
 def main() -> NoReturn:
-  should_report = sentry.init(sentry.SentryProject.SELFDRIVE_NATIVE)
-
-  # Clear apport folder on start, otherwise duplicate crashes won't register
-  clear_apport_folder()
-  initial_tombstones = set(get_tombstones())
-
+  sentry.init(sentry.SentryProject.SELFDRIVE_NATIVE)
+  completed: set[tuple[str, int]] = set()
   while True:
-    now_tombstones = set(get_tombstones())
-
-    for fn, _ in (now_tombstones - initial_tombstones):
-      # clear logs if we're not interested in them
-      if not should_report:
-        try:
-          os.remove(fn)
-        except Exception:
-          pass
-        continue
-
-      try:
-        cloudlog.info(f"reporting new tombstone {fn}")
-        if fn.endswith(".crash"):
-          report_tombstone_apport(fn)
-        else:
-          cloudlog.error(f"unknown crash type: {fn}")
-      except Exception:
-        cloudlog.exception(f"Error reporting tombstone {fn}")
-
-    initial_tombstones = now_tombstones
+    collect_crash_reports(completed)
     time.sleep(5)
 
 

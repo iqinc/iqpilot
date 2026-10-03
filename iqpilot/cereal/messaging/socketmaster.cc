@@ -7,6 +7,10 @@
 #include "cereal/services.h"
 #include "cereal/messaging/messaging.h"
 
+#ifndef SERVICES_REGISTRY_STAMPED
+static const char SERVICES_REGISTRY_TAG[] = "IQ_SERVICES_REGISTRY:unstamped";
+#endif
+
 const bool SIMULATION = (getenv("SIMULATION") != nullptr) && (std::string(getenv("SIMULATION")) == "1");
 
 static inline bool inList(const std::vector<const char *> &list, const char *value) {
@@ -49,7 +53,7 @@ SubMaster::SubMaster(const std::vector<const char *> &service_list, const std::v
   poller_ = Poller::create();
   for (auto name : service_list) {
     if (services.count(std::string(name)) == 0) {
-      fprintf(stderr, "SubMaster: unknown service '%s', skipping subscription\n", name);
+      fprintf(stderr, "SubMaster: unknown service '%s' in %s, skipping subscription\n", name, SERVICES_REGISTRY_TAG);
       continue;
     }
 
@@ -69,6 +73,14 @@ SubMaster::SubMaster(const std::vector<const char *> &service_list, const std::v
     messages_[socket] = m;
     services_[name] = m;
   }
+}
+
+const char *messaging_registry_tag() {
+  return SERVICES_REGISTRY_TAG;
+}
+
+bool messaging_has_service(const char *name) {
+  return services.count(std::string(name)) != 0;
 }
 
 void SubMaster::update(int timeout) {

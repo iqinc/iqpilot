@@ -39,6 +39,7 @@ function install_ubuntu_common_requirements() {
     gcc-arm-none-eabi \
     capnproto \
     libcapnp-dev \
+    libdrm-dev \
     ffmpeg \
     libavformat-dev \
     libavcodec-dev \
@@ -52,9 +53,10 @@ function install_ubuntu_common_requirements() {
     libglfw3-dev \
     libglib2.0-0 \
     libjpeg-dev \
-    libqt5charts5-dev \
     libncurses5-dev \
     libusb-1.0-0-dev \
+    libva-dev \
+    libx264-dev \
     libzmq3-dev \
     libzstd-dev \
     libsqlite3-dev \
@@ -62,11 +64,6 @@ function install_ubuntu_common_requirements() {
     ocl-icd-libopencl1 \
     ocl-icd-opencl-dev \
     portaudio19-dev \
-    qttools5-dev-tools \
-    libqt5svg5-dev \
-    libqt5serialbus5-dev  \
-    libqt5x11extras5-dev \
-    libqt5opengl5-dev \
     gettext
 }
 
@@ -76,8 +73,6 @@ function install_ubuntu_lts_latest_requirements() {
 
   $SUDO apt-get install -y --no-install-recommends \
     g++-12 \
-    qtbase5-dev \
-    qtbase5-dev-tools \
     python3-dev \
     python3-venv
 }

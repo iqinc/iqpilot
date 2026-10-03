@@ -3978,6 +3978,17 @@
       ],
       "req": "All"
     },
+    "TESLA_MODEL_Y|2026": {
+      "label": "Tesla Model Y (with HW4) 2026",
+      "id": "TESLA_MODEL_Y",
+      "mk": "Tesla",
+      "grp": "tesla",
+      "mdl": "Model Y (with HW4)",
+      "yrs": [
+        "2026"
+      ],
+      "req": "All"
+    },
     "TOYOTA_ALPHARD_TSS2|2019-2020": {
       "label": "Toyota Alphard 2019-20",
       "id": "TOYOTA_ALPHARD_TSS2",

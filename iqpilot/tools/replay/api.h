@@ -18,6 +18,7 @@ std::string httpGet(const std::string &url, long *response_code = nullptr);
 // into tools/lib. On failure they return {"error": "<code>"} so callers can tell
 // unauthorized from a transport error without a second out-param.
 std::string getRouteFiles(const std::string &route);
+std::string getUser();
 std::string getDevices();
 std::string getDeviceRoutes(const std::string &dongle_id, int64_t start_ms = 0, int64_t end_ms = 0, bool preserved = false);
 

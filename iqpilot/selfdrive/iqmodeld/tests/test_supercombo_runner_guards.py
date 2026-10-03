@@ -4,13 +4,18 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 from __future__ import annotations
 
 import hashlib
+import pickle
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from iqpilot.cereal import custom
 from iqpilot.selfdrive.iqmodeld.models import helpers as model_helpers
+from iqpilot.selfdrive.iqmodeld.models.runners import model_runner as model_runner_mod
 from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad import supercombo_runner as supercombo_runner_mod
+from iqpilot.selfdrive.iqmodeld.temporal_state import MODEL_INPUT_SPEC
 from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.supercombo_runner import (
   TinygradSupercomboRunner,
 )
@@ -24,6 +29,20 @@ class _Captured:
 class _FakeJit:
   def __init__(self, expected_names):
     self.captured = _Captured(expected_names)
+
+
+class _RecordingJit:
+  def __init__(self, expected_names, output_len=0):
+    self.captured = _Captured(expected_names)
+    self.output_len = output_len
+    self.calls = []
+
+  def __call__(self, **kwargs):
+    from tinygrad.tensor import Tensor
+    self.calls.append({name: value.numpy().copy() if hasattr(value, "numpy") else value for name, value in kwargs.items()})
+    if self.output_len:
+      return (Tensor(np.zeros(self.output_len, dtype=np.float32)),)
+    return object()
 
 
 class _Boom:
@@ -252,3 +271,93 @@ def test_run_fused_converts_raw_warp_jit_mismatch_to_runtime_error(tmp_path: Pat
       {"img": [0.0], "big_img": [0.0]},
       {},
     )
+
+
+POLICY_JIT_NAMES = ["warped", "img_q", "big_img_q", "feat_q", "desire_q", "packed_npy_inputs"]
+WARP_JIT_NAMES = ["tfm", "big_tfm", "frame", "big_frame"]
+PACKED_STANDARD_LEN = 8 + 2 + 2 + 512
+OUTPUT_LEN = 2580
+
+
+class _Buf:
+  width = 1928
+  height = 1208
+  data = memoryview(b"\x00")
+
+
+def _packed_pkl_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra_inputs: dict):
+  input_shapes = {name: shape for name, (shape, _) in MODEL_INPUT_SPEC.items()}
+  input_shapes.update(extra_inputs)
+  pkl_path = tmp_path / "driving_supercombo_fake.pkl"
+  with open(pkl_path, "wb") as f:
+    pickle.dump({
+      "metadata": {
+        "input_shapes": input_shapes,
+        "output_slices": {"plan": slice(917, 1907), "hidden_state": slice(2066, 2578), "pad": slice(-2, None)},
+      },
+      "frame_skip": 4,
+      "run_policy": _RecordingJit(POLICY_JIT_NAMES, OUTPUT_LEN),
+      (1928, 1208): _RecordingJit(WARP_JIT_NAMES),
+    }, f)
+
+  spec = SimpleNamespace(model=SimpleNamespace(artifact=SimpleNamespace(fileName=pkl_path.name, downloadUri=SimpleNamespace(sha256=""))))
+  monkeypatch.setattr(model_runner_mod.ModelRunner, "__init__", lambda self: setattr(self, "models", {"supercombo": spec}))
+  monkeypatch.setattr(supercombo_runner_mod, "CUSTOM_MODEL_PATH", str(tmp_path))
+  runner = TinygradSupercomboRunner()
+  runner._frame_tensor = lambda key, buf: object()
+  runner._parser = type("P", (), {"parse_vision_outputs": staticmethod(lambda sliced: sliced)})()
+  return runner
+
+
+def _run_once(runner, numpy_inputs):
+  runner.run_fused({"img": _Buf(), "big_img": _Buf()},
+                   {"img": np.eye(3, dtype=np.float32), "big_img": np.eye(3, dtype=np.float32)},
+                   numpy_inputs)
+  return runner._run_policy.calls[-1]["packed_npy_inputs"]
+
+
+def test_packed_pkl_without_extra_inputs_keeps_the_standard_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+  runner = _packed_pkl_runner(tmp_path, monkeypatch, {})
+
+  packed = _run_once(runner, {
+    "desire_pulse": np.zeros(8, dtype=np.float32),
+    "traffic_convention": np.array([0.0, 1.0], dtype=np.float32),
+    "action_t": np.array([0.25, 0.5], dtype=np.float32),
+  })
+
+  assert list(runner._npy) == ["tfm", "big_tfm", "desire", "traffic_convention", "action_t", "prev_feat"]
+  assert packed.shape == (PACKED_STANDARD_LEN,)
+  np.testing.assert_array_equal(packed[8:10], [0.0, 1.0])
+  np.testing.assert_array_equal(packed[10:12], [0.25, 0.5])
+
+
+def test_packed_pkl_extra_inputs_ride_the_packed_tail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+  runner = _packed_pkl_runner(tmp_path, monkeypatch, {
+    "nav_intent": (1, 32), "route_line": (1, 32, 2), "drive_profile": (1, 5),
+  })
+  assert runner.input_shapes["nav_intent"] == (1, 32)
+  assert runner.input_shapes["route_line"] == (1, 32, 2)
+  assert runner.input_shapes["drive_profile"] == (1, 5)
+
+  nav_intent = np.arange(32, dtype=np.float32).reshape(1, 32)
+  route_line = np.arange(64, dtype=np.float32).reshape(1, 32, 2) / 10
+  drive_profile = np.array([[0.0, 0.0, 1.0, 0.0, 0.25]], dtype=np.float32)
+  packed = _run_once(runner, {
+    "desire_pulse": np.zeros(8, dtype=np.float32),
+    "traffic_convention": np.array([1.0, 0.0], dtype=np.float32),
+    "action_t": np.array([0.25, 0.5], dtype=np.float32),
+    "nav_intent": nav_intent,
+    "route_line": route_line,
+    "drive_profile": drive_profile,
+  })
+
+  assert packed.shape == (PACKED_STANDARD_LEN + 32 + 64 + 5,)
+  np.testing.assert_array_equal(packed[8:10], [1.0, 0.0])
+  np.testing.assert_array_equal(packed[PACKED_STANDARD_LEN:PACKED_STANDARD_LEN + 32], nav_intent.ravel())
+  np.testing.assert_array_equal(packed[PACKED_STANDARD_LEN + 32:PACKED_STANDARD_LEN + 96], route_line.ravel())
+  np.testing.assert_array_equal(packed[PACKED_STANDARD_LEN + 96:], drive_profile.ravel())
+
+  packed = _run_once(runner, {"desire_pulse": np.zeros(8, dtype=np.float32), "nav_intent": np.zeros((1, 32), dtype=np.float32)})
+  np.testing.assert_array_equal(packed[PACKED_STANDARD_LEN:PACKED_STANDARD_LEN + 32], 0.0)
+  np.testing.assert_array_equal(packed[PACKED_STANDARD_LEN + 32:PACKED_STANDARD_LEN + 96], route_line.ravel())
+  np.testing.assert_array_equal(packed[PACKED_STANDARD_LEN + 96:], drive_profile.ravel())

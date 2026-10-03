@@ -15,17 +15,13 @@ from iqpilot.common.atlas_alerts import EventBook as EventsBase, Tier as Priorit
   HardDisableCard as ImmediateDisableAlert, ChimeCard as EngagementAlert, BannerCard as NormalPermanentAlert, \
   BootCard as StartupAlert, AlertFactory as AlertCallbackType, car_mode_entry_alert as wrong_car_mode_alert
 
-
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
 VisualAlert = car.CarControl.HUDControl.VisualAlert
 AudibleAlert = car.CarControl.HUDControl.AudibleAlert
 EventName = log.OnroadEvent.EventName
 
-
-# get event name from enum
 EVENT_NAME = {v: k for k, v in EventName.schema.enumerants.items()}
-
 
 class Events(EventsBase):
   def __init__(self):
@@ -41,17 +37,10 @@ class Events(EventsBase):
   def get_event_msg_type(self):
     return log.OnroadEvent
 
-
-
-# ********** helper functions **********
 def get_display_speed(speed_ms: float, metric: bool) -> str:
   speed = int(round(speed_ms * (CV.MS_TO_KPH if metric else CV.MS_TO_MPH)))
   unit = 'km/h' if metric else 'mph'
   return f"{speed} {unit}"
-
-
-# ********** alert callback functions **********
-
 
 def soft_disable_alert(alert_text_2: str) -> AlertCallbackType:
   def func(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
@@ -95,9 +84,6 @@ def audio_feedback_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubM
     f"{round(duration)} second{'s' if round(duration) != 1 else ''} remaining. Press again to save early.",
     priority=Priority.LOW)
 
-
-# *** debug alerts ***
-
 def out_of_space_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   full_perc = round(100. - sm['deviceState'].freeSpacePercent)
   return NormalPermanentAlert("Out of Storage", f"{full_perc}% full")
@@ -116,12 +102,6 @@ def process_not_running_alert(CP: car.CarParams, CS: car.CarState, sm: messaging
   not_running = [p.name for p in sm['managerState'].processes if not p.running and p.shouldBeRunning]
   msg = ', '.join(not_running)
   return NoEntryAlert(msg, alert_text_1="Process Not Running")
-
-
-def comm_issue_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
-  bs = [s for s in sm.data.keys() if not sm.all_checks([s, ])]
-  msg = ', '.join(bs[:4])  # can't fit too many on one line
-  return NoEntryAlert(msg, alert_text_1="Communication Issue Between Processes")
 
 
 def camera_malfunction_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
@@ -167,24 +147,8 @@ def low_memory_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaste
   return NormalPermanentAlert("Low Memory", f"{sm['deviceState'].memoryUsagePercent}% used")
 
 
-def high_cpu_usage_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
-  x = max(sm['deviceState'].cpuUsagePercent, default=0.)
-  return NormalPermanentAlert("High CPU Usage", f"{x}% used")
-
-
 def modeld_lagging_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
   return NormalPermanentAlert("Driving Model Lagging", f"{sm['modelV2'].frameDropPerc:.1f}% frames dropped")
-
-
-def _joystick_axes(sm: messaging.SubMaster) -> tuple[float, float] | None:
-  if 'testJoystick' not in sm.data or sm.recv_frame['testJoystick'] == 0:
-    return None
-
-  axes = list(sm['testJoystick'].axes)
-  if len(axes) < 2:
-    return None
-
-  return float(axes[0]), float(axes[1])
 
 
 def joystick_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster, metric: bool, soft_disable_time: int, personality) -> Alert:
@@ -235,12 +199,8 @@ def invalid_lkas_setting_no_entry_alert(CP: car.CarParams, CS: car.CarState, sm:
 
 
 EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
-  # ********** events with no alerts **********
-
   EventName.stockFcw: {},
   EventName.actuatorsApiUnavailable: {},
-
-  # ********** events only containing alerts displayed in all states **********
 
   EventName.joystickDebug: {
     ET.WARNING: joystick_alert,
@@ -251,6 +211,15 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.WARNING: longitudinal_maneuver_alert,
     ET.PERMANENT: NormalPermanentAlert("Longitudinal Maneuver Mode",
                                        "Ensure road ahead is clear"),
+  },
+
+  EventName.bigModelLoading: {
+    ET.NO_ENTRY: NoEntryAlert("Big Model Loading"),
+  },
+
+  EventName.bigModelFailed: {
+    ET.SOFT_DISABLE: soft_disable_alert("Big Model Failed"),
+    ET.PERMANENT: NormalPermanentAlert("Big Model Failed ", "Restart the car to retry,\nsmall model is still available", duration=20.),
   },
 
   EventName.lateralManeuver: {
@@ -299,9 +268,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     #ET.PERMANENT: ImmediateDisableAlert("openpilot failed to cancel cruise"),
   },
 
-  # openpilot doesn't recognize the car. This switches openpilot into a
-  # read-only mode. This can be solved by adding your fingerprint.
-  # See https://github.com/commaai/openpilot/wiki/Fingerprinting for more information
   EventName.carUnrecognized: {
     ET.PERMANENT: NormalPermanentAlert("Dashcam Mode",
                                        "Car Unrecognized",
@@ -350,9 +316,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       AlertStatus.userPrompt, AlertSize.small,
       Priority.LOW, VisualAlert.ldw, AudibleAlert.prompt, 3.),
   },
-
-  # ********** events only containing alerts that display while engaged **********
-
   EventName.steerTempUnavailableSilent: {
     ET.WARNING: Alert(
       "Steering Assist Temporarily Unavailable",
@@ -366,7 +329,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       "Pay Attention",
       "",
       AlertStatus.normal, AlertSize.small,
-      Priority.LOW, VisualAlert.none, AudibleAlert.none, .1),
+      Priority.MID, VisualAlert.none, AudibleAlert.none, .1),
   },
 
   EventName.promptDriverDistracted: {
@@ -469,26 +432,20 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOW, VisualAlert.steerRequired, AudibleAlert.promptRepeat, 2.),
   },
 
-  # Thrown when the fan is driven at >50% but is not rotating
   EventName.fanMalfunction: {
     ET.PERMANENT: NormalPermanentAlert("Fan Malfunction", "Likely Hardware Issue"),
   },
 
-  # Camera is not outputting frames
   EventName.cameraMalfunction: {
     ET.PERMANENT: camera_malfunction_alert,
     ET.SOFT_DISABLE: soft_disable_alert("Camera Malfunction"),
     ET.NO_ENTRY: NoEntryAlert("Camera Malfunction: Reboot Your Device"),
   },
-  # Camera framerate too low
   EventName.cameraFrameRate: {
     ET.PERMANENT: NormalPermanentAlert("Camera Frame Rate Low", "Reboot your Device"),
     ET.SOFT_DISABLE: soft_disable_alert("Camera Frame Rate Low"),
     ET.NO_ENTRY: NoEntryAlert("Camera Frame Rate Low: Reboot Your Device"),
   },
-
-  # Unused
-
   EventName.locationdTemporaryError: {
     ET.NO_ENTRY: NoEntryAlert("locationd Temporary Error"),
     ET.SOFT_DISABLE: soft_disable_alert("locationd Temporary Error"),
@@ -500,14 +457,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.PERMANENT: NormalPermanentAlert("locationd Permanent Error"),
   },
 
-  # openpilot tries to learn certain parameters about your car by observing
-  # how the car behaves to steering inputs from both human and openpilot driving.
-  # This includes:
-  # - steer ratio: gear ratio of the steering rack. Steering angle divided by tire angle
-  # - tire stiffness: how much grip your tires have
-  # - angle offset: most steering angle sensors are offset and measure a non zero angle when driving straight
-  # This alert is thrown when any of these values exceed a sanity check. This can be caused by
-  # bad alignment or bad sensor data. If this happens consistently consider creating an issue on GitHub
   EventName.paramsdTemporaryError: {
     ET.NO_ENTRY: paramsd_invalid_alert,
     ET.SOFT_DISABLE: soft_disable_alert("paramsd Temporary Error"),
@@ -518,9 +467,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("paramsd Permanent Error"),
     ET.PERMANENT: NormalPermanentAlert("paramsd Permanent Error"),
   },
-
-  # ********** events that affect controls state transitions **********
-
   EventName.pcmEnable: {
     ET.ENABLE: EngagementAlert(AudibleAlert.engage),
   },
@@ -660,11 +606,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.LOWEST, VisualAlert.none, AudibleAlert.none, 0.),
   },
 
-  # This alert is thrown when the calibration angles are outside of the acceptable range.
-  # For example if the device is pointed too much to the left or the right.
-  # Usually this can only be solved by removing the mount from the windshield completely,
-  # and attaching while making sure the device is pointed straight forward and is level.
-  # See https://comma.ai/setup for more information
   EventName.calibrationInvalid: {
     ET.PERMANENT: calibration_invalid_alert,
     ET.SOFT_DISABLE: soft_disable_alert("Calibration Invalid: Remount Device & Recalibrate"),
@@ -703,11 +644,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert("Low Battery"),
   },
 
-  # Different openpilot services communicate between each other at a certain
-  # interval. If communication does not follow the regular schedule this alert
-  # is thrown. This can mean a service crashed, did not broadcast a message for
-  # ten times the regular interval, or the average interval is more than 10% too high.
-  # Soft warnings — no disable, no entry block. UI shows a silent yellow triangle instead.
   EventName.commIssue: {
   },
   EventName.commIssueAvgFreq: {
@@ -716,7 +652,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   EventName.selfdrivedLagging: {
   },
 
-  # Thrown when manager detects a service exited unexpectedly while driving
   EventName.processNotRunning: {
     ET.NO_ENTRY: process_not_running_alert,
     ET.SOFT_DISABLE: soft_disable_alert("Process Not Running"),
@@ -732,27 +667,17 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert("Radar Temporarily Unavailable"),
   },
 
-  # Every frame from the camera should be processed by the model. If modeld
-  # is not processing frames fast enough they have to be dropped. This alert is
-  # thrown when over 20% of frames are dropped.
   EventName.modeldLagging: {
     ET.SOFT_DISABLE: soft_disable_alert("Driving Model Lagging"),
     ET.NO_ENTRY: NoEntryAlert("Driving Model Lagging"),
     ET.PERMANENT: modeld_lagging_alert,
   },
 
-  # Besides predicting the path, lane lines and lead car data the model also
-  # predicts the current velocity and rotation speed of the car. If the model is
-  # very uncertain about the current velocity while the car is moving, this
-  # usually means the model has trouble understanding the scene. This is used
-  # as a heuristic to warn the driver.
   EventName.posenetInvalid: {
     ET.SOFT_DISABLE: soft_disable_alert("Posenet Speed Invalid"),
     ET.NO_ENTRY: posenet_invalid_alert,
   },
 
-  # When the localizer detects an acceleration of more than 40 m/s^2 (~4G) we
-  # alert the driver the device might have fallen from the windshield.
   EventName.deviceFalling: {
     ET.SOFT_DISABLE: soft_disable_alert("Device Fell Off Mount"),
     ET.NO_ENTRY: NoEntryAlert("Device Fell Off Mount"),
@@ -771,7 +696,7 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
   },
 
   EventName.cruiseFaultLateralAllowed: {
-    ET.PERMANENT: NormalPermanentAlert("Cruise Faulted", "Lane Assist will continue to work", priority=Priority.LOWEST),
+    ET.PERMANENT: NormalPermanentAlert("Cruise Faulted", "Lane Assist remains available", duration=5.0, priority=Priority.LOW),
   },
 
   EventName.espActive: {
@@ -784,19 +709,12 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert("Controls Mismatch"),
   },
 
-  # Sometimes the USB stack on the device can get into a bad state
-  # causing the connection to the panda to be lost
   EventName.usbError: {
     ET.SOFT_DISABLE: soft_disable_alert("USB Error: Reboot Your Device"),
     ET.PERMANENT: NormalPermanentAlert("USB Error: Reboot Your Device"),
     ET.NO_ENTRY: NoEntryAlert("USB Error: Reboot Your Device"),
   },
 
-  # This alert can be thrown for the following reasons:
-  # - No CAN data received at all
-  # - CAN data is received, but some message are not received at the right frequency
-  # If you're not writing a new car port, this is usually cause by faulty wiring
-  # Minor canError: low-priority silent HUD badge only — no disable, no entry block, no audible/visual alert
   EventName.canError: {
     ET.PERMANENT: Alert(
       "CAN Error",
@@ -831,16 +749,10 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
     ET.NO_ENTRY: NoEntryAlert("Reverse Gear"),
   },
 
-  # On cars that use stock ACC the car can decide to cancel ACC for various reasons.
-  # When this happens we can no long control the car so the user needs to be warned immediately.
   EventName.cruiseDisabled: {
     ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("Cruise Is Off"),
   },
 
-  # When the relay in the harness box opens the CAN bus between the LKAS camera
-  # and the rest of the car is separated. When messages from the LKAS camera
-  # are received on the car side this usually means the relay hasn't opened correctly
-  # and this alert is thrown.
   EventName.relayMalfunction: {
     ET.IMMEDIATE_DISABLE: ImmediateDisableAlert("Harness Relay Malfunction"),
     ET.PERMANENT: NormalPermanentAlert("Harness Relay Malfunction", "Check Hardware"),
@@ -855,7 +767,6 @@ EVENTS: dict[int, dict[str, Alert | AlertCallbackType]] = {
       Priority.HIGH, VisualAlert.none, AudibleAlert.disengage, 3.),
   },
 
-  # When the car is driving faster than most cars in the training data, the model outputs can be unpredictable.
   EventName.speedTooHigh: {
     ET.WARNING: Alert(
       "Speed Too High",
@@ -892,7 +803,7 @@ if HARDWARE.get_device_type() == 'mici':
         "Pay Attention",
         "",
         AlertStatus.normal, AlertSize.small,
-        Priority.LOW, VisualAlert.none, AudibleAlert.none, 2),
+        Priority.MID, VisualAlert.none, AudibleAlert.none, 2),
     },
     EventName.promptDriverDistracted: {
       ET.PERMANENT: Alert(
@@ -954,7 +865,6 @@ if HARDWARE.get_device_type() == 'mici':
 
 
 if __name__ == '__main__':
-  # print all alerts by type and priority
   from iqpilot.cereal.services import SERVICE_LIST
   from collections import defaultdict
 

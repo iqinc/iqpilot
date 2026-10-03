@@ -7,7 +7,7 @@ from iqpilot.cereal import car, log
 from iqpilot.common.issue_debug import log_issue_limited
 from iqpilot.common.params import Params
 from iqpilot.common.realtime import DT_MDL
-from iqpilot.selfdrive.locationd.models.car_kf import CarKalman, ObservationKind, States
+from iqpilot.selfdrive.iqlocd.models.car_kf import CarKalman, ObservationKind, States
 from iqpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from iqpilot.common.swaglog import cloudlog
 
@@ -158,7 +158,7 @@ class VehicleParamsEstimator:
         "paramsd_angle_offset_invalid",
         "calibration",
         f"paramsd angle offset invalid angleOffsetDeg={self.angle_offset:.2f} "
-        f"angleOffsetAverageDeg={self.avg_angle_offset:.2f} speed={self.observed_speed:.2f}",
+        + f"angleOffsetAverageDeg={self.avg_angle_offset:.2f} speed={self.observed_speed:.2f}",
         interval_sec=2.0,
       )
 

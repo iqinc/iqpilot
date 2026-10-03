@@ -1,4 +1,3 @@
-import colorsys
 import numpy as np
 import pyray as rl
 from iqpilot.cereal import car, custom
@@ -7,17 +6,24 @@ from iqpilot.common.filter_simple import FirstOrderFilter
 from iqpilot.common.params import Params
 from iqpilot.selfdrive.locationd.calibrationd import HEIGHT_INIT
 from iqpilot.selfdrive.locationd.calibration_helpers import get_render_path_height
-from iqpilot.selfdrive.ui.ui_state import ui_state, log_param_from_bytes
+from iqpilot.selfdrive.ui.ui_state import ui_state, UIStatus, log_param_from_bytes
 from iqpilot.system.ui.lib.application import gui_app
 from iqpilot.system.ui.lib.shader_polygon import draw_polygon, Gradient
 from iqpilot.system.ui.widgets import Widget
+from iqpilot.ui.onroad.model_renderer_helpers import BACKUP_PATH_WIDTH, ModelRendererHelpers
 
 from iqpilot.ui.onroad.hud_overlays import ChevronMetrics
-from iqpilot.ui.onroad.lead_confidence import driving_confidence
 
 CLIP_MARGIN = 500
 MIN_DRAW_DISTANCE = 10.0
 MAX_DRAW_DISTANCE = 100.0
+# the head is trained against a 7% positive rate, so it reports ~0.08 at a real stop and never
+# exceeds 0.024 on held-out highway frames; 0.5 gated out every stop the model actually found
+STOP_POINT_MIN_PROBABILITY = 0.30
+STOP_POINT_HALF_WIDTH = 1.0
+STOP_POINT_MAX_OFFSET = 4.0
+STOP_POINT_DEPTH = 0.45
+STOP_POINT_COLOR = (255, 90, 60)
 
 _VT_LABEL = custom.IQVehicleTracks.Track.Label
 VEHICLE_TRACK_LABELS = (_VT_LABEL.car, _VT_LABEL.motorcycle, _VT_LABEL.bus, _VT_LABEL.truck)
@@ -38,10 +44,36 @@ NO_THROTTLE_COLORS = [
   rl.Color(242, 242, 242, 0),   # HSLF(112/360, 0.0, 0.95, 0.0)
 ]
 
+LANE_ACTIVE_COLOR = rl.Color(0, 255, 245, 255)
+LANE_LINE_COLORS = {
+  UIStatus.DISENGAGED: rl.Color(0, 0, 0, 255),
+  UIStatus.OVERRIDE: rl.Color(150, 150, 150, 255),
+  UIStatus.LONG_ONLY: rl.Color(150, 150, 150, 255),
+  UIStatus.LAT_ONLY: LANE_ACTIVE_COLOR,
+  UIStatus.ENGAGED: LANE_ACTIVE_COLOR,
+}
+
+LEAD_LINE_WIDTH_AT_10M = 300.0
+# Undo the radar-frame offset applied by radard when projecting into the camera frame.
+LEAD_RADAR_TO_CAMERA = 1.52
+LEAD_LINE_LAYERS = {
+  status: tuple((height, rl.Color(base.r, base.g, base.b, alpha))
+                for height, alpha in (((4, 255),) if status in (UIStatus.DISENGAGED, UIStatus.OVERRIDE) else
+                                      ((48, 8), (36, 15), (26, 28), (18, 48), (10, 100), (4, 255))))
+  for status, base in LANE_LINE_COLORS.items()
+}
+
+
+def lead_line_width(distance: float, screen_width: float) -> float:
+  width = LEAD_LINE_WIDTH_AT_10M * (10.0 / max(distance, 1.0)) ** 0.5
+  return min(width / 2160, 0.32) * screen_width
+
+
 @dataclass
 class ModelPoints:
   raw_points: np.ndarray = field(default_factory=lambda: np.empty((0, 3), dtype=np.float32))
   projected_points: np.ndarray = field(default_factory=lambda: np.empty((0, 2), dtype=np.float32))
+  glow_points: tuple = ()
 
 
 @dataclass
@@ -50,6 +82,7 @@ class LeadVehicle:
   radius: float = 0.0
   sz: float = 0.0
   fill_alpha: int = 0
+  width: float = 0.0
 
 
 @dataclass
@@ -68,7 +101,9 @@ class VisionDot:
 _VD_EASE = 0.4
 
 
-class ModelRenderer(Widget):
+class ModelRenderer(ModelRendererHelpers, Widget):
+  _lead_vehicle_type = LeadVehicle
+
   def __init__(self):
     Widget.__init__(self)
     self.chevron_metrics = ChevronMetrics()
@@ -86,13 +121,13 @@ class ModelRenderer(Widget):
     self._frame_transform: np.ndarray | None = None
     self._frame_transform_wide = False
     self._path_offset_z = HEIGHT_INIT[0]
-    self._counter = -1
-    self._camera_offset = ui_state.params.get("CameraOffset", return_default=True) if ui_state.active_bundle else 0.0
-    self._ambient_dots = bool(ui_state.params.get("AmbientTrackDots", return_default=True))
+    self._set_render_preferences(ui_state.render_preferences)
     # Initialize ModelPoints objects
     self._path = ModelPoints()
     self._lane_lines = [ModelPoints() for _ in range(4)]
     self._road_edges = [ModelPoints() for _ in range(2)]
+    self._backup_path = ModelPoints()
+    self._backup_alpha = FirstOrderFilter(0.0, 0.25, 1 / gui_app.target_fps)
     self._acceleration_x = np.empty((0,), dtype=np.float32)
 
     # Transform matrix (3x3 for car space to screen space)
@@ -121,7 +156,6 @@ class ModelRenderer(Widget):
 
   def _render(self, rect: rl.Rectangle):
     sm = ui_state.sm
-    driving_confidence.update()
 
     # Check if data is up-to-date
     if (sm.recv_frame["extrinsicsCalibration"] < ui_state.started_frame or
@@ -139,30 +173,28 @@ class ModelRenderer(Widget):
     live_calib = sm['extrinsicsCalibration']
     self._path_offset_z = get_render_path_height(live_calib)
 
-    if self._counter % 60 == 0:
-      self._camera_offset = ui_state.params.get("CameraOffset", return_default=True) if ui_state.active_bundle else 0.0
-      self._ambient_dots = bool(ui_state.params.get("AmbientTrackDots", return_default=True))
-    self._counter += 1
-
     if sm.updated['carParams']:
       self._longitudinal_control = sm['carParams'].openpilotLongitudinalControl
 
     model = sm['modelV2']
     radar_state = sm['radarState'] if sm.valid['radarState'] else None
     lead_one = radar_state.leadOne if radar_state else None
-    render_lead_indicator = self._longitudinal_control and radar_state is not None
+    render_lead_indicator = radar_state is not None
 
     # Update model data when needed
-    model_updated = sm.updated['modelV2']
+    preferences_changed = self._set_render_preferences(ui_state.render_preferences)
+    model_updated = sm.updated['modelV2'] or preferences_changed
     if model_updated or sm.updated['radarState'] or self._transform_dirty:
       if model_updated:
         self._update_raw_points(model)
+        self._update_backup_raw_points(sm['iqDriveModelData'].backupPath)
 
       path_x_array = self._path.raw_points[:, 0]
       if path_x_array.size == 0:
         return
 
       self._update_model(lead_one, path_x_array)
+      self._update_backup_path()
       if render_lead_indicator:
         self._update_leads(radar_state, path_x_array)
         if self._ambient_dots:
@@ -173,7 +205,9 @@ class ModelRenderer(Widget):
 
     # Draw elements
     self._draw_lane_lines()
+    self._draw_backup_path()
     self._draw_path(sm)
+    self._draw_stop_point(model)
 
     if self._ambient_dots:
       self._update_vision_dots(sm)
@@ -184,36 +218,6 @@ class ModelRenderer(Widget):
         self._draw_track_dots()
       self._draw_lead_indicator()
       self.chevron_metrics.draw_lead_status(sm, radar_state, self._rect, self._lead_vehicles)
-
-  def _update_raw_points(self, model):
-    """Update raw 3D points from model data"""
-    self._path.raw_points = np.array([model.position.x, np.array(model.position.y) + self._camera_offset, model.position.z], dtype=np.float32).T
-
-    for i, lane_line in enumerate(model.laneLines):
-      self._lane_lines[i].raw_points = np.array([lane_line.x, np.array(lane_line.y) + self._camera_offset, lane_line.z], dtype=np.float32).T
-
-    for i, road_edge in enumerate(model.roadEdges):
-      self._road_edges[i].raw_points = np.array([road_edge.x, np.array(road_edge.y) + self._camera_offset, road_edge.z], dtype=np.float32).T
-
-    self._lane_line_probs = np.array(model.laneLineProbs, dtype=np.float32)
-    self._road_edge_stds = np.array(model.roadEdgeStds, dtype=np.float32)
-    self._acceleration_x = np.array(model.acceleration.x, dtype=np.float32)
-
-  def _update_leads(self, radar_state, path_x_array):
-    """Update positions of lead vehicles"""
-    self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
-    leads = [radar_state.leadOne, radar_state.leadTwo]
-
-    for i, lead_data in enumerate(leads):
-      if lead_data and lead_data.status:
-        d_rel, y_rel, v_rel = lead_data.dRel, lead_data.yRel, lead_data.vRel
-        idx = self._get_path_length_idx(path_x_array, d_rel)
-
-        # Get z-coordinate from path at the lead vehicle position
-        z = self._path.raw_points[idx, 2] if idx < len(self._path.raw_points) else 0.0
-        point = self._map_to_screen(d_rel, -y_rel + self._camera_offset, z + self._path_offset_z)
-        if point:
-          self._lead_vehicles[i] = self._update_lead_vehicle(d_rel, v_rel, point, self._rect)
 
   def _update_track_dots(self, sm, radar_state, path_x_array):
     self._track_dots = []
@@ -229,7 +233,7 @@ class ModelRenderer(Widget):
 
       idx = self._get_path_length_idx(path_x_array, pt.dRel)
       z = self._path.raw_points[idx, 2] if idx < len(self._path.raw_points) else 0.0
-      point = self._map_to_screen(pt.dRel, -pt.yRel + self._camera_offset, z + self._path_offset_z)
+      point = self._map_to_screen(pt.dRel, -pt.yRel, z + self._path_offset_z)
       if point is None:
         continue
 
@@ -320,8 +324,15 @@ class ModelRenderer(Widget):
     # Update lane lines using raw points
     for i, lane_line in enumerate(self._lane_lines):
       lane_line.projected_points = self._map_line_to_polygon(
-        lane_line.raw_points, 0.025 * self._lane_line_probs[i], 0.0, max_idx, max_distance
+        lane_line.raw_points, (0.16 if i in (1, 2) else 0.12) * self._lane_line_probs[i], 0.0, max_idx, max_distance
       )
+      points = lane_line.projected_points
+      half = len(points) // 2
+      lane_line.glow_points = ()
+      if half and len(points) == 2 * half:
+        center = (points[:half] + points[half:][::-1]) * 0.5
+        center = np.concatenate((center, center[::-1]))
+        lane_line.glow_points = tuple(center + (points - center) * scale for scale in (2.2, 1.5))
 
     # Update road edges using raw points
     for road_edge in self._road_edges:
@@ -338,6 +349,16 @@ class ModelRenderer(Widget):
     )
 
     self._update_experimental_gradient()
+
+  def _update_backup_path(self):
+    backup_x = self._backup_path.raw_points[:, 0]
+    if backup_x.size == 0:
+      return
+    max_distance = np.clip(backup_x[-1], MIN_DRAW_DISTANCE, MAX_DRAW_DISTANCE)
+    self._backup_path.projected_points = self._map_line_to_polygon(
+      self._backup_path.raw_points, BACKUP_PATH_WIDTH, self._path_offset_z,
+      self._get_path_length_idx(backup_x, max_distance), max_distance, allow_invert=False
+    )
 
   def _update_experimental_gradient(self):
     """Pre-calculate experimental mode gradient colors"""
@@ -384,26 +405,28 @@ class ModelRenderer(Widget):
       stops=gradient_stops,
     )
 
+  def _update_leads(self, radar_state, path_x_array):
+    self._lead_vehicles = [LeadVehicle(), LeadVehicle()]
+    for i, lead in enumerate((radar_state.leadOne, radar_state.leadTwo)):
+      if not lead or not lead.status:
+        continue
+      distance = lead.dRel + LEAD_RADAR_TO_CAMERA
+      points = self._path.raw_points
+      z = float(np.interp(distance, points[:, 0], points[:, 2])) if len(points) else 0.0
+      point = self._map_to_screen(distance, -lead.yRel, z + self._path_offset_z)
+      if point is not None:
+        self._lead_vehicles[i] = self._update_lead_vehicle(lead.dRel, lead.vRel, point, self._rect)
+
   def _update_lead_vehicle(self, d_rel, v_rel, point, rect):
-    speed_buff, lead_buff = 10.0, 40.0
+    width = lead_line_width(d_rel, rect.width)
+    x = max(rect.x + width / 2, min(point[0], rect.x + rect.width - width / 2))
+    y = max(rect.y + 24, min(point[1], rect.y + rect.height - 24))
+    return LeadVehicle(center=(float(x), float(y)), width=width)
 
-    # Calculate fill alpha
-    fill_alpha = 0
-    if d_rel < lead_buff:
-      fill_alpha = 255 * (1.0 - (d_rel / lead_buff))
-      if v_rel < 0:
-        fill_alpha += 255 * (-1 * (v_rel / speed_buff))
-      fill_alpha = min(fill_alpha, 255)
-
-    # Calculate size and position. Distance-scaled orb radius (closer lead -> bigger orb).
-    sz = np.clip((25 * 30) / (d_rel / 3 + 30), 15.0, 30.0) * 2.35
-    radius = sz * 1.1
-    # point is in absolute screen coords; clamp against the rect's absolute bounds so the orb stays
-    # fully on-screen (rect-relative bounds mis-placed it when the camera pane is offset, e.g. split nav)
-    x = np.clip(point[0], rect.x + radius, rect.x + rect.width - radius)
-    y = np.clip(point[1], rect.y + radius, rect.y + rect.height - radius)
-
-    return LeadVehicle(center=(float(x), float(y)), radius=float(radius), sz=float(sz), fill_alpha=int(fill_alpha))
+  def _get_lane_line_color(self, probability: float, ego_lane: bool = True) -> rl.Color:
+    status = ui_state.status if ego_lane or ui_state.status == UIStatus.DISENGAGED else UIStatus.OVERRIDE
+    base = LANE_LINE_COLORS.get(status, LANE_LINE_COLORS[UIStatus.DISENGAGED])
+    return rl.Color(base.r, base.g, base.b, int(max(0.0, min(probability, 0.7)) * 255))
 
   def _draw_lane_lines(self):
     """Draw lane lines and road edges"""
@@ -411,17 +434,19 @@ class ModelRenderer(Widget):
       if lane_line.projected_points.size == 0:
         continue
 
-      alpha = np.clip(self._lane_line_probs[i], 0.0, 0.7)
-      color = rl.Color(255, 255, 255, int(alpha * 255))
+      ego_lane = i in (1, 2)
+      color = self._get_lane_line_color(float(self._lane_line_probs[i]), ego_lane)
+      if ego_lane and ui_state.status != UIStatus.DISENGAGED:
+        for points, opacity in zip(lane_line.glow_points, (0.10, 0.18), strict=False):
+          draw_polygon(self._rect, points, rl.Color(color.r, color.g, color.b, int(color.a * opacity)))
       draw_polygon(self._rect, lane_line.projected_points, color)
 
     for i, road_edge in enumerate(self._road_edges):
       if road_edge.projected_points.size == 0:
         continue
 
-      alpha = np.clip(1.0 - self._road_edge_stds[i], 0.0, 1.0)
-      color = rl.Color(255, 0, 0, int(alpha * 255))
-      draw_polygon(self._rect, road_edge.projected_points, color)
+      draw_polygon(self._rect, road_edge.projected_points,
+                   self._get_lane_line_color(float(1.0 - self._road_edge_stds[i]), ego_lane=False))
 
   def _draw_path(self, sm):
     """Draw path with dynamic coloring based on mode and throttle state."""
@@ -472,17 +497,50 @@ class ModelRenderer(Widget):
       dest = rl.Rectangle(cx, cy, r * 2.0, r * 2.0)
       rl.draw_texture_pro(self._lead_orb, src, dest, rl.Vector2(r, r), 0.0, rl.Color(255, 255, 255, 90))
 
+  def _draw_stop_point(self, model):
+    stop_point = getattr(model, 'stopPoint', None)
+    if stop_point is None or not stop_point.valid or stop_point.probability < STOP_POINT_MIN_PROBABILITY:
+      return
+
+    points = self._path.raw_points
+    if points.shape[0] < 2:
+      return
+
+    distance = float(stop_point.distance)
+    # the plan collapses to a couple of metres once the car is stopped, so gating on its reach
+    # hides the stop exactly when the model is surest of it; np.interp clamps past the last point
+    if not 0.0 < distance <= MAX_DRAW_DISTANCE:
+      return
+
+    # np.interp needs an increasing x, and once the car halts the plan collapses and its lateral
+    # values run to tens of metres; both would place the stop well off to the side of the road
+    forward = points[:, 0]
+    if np.all(np.diff(forward) > 0):
+      centre_y = float(np.interp(distance, forward, points[:, 1]))
+      centre_z = float(np.interp(distance, forward, points[:, 2]))
+    else:
+      centre_y, centre_z = 0.0, float(points[0, 2])
+    centre_y = float(np.clip(centre_y, -STOP_POINT_MAX_OFFSET, STOP_POINT_MAX_OFFSET))
+    centre_z += self._path_offset_z
+    near, far = distance, distance + STOP_POINT_DEPTH
+    corners = [self._map_to_screen(x, centre_y + offset, centre_z)
+               for x, offset in ((near, -STOP_POINT_HALF_WIDTH), (near, STOP_POINT_HALF_WIDTH),
+                                 (far, STOP_POINT_HALF_WIDTH), (far, -STOP_POINT_HALF_WIDTH))]
+    if any(corner is None for corner in corners):
+      return
+
+    alpha = int(np.clip(stop_point.probability, 0.0, 1.0) * 200)
+    draw_polygon(self._rect, np.array(corners, dtype=np.float32), rl.Color(*STOP_POINT_COLOR, alpha))
+
   def _draw_lead_indicator(self):
-    tint, _ = driving_confidence.colors()
-    src = rl.Rectangle(0, 0, self._lead_orb.width, self._lead_orb.height)
+    layers = LEAD_LINE_LAYERS.get(ui_state.status, LEAD_LINE_LAYERS[UIStatus.DISENGAGED])
     for lead in self._lead_vehicles:
       if lead.center is None:
         continue
       cx, cy = lead.center
-      r = lead.radius
-      alpha = int(np.clip(140 + 115 * (lead.fill_alpha / 255.0), 0, 255))
-      dest = rl.Rectangle(cx, cy, r * 2.0, r * 2.0)
-      rl.draw_texture_pro(self._lead_orb, src, dest, rl.Vector2(r, r), 0.0, rl.Color(tint.r, tint.g, tint.b, alpha))
+      for height, color in layers:
+        rl.draw_rectangle_rounded(rl.Rectangle(cx - lead.width / 2, cy - height / 2, lead.width, height),
+                                   1.0, 8, color)
 
   @staticmethod
   def _get_path_length_idx(pos_x_array: np.ndarray, path_distance: float) -> int:
@@ -491,22 +549,6 @@ class ModelRenderer(Widget):
       return 0
     indices = np.where(pos_x_array <= path_distance)[0]
     return indices[-1] if indices.size > 0 else 0
-
-  def _map_to_screen(self, in_x, in_y, in_z):
-    """Project a point in car space to screen space"""
-    input_pt = np.array([in_x, in_y, in_z])
-    pt = self._car_space_transform @ input_pt
-
-    if abs(pt[2]) < 1e-6:
-      return None
-
-    x, y = pt[0] / pt[2], pt[1] / pt[2]
-
-    clip = self._clip_region
-    if not (clip.x <= x <= clip.x + clip.width and clip.y <= y <= clip.y + clip.height):
-      return None
-
-    return (x, y)
 
   def _map_line_to_polygon(self, line: np.ndarray, y_off: float, z_off: float, max_idx: int, max_distance: float, allow_invert: bool = True) -> np.ndarray:
     """Convert 3D line to 2D polygon for rendering."""
@@ -538,7 +580,7 @@ class ModelRenderer(Widget):
     points_3d = points_3d.reshape(2 * N, 3)  # Shape: (2*N)x3
 
     # Transform all points to projected space in one operation
-    proj = self._car_space_transform @ points_3d.T  # Shape: 3x(2*N)
+    proj = self._project_car_points(points_3d)  # Shape: 3x(2*N)
     proj = proj.reshape(3, 2, N)
     left_proj = proj[:, 0, :]
     right_proj = proj[:, 1, :]
@@ -585,28 +627,3 @@ class ModelRenderer(Widget):
       right_screen = right_screen[:, keep]
 
     return np.vstack((left_screen.T, right_screen[:, ::-1].T)).astype(np.float32)
-
-  @staticmethod
-  def _hsla_to_color(h, s, l, a):
-    rgb = colorsys.hls_to_rgb(h, l, s)
-    return rl.Color(
-      int(rgb[0] * 255),
-      int(rgb[1] * 255),
-      int(rgb[2] * 255),
-      int(a * 255)
-    )
-
-  @staticmethod
-  def _blend_colors(begin_colors, end_colors, t):
-    if t >= 1.0:
-      return end_colors
-    if t <= 0.0:
-      return begin_colors
-
-    inv_t = 1.0 - t
-    return [rl.Color(
-      int(inv_t * start.r + t * end.r),
-      int(inv_t * start.g + t * end.g),
-      int(inv_t * start.b + t * end.b),
-      int(inv_t * start.a + t * end.a)
-    ) for start, end in zip(begin_colors, end_colors, strict=True)]

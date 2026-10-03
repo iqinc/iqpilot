@@ -43,4 +43,5 @@ def get_action_from_model(outputs: dict[str, np.ndarray], prev_action: log.Model
     desired_curvature = prev_action.desiredCurvature
   return log.ModelDataV2.Action(desiredCurvature=float(desired_curvature),
                                 desiredAcceleration=float(desired_accel),
-                                shouldStop=should_stop)
+                                shouldStop=should_stop,
+                                lateralActionSource="nativeAction" if "action" in outputs else "plan")

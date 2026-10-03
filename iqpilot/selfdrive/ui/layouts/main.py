@@ -152,7 +152,7 @@ class MainLayout(Widget):
     self._layouts[MainState.ROUTES].set_on_play(self.open_video)
     self._layouts[MainState.VIDEO].set_on_back(self.open_routes)
     self._layouts[MainState.ONROAD].set_click_callback(self._on_onroad_clicked)
-    device.add_interactive_timeout_callback(self._set_mode_for_state)
+    device.add_interactive_timeout_callback(self._on_interactive_timeout)
 
   def _update_layout_rects(self):
     self._sidebar_rect = rl.Rectangle(self._rect.x, self._rect.y, SIDEBAR_WIDTH, self._rect.height)
@@ -165,6 +165,20 @@ class MainLayout(Widget):
       self._prev_onroad = ui_state.started
 
       self._set_mode_for_state()
+
+  def _car_stationary(self) -> bool:
+    if not ui_state.sm.valid["carState"]:
+      return False
+    return ui_state.sm["carState"].vEgo < 0.1
+
+  def _on_interactive_timeout(self):
+    # The idle timeout normally returns the UI to the road view. Don't yank the user out of Settings
+    # while the car is stationary - e.g. a hybrid parked with the engine running to charge reads as
+    # onroad (ignition tracks the ICE), so this would otherwise make Settings unusable while parked.
+    # A moving car still returns to the road view.
+    if self._current_mode == MainState.SETTINGS and ui_state.started and self._car_stationary():
+      return
+    self._set_mode_for_state()
 
   def _set_mode_for_state(self):
     if ui_state.started:

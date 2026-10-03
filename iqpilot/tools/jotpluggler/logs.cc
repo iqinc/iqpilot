@@ -170,13 +170,13 @@ const char *level_label(const LogEntry &entry) {
 }
 
 ImVec4 level_text_color(const LogEntry &entry, bool active) {
-  if (active) return color_rgb(46, 54, 63);
-  if (entry.origin == LogOrigin::Alert) return color_rgb(50, 100, 200);
-  if (entry.level >= 50) return color_rgb(176, 26, 18);
-  if (entry.level >= 40) return color_rgb(200, 50, 40);
-  if (entry.level >= 30) return color_rgb(200, 130, 0);
-  if (entry.level >= 20) return color_rgb(80, 86, 94);
-  return color_rgb(126, 133, 141);
+  if (active) return ui_color(46, 54, 63);
+  if (entry.origin == LogOrigin::Alert) return ui_color(50, 100, 200);
+  if (entry.level >= 50) return ui_color(176, 26, 18);
+  if (entry.level >= 40) return ui_color(200, 50, 40);
+  if (entry.level >= 30) return ui_color(200, 130, 0);
+  if (entry.level >= 20) return ui_color(80, 86, 94);
+  return ui_color(126, 133, 141);
 }
 
 ImU32 row_bg_color(const LogEntry &entry, bool active) {
@@ -199,7 +199,7 @@ void draw_log_expansion_row(const LogEntry &entry) {
   ImGui::TableSetColumnIndex(2);
   ImGui::TextUnformatted(entry.func.empty() ? "" : entry.func.c_str());
   ImGui::TableSetColumnIndex(3);
-  ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(96, 104, 113));
+  ImGui::PushStyleColor(ImGuiCol_Text, ui_color(96, 104, 113));
   ImGui::TextWrapped("%s", entry.message.c_str());
   if (!entry.func.empty()) {
     ImGui::TextWrapped("func: %s", entry.func.c_str());
@@ -222,7 +222,7 @@ void draw_log_row(const LogEntry &entry,
   }
 
   const std::string time_text = std::string(active ? "\xE2\x96\xB6 " : "  ") + format_log_time(entry, state->logs.time_mode);
-  const auto clickable_text = [&](const char *id, const std::string &text, ImVec4 color = color_rgb(74, 80, 88)) {
+  const auto clickable_text = [&](const char *id, const std::string &text, ImVec4 color = ui_color(74, 80, 88)) {
     ImGui::PushID(id);
     ImGui::PushStyleColor(ImGuiCol_Text, color);
     ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
@@ -363,7 +363,7 @@ void draw_logs_tab(AppSession *session, UiState *state) {
 
   if (route_data.logs.empty()) {
     ImGui::Spacing();
-    ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(116, 124, 133));
+    ImGui::PushStyleColor(ImGuiCol_Text, ui_color(116, 124, 133));
     ImGui::TextWrapped("%s", loading_logs ? "Loading logs..." : "No text logs available for this route.");
     ImGui::PopStyleColor();
     return;

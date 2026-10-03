@@ -62,9 +62,11 @@ PROCS = {
   "system.timed": 0,
   "selfdrive.pandad.pandad": 0,
   "iqpilot_private.konn3kt.uploaderd.iquploaderd": 15.0,
+  "iqpilot_private.konn3kt.telemetry.iqtelemetryd": 0.5,
   "system.loggerd.deleter": 1.0,
   "./pandad": 19.0,
   "system.qcomgpsd.qcomgpsd": 1.0,
+  "system.phonegps.phonegpsd": 1.0,
 }
 
 TIMINGS = {

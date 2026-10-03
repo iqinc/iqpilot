@@ -1,9 +1,5 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
-
-IQ.Pilot's controls-side extension layer. Controls mixes this in to gain the extra
-sub/pub services, the IQ car-control message (radar blend, SLC set-speed sync, AOL
-guidance continuity) and the lateral-engage gate, without touching stock controlsd.
 """
 import time
 
@@ -52,7 +48,6 @@ class IQControlsLayer(InferenceStateBase):
     except Exception:
       return False
 
-  # --- periodic param refresh (throttled to a few Hz) --------------------------
   def refresh_iq_params(self, sm: messaging.SubMaster) -> None:
     now = time.monotonic()
     if now - self._next_param_refresh <= _PARAM_REFRESH_S:
@@ -64,7 +59,6 @@ class IQControlsLayer(InferenceStateBase):
     self.radar_manager.read_params()
     self._next_param_refresh = now
 
-  # --- lateral engage gate -----------------------------------------------------
   def iq_lateral_allowed(self, sm: messaging.SubMaster) -> bool:
     if self.blinker_pause_lateral.update(sm['carState']):
       return False
@@ -81,7 +75,6 @@ class IQControlsLayer(InferenceStateBase):
   def _lead_snapshot(ld: log.RadarState.LeadData) -> dict:
     return {field: getattr(ld, field) for field in _LEAD_FIELDS}
 
-  # --- build + publish the IQ car-control message ------------------------------
   def _compose_iq_carcontrol(self, sm: messaging.SubMaster) -> custom.IQCarControl:
     CC_IQ = custom.IQCarControl.new_message()
     lp = sm['vehicleParameters']

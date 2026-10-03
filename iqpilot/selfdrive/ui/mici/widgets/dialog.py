@@ -5,7 +5,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 import abc
 import math
 import pyray as rl
-from typing import Union
 from collections.abc import Callable
 from typing import cast
 from iqpilot.system.ui.widgets import Widget, NavWidget
@@ -17,7 +16,6 @@ from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, Mou
 from iqpilot.system.ui.widgets.scroller import Scroller
 from iqpilot.system.ui.widgets.slider import RedBigSlider, BigSlider
 from iqpilot.common.filter_simple import FirstOrderFilter
-from iqpilot.selfdrive.ui.mici.widgets.button import BigButton
 from iqpilot.selfdrive.ui.mici.widgets.side_button import SideButton
 
 DEBUG = False
@@ -402,16 +400,3 @@ class BigMultiOptionDialog(BigDialogBase):
   def _render(self, _):
     super()._render(_)
     self._scroller.render(self._rect)
-
-
-
-class BigDialogButton(BigButton):
-  def __init__(self, text: str, value: str = "", icon: Union[str, rl.Texture] = "", description: str = ""):
-    super().__init__(text, value, icon)
-    self._description = description
-
-  def _handle_mouse_release(self, mouse_pos: MousePos):
-    super()._handle_mouse_release(mouse_pos)
-
-    dlg = BigDialog(self.text, self._description)
-    gui_app.push_widget(dlg)

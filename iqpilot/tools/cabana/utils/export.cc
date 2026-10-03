@@ -42,4 +42,4 @@ void exportSignalsToCSV(const std::string &file_name, const MessageId &msg_id) {
   }
 }
 
-}  // namespace utils
+}

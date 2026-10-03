@@ -2,8 +2,8 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 """
 
-import os
 import re
+import threading
 import time
 
 import pyray as rl
@@ -17,16 +17,26 @@ from iqpilot.system.ui.lib.application import gui_app
 from iqpilot.system.ui.widgets.scroller import NavScroller
 from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl, GreyBigButton
 from iqpilot.selfdrive.ui.mici.widgets.stock_dialog import BigConfirmationDialog
+from iqpilot.selfdrive.ui.mici.widgets.dialog import BigMultiOptionDialog
 from iqpilot.selfdrive.ui.mici.layouts.settings.iq_widgets import MappedParamToggle
 
-from iqpilot.selfdrive.iqmodeld.models.helpers import select_default_model, is_default_bundle
+from iqpilot.selfdrive.iqmodeld.drive_profile import (
+  DRIVE_PROFILE_LABELS,
+  DRIVE_PROFILE_PARAM_VALUES,
+  active_model_declares_drive_profile,
+  arrival_time_choices,
+  desired_arrival_label,
+  drive_profile_name,
+  profile_label,
+)
+from iqpilot.selfdrive.iqmodeld.models.helpers import select_default_model, is_default_bundle, get_selected_model_name, get_cached_model_bundles
 from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import CUSTOM_MODEL_PATH
+from iqpilot.selfdrive.iqmodeld.model_cache import bundle_matches, clear_model_cache, model_cache_size, remove_bundle_files
 from iqpilot.system.ui.lib.multilang import tr
 
-_DELAY_OPTIONS = ["0.05s", "0.10s", "0.15s", "0.20s", "0.25s", "0.30s", "0.35s", "0.40s", "0.45s", "0.50s"]
-_DELAY_VALUES = [0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50]
+_DELAY_OPTIONS = [f"{v / 100:.2f}s" for v in range(5, 51)]
+_DELAY_VALUES = [v / 100 for v in range(5, 51)]
 
-_LANE_TURN_VALUES = [15.0, 19.0, 20.0]
 
 _DL = custom.IQModelManager.DownloadStatus
 _ACTIVE_BUNDLE_KEY = "ModelManager_ActiveBundle"
@@ -36,6 +46,60 @@ _RUNNER_CACHE_KEY = "ModelRunnerTypeCache"
 
 def _display_model_name(bundle) -> str:
   return bundle.internalName if getattr(bundle, "internalName", "") else bundle.displayName
+
+
+_BIG_OPTIONS_TTL = 3.0
+_big_options_cache: tuple[float, list[tuple[str, str]]] = (0.0, [])
+_big_options_reload = threading.Lock()
+
+
+def _load_big_options() -> list[tuple[str, str]]:
+  global _big_options_cache
+  try:
+    from iqpilot.selfdrive.iqmodeld.emac_model_meta import big_models
+    options = big_models(ui_state.params)
+  except Exception:
+    options = []
+  _big_options_cache = (time.monotonic(), options)
+  return options
+
+
+def _reload_big_options_async() -> None:
+  if not _big_options_reload.acquire(blocking=False):
+    return
+
+  def worker():
+    try:
+      _load_big_options()
+    finally:
+      _big_options_reload.release()
+  threading.Thread(target=worker, daemon=True).start()
+
+
+def _big_options(fresh: bool = False) -> list[tuple[str, str]]:
+  cached_at, cached = _big_options_cache
+  if fresh or not cached_at:
+    return _load_big_options()
+  if time.monotonic() - cached_at >= _BIG_OPTIONS_TTL:
+    _reload_big_options_async()
+  return cached
+
+
+def _big_label(key: str) -> str:
+  for name, display in _big_options():
+    if name == key:
+      return display
+  return key or "lebrowski"
+
+
+def _refresh_big_catalog() -> None:
+  def worker():
+    try:
+      from iqpilot.selfdrive.iqmodeld.emac_model_meta import refresh_catalog
+      refresh_catalog(ui_state.params)
+    except Exception:
+      pass
+  threading.Thread(target=worker, daemon=True).start()
 
 
 class _ModelSelectPanel(NavScroller):
@@ -87,9 +151,15 @@ class _ModelButton(BigButton):
 
 
 class ModelsLayoutMici(NavScroller):
+  REFRESH_PERIOD = 0.25
+
   def __init__(self):
     super().__init__()
+    self._last_refresh_t = 0.0
+    self._redownload_ready = False
     self._last_cache_t = 0.0
+    self._last_drive_profile_check_t = 0.0
+    self._drive_profile_supported = False
     self._download_status = None
     self._prev_download_status = None
     self._clear_icon = gui_app.texture("icons_mici/settings/developer_icon.png", 56, 56)
@@ -99,16 +169,24 @@ class ModelsLayoutMici(NavScroller):
     self._current = BigButton(tr("active model"))
     self._current.set_click_callback(self._show_folders)
 
+    self._big = BigButton(tr("big model"))
+    self._big.set_click_callback(self._show_big_models)
+
+    self._small_on_mac = BigParamControl(tr("active model on eMac"), "IQEmacSmallModel", toggle_callback=self._small_on_mac_toggled)
+
+    self._drive_profile = BigButton(tr("Drive profile"), scroll=True)
+    self._drive_profile.set_click_callback(self._show_drive_profiles)
+
+    self._desired_arrival = BigButton(tr("Desired arrival"), scroll=True)
+    self._desired_arrival.set_click_callback(self._show_arrival_times)
+
     self._cancel = BigButton(tr("stop download"))
     self._cancel.set_click_callback(self._cancel_model_request)
     self._cancel.set_visible(self._is_downloading)
 
     self._redownload = BigButton(tr("redownload model"))
     self._redownload.set_click_callback(self._confirm_redownload_model)
-    self._redownload.set_enabled(self._can_redownload)
-
-    self._refresh = BigButton(tr("reload model list"))
-    self._refresh.set_click_callback(lambda: ui_state.params.put("ModelManager_LastSyncTime", 0))
+    self._redownload.set_enabled(lambda: self._redownload_ready)
 
     self._supercombo = GreyBigButton(tr("combined model"))
     self._supercombo.set_visible(False)
@@ -126,11 +204,11 @@ class ModelsLayoutMici(NavScroller):
     self._sw_delay.set_visible(lambda: not self._steer_delay._checked)
 
     self._lane_turn = BigParamControl(tr("low-speed turn planning"), "IQLaneTurnDesire")
-    self._lane_speed = MappedParamToggle(tr("lane turn speed"), "IQLaneTurnValue", [tr("slow"), tr("normal"), tr("fast")], _LANE_TURN_VALUES)
-    self._lane_speed.set_visible(lambda: self._lane_turn._checked)
 
-    self._main_items = [self._current, self._cancel, self._supercombo, self._vision, self._policy, self._redownload, self._refresh, self._clear,
-                        self._steer_delay, self._sw_delay, self._lane_turn, self._lane_speed]
+    self._main_items = [self._current, self._big, self._small_on_mac, self._drive_profile, self._desired_arrival,
+                        self._cancel, self._supercombo, self._vision, self._policy,
+                        self._redownload, self._clear,
+                        self._steer_delay, self._sw_delay, self._lane_turn]
     self._scroller.add_widgets(self._main_items)
 
   @property
@@ -159,60 +237,7 @@ class ModelsLayoutMici(NavScroller):
 
   @staticmethod
   def _calculate_cache_size() -> float:
-    if os.path.exists(CUSTOM_MODEL_PATH):
-      return sum(os.path.getsize(os.path.join(CUSTOM_MODEL_PATH, f)) for f in os.listdir(CUSTOM_MODEL_PATH)) / (1024 ** 2)
-    return 0.0
-
-  @staticmethod
-  def _bundle_index(bundle) -> int | None:
-    try:
-      return int(getattr(bundle, "index", -1))
-    except (TypeError, ValueError):
-      return None
-
-  @classmethod
-  def _bundle_matches(cls, left, right) -> bool:
-    if left is None or right is None:
-      return False
-
-    left_index = cls._bundle_index(left)
-    right_index = cls._bundle_index(right)
-    if left_index is not None and right_index is not None and left_index == right_index:
-      return True
-
-    for attr in ("ref", "internalName", "displayName"):
-      left_value = getattr(left, attr, None)
-      if left_value and left_value == getattr(right, attr, None):
-        return True
-    return False
-
-  @staticmethod
-  def _safe_model_path(filename: str) -> str | None:
-    if not filename or os.path.basename(filename) != filename:
-      return None
-
-    root = os.path.realpath(CUSTOM_MODEL_PATH)
-    path = os.path.realpath(os.path.join(root, filename))
-    try:
-      if os.path.commonpath([root, path]) != root:
-        return None
-    except ValueError:
-      return None
-    return path
-
-  def _remove_bundle_files(self, bundle) -> None:
-    for model in getattr(bundle, "models", []) or []:
-      for artifact in (getattr(model, "metadata", None), getattr(model, "artifact", None)):
-        filename = getattr(artifact, "fileName", "") if artifact is not None else ""
-        path = self._safe_model_path(filename)
-        if path is None:
-          continue
-        for candidate in (path, f"{path}.download"):
-          try:
-            if os.path.isfile(candidate):
-              os.remove(candidate)
-          except OSError:
-            pass
+    return model_cache_size(CUSTOM_MODEL_PATH) / (1024 ** 2)
 
   def _group_folders(self, bundles):
     folders: dict = {}
@@ -237,8 +262,18 @@ class ModelsLayoutMici(NavScroller):
 
   def _confirm_clear_cache(self):
     gui_app.push_widget(BigConfirmationDialog(tr("slide to\nclear cache"), self._clear_icon,
-                                              lambda: ui_state.params.put_bool("ModelManager_ClearCache", True),
+                                              self._clear_model_cache,
                                               red=True))
+
+  def _clear_model_cache(self) -> None:
+    keep = set()
+    active = getattr(self.model_manager, "activeBundle", None)
+    for model in getattr(active, "models", []) or []:
+      for artifact in (getattr(model, "metadata", None), getattr(model, "artifact", None)):
+        if artifact is not None and getattr(artifact, "fileName", ""):
+          keep.add(artifact.fileName)
+    clear_model_cache(CUSTOM_MODEL_PATH, keep)
+    self._clear.set_value(f"{self._calculate_cache_size():.2f} MB")
 
   def _redownload_target_bundle(self):
     try:
@@ -286,8 +321,8 @@ class ModelsLayoutMici(NavScroller):
     def _redownload():
       target = self._redownload_target_bundle()
       if target is not None:
-        self._remove_bundle_files(target)
-        if self._bundle_matches(getattr(self.model_manager, "activeBundle", None), target):
+        remove_bundle_files(CUSTOM_MODEL_PATH, target)
+        if bundle_matches(getattr(self.model_manager, "activeBundle", None), target):
           ui_state.params.remove(_ACTIVE_BUNDLE_KEY)
           ui_state.params.remove(_RUNNER_CACHE_KEY)
       ui_state.params.put(_DOWNLOAD_INDEX_KEY, index)
@@ -296,7 +331,8 @@ class ModelsLayoutMici(NavScroller):
     gui_app.push_widget(BigConfirmationDialog(tr("slide to\nredownload"), self._redownload_icon, _redownload, red=True))
 
   def _show_folders(self):
-    bundles = list(self.model_manager.availableBundles)
+    self._reload_model_lists()
+    bundles = list(self.model_manager.availableBundles) or get_cached_model_bundles(ui_state.params)
     favorites = self._read_favorites()
     btns = []
 
@@ -326,6 +362,77 @@ class ModelsLayoutMici(NavScroller):
     btns = [_ModelButton(b, self._select_model, self._toggle_favorite, b.ref in favorites) for b in bundles]
     gui_app.push_widget(_ModelSelectPanel(btns))
 
+  def _reload_model_lists(self):
+    ui_state.params.put("ModelManager_LastSyncTime", 0)
+    _refresh_big_catalog()
+
+  def _show_big_models(self):
+    _refresh_big_catalog()
+    options = _big_options(fresh=True)
+    off = BigButton(tr("Off"))
+    off.set_click_callback(lambda: self._select_big(None))
+    btns = [off]
+    for key, display in options:
+      btn = BigButton(display)
+      btn.set_click_callback(lambda k=key: self._select_big(k))
+      btns.append(btn)
+    gui_app.push_widget(_ModelSelectPanel(btns))
+
+  def _select_big(self, key):
+    if key is None:
+      ui_state.params.put_bool("IQEmacEnabled", ui_state.params.get_bool("IQEmacSmallModel"))
+    else:
+      ui_state.params.put("IQEmacModel", key)
+      ui_state.params.put_bool("IQEmacEnabled", True)
+    gui_app.pop_widgets_to(self)
+
+  def _big_setup_progress(self) -> float | None:
+    p = ui_state.params
+    if p.get_bool("IQEmacEnabled"):
+      raw = p.get("MacModelDownloadProgress")
+      loading = not p.get_bool("MacModelReady")
+    else:
+      raw = p.get("UsbGpuSetupProgress")
+      loading = p.get_bool("UsbGpuLoading") and not p.get_bool("UsbGpuCompiled")
+    if not loading:
+      return None
+    try:
+      return max(0.0, min(1.0, float(raw)))
+    except (TypeError, ValueError):
+      return None
+
+  def _small_on_mac_toggled(self, checked: bool) -> None:
+    p = ui_state.params
+    if checked:
+      p.put_bool("IQEmacEnabled", True)
+    else:
+      p.put_bool("IQEmacEnabled", bool(p.get("IQEmacModel")))
+
+  def _small_on_mac_value(self) -> str:
+    try:
+      active = self.model_manager.activeBundle
+      name = _display_model_name(active) if active and active.ref else ""
+    except Exception:
+      name = ""
+    return f"{name} ({tr('eMac')})" if name else tr("active model")
+
+  def _big_model_value(self) -> str:
+    p = ui_state.params
+    dock = bool(getattr(ui_state.sm["deviceState"], "egpuDockPresent", False))
+    if p.get_bool("IQEmacEnabled") and p.get_bool("IQEmacSmallModel"):
+      progress = self._big_setup_progress()
+      value = self._small_on_mac_value()
+      return f"{value} {int(progress * 100)}%" if progress is not None and progress < 1.0 else value
+    if not p.get_bool("IQEmacEnabled") and not dock:
+      return tr("Off")
+    key = p.get("IQEmacModel")
+    key = key.decode() if isinstance(key, bytes) else (key or "")
+    label = _big_label(key)
+    progress = self._big_setup_progress()
+    if progress is not None and progress < 1.0:
+      return f"{label} {int(progress * 100)}%"
+    return label
+
   def _generation_changed(self, bundle) -> bool:
     try:
       active = self.model_manager.activeBundle
@@ -354,16 +461,70 @@ class ModelsLayoutMici(NavScroller):
       ui_state.params.remove("LiveTorqueParameters")
     gui_app.push_widget(BigConfirmationDialog(tr("slide to\nreset calibration"), self._reset_icon, _reset))
 
+  def _show_drive_profiles(self):
+    labels = [tr(label) for label in DRIVE_PROFILE_LABELS]
+    current = tr(profile_label(drive_profile_name(ui_state.params)))
+    dialog = BigMultiOptionDialog(
+      labels,
+      current,
+      right_btn="check",
+      right_btn_callback=lambda: self._set_drive_profile(labels, dialog.get_selected_option()),
+    )
+    gui_app.set_modal_overlay(dialog)
+
+  def _set_drive_profile(self, labels: list[str], selected: str) -> None:
+    if selected in labels:
+      ui_state.params.put("IQDriveProfile", DRIVE_PROFILE_PARAM_VALUES[labels.index(selected)])
+
+  def _show_arrival_times(self):
+    choices = arrival_time_choices()
+    labels = [label for label, _ in choices]
+    current = desired_arrival_label(ui_state.params)
+    dialog = BigMultiOptionDialog(
+      labels,
+      current if current in labels else labels[0],
+      right_btn="check",
+      right_btn_callback=lambda: self._set_desired_arrival(choices, dialog.get_selected_option()),
+    )
+    gui_app.set_modal_overlay(dialog)
+
+  @staticmethod
+  def _set_desired_arrival(choices: list[tuple[str, str]], selected: str) -> None:
+    value = next((value for label, value in choices if label == selected), "")
+    if value:
+      ui_state.params.put("IQDriveDesiredArrival", value)
+    else:
+      ui_state.params.remove("IQDriveDesiredArrival")
+
   def _update_state(self):
     super()._update_state()
 
+    now = time.monotonic()
+    if now - self._last_refresh_t < self.REFRESH_PERIOD:
+      return
+    self._last_refresh_t = now
+    self._refresh_values(now)
+
+  def _refresh_values(self, now: float):
     self._handle_bundle_download_progress()
     self._current.set_value(self._current_model_value())
     self._current.set_enabled(ui_state.is_offroad())
+    self._big.set_value(self._big_model_value())
     target = self._redownload_target_bundle()
     self._redownload.set_value(_display_model_name(target) if target else "")
+    self._redownload_ready = self._can_redownload()
 
-    now = time.monotonic()
+    if now - self._last_drive_profile_check_t > 1.0:
+      self._last_drive_profile_check_t = now
+      self._drive_profile_supported = active_model_declares_drive_profile(ui_state.params)
+    self._drive_profile.set_enabled(self._drive_profile_supported)
+    self._drive_profile.set_value(
+      tr(profile_label(drive_profile_name(ui_state.params))) if self._drive_profile_supported
+      else tr("The active model does not support drive profiles.")
+    )
+    self._desired_arrival.set_visible(drive_profile_name(ui_state.params) == "eta")
+    self._desired_arrival.set_enabled(self._drive_profile_supported)
+    self._desired_arrival.set_value(desired_arrival_label(ui_state.params))
     if now - self._last_cache_t > 1.0:
       self._last_cache_t = now
       self._clear.set_value(f"{self._calculate_cache_size():.1f} MB")
@@ -448,7 +609,8 @@ class ModelsLayoutMici(NavScroller):
   def _update_steer_delay_subtext(self):
     if self._steer_delay._checked:
       try:
-        self._steer_delay.set_value(f"measured {ui_state.sm['lateralDelay'].lateralDelay:.3f} s")
+        measured = ui_state.measured_steer_delay()
+        self._steer_delay.set_value("calibrating" if measured is None else f"measured {measured:.3f} s")
       except Exception:
         self._steer_delay.set_value("")
       return
@@ -462,18 +624,7 @@ class ModelsLayoutMici(NavScroller):
       self._steer_delay.set_value(f"+{sw:.2f} s offset")
 
   def _active_model_name(self) -> str:
-    if not self._has_active_bundle_param():
-      return "Default (CD210)"
-
-    try:
-      active = self.model_manager.activeBundle
-      if is_default_bundle(active):
-        return active.displayName or "Default (CD210)"
-      if active and active.ref:
-        return _display_model_name(active)
-    except Exception:
-      pass
-    return "Default (CD210)"
+    return tr(get_selected_model_name(ui_state.params))
 
   def _download_progress_text(self, bundle=None) -> str:
     bundle = bundle or getattr(self.model_manager, "selectedBundle", None)
@@ -495,5 +646,7 @@ class ModelsLayoutMici(NavScroller):
 
   def show_event(self):
     super().show_event()
-    for w in (self._steer_delay, self._sw_delay, self._lane_turn, self._lane_speed):
+    self._last_refresh_t = 0.0
+    _reload_big_options_async()
+    for w in (self._steer_delay, self._sw_delay, self._lane_turn, self._small_on_mac):
       w.refresh()

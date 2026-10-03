@@ -3,11 +3,6 @@ from tinygrad.device import Compiler
 from tinygrad.helpers import getenv, capstone_flatdump
 from tinygrad.runtime.support.elf import jit_loader
 
-def _block_sigusr2():
-  # msgq notifies readers via pthread_kill(SIGUSR2) by cached TID; a recycled TID can land
-  # the signal on this clang child and kill the compile mid-run (openpilot modeld crash)
-  if sys.platform == "linux": signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR2})
-
 class ClangCompiler(Compiler):
   def __init__(self, arch:list[str], cachekey="compile_clang_jit"):
     assert len(arch) >= 2, f"invalid arch string: {','.join(arch)!r}, expected '<arch>,<cpu>,[<feats>]' (eg. 'x86_64,znver2')"
@@ -24,9 +19,16 @@ class ClangCompiler(Compiler):
   def compile_to_obj(self, src:str) -> bytes:
     """Compile C source to ELF object file (before linking)."""
     # -fno-math-errno is required for __builtin_sqrt to become an instruction instead of a function call
-    return subprocess.check_output([getenv("CC", 'clang'), '-c', '-x', 'c', '-O2', '-fPIC', '-ffreestanding', '-fno-math-errno', '-nostdlib',
-                                    '-fno-ident', f'--target={self.arch}-none-unknown-elf', *self.args, '-', '-o', '-'], input=src.encode('utf-8'),
-                                   preexec_fn=_block_sigusr2 if sys.platform == "linux" else None)
+    # Block in the calling thread before spawning: msgq notifications can keep
+    # interrupting fork while it copies GPU mappings. A preexec_fn runs too late
+    # and also disables subprocess's vfork path. The child inherits this mask,
+    # protecting clang from notifications to recycled reader TIDs after exec.
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGUSR2}) if sys.platform == "linux" else None
+    try:
+      return subprocess.check_output([getenv("CC", 'clang'), '-c', '-x', 'c', '-O2', '-fPIC', '-ffreestanding', '-fno-math-errno', '-nostdlib',
+                                     '-fno-ident', f'--target={self.arch}-none-unknown-elf', *self.args, '-', '-o', '-'], input=src.encode('utf-8'))
+    finally:
+      if old_mask is not None: signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
 
   def compile(self, src:str) -> bytes: return jit_loader(self.compile_to_obj(src))
 

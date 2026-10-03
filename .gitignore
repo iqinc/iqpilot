@@ -2,11 +2,8 @@ venv/
 .venv/
 !artifacts/runtime/ble/rootfs/usr/local/venv/
 !artifacts/runtime/ble/rootfs/usr/local/venv/**
-# Runtime install dir for proprietary bundles — rewritten by ensure_private_installed
-# on every service start. Tracking anything under it keeps the working tree
-# perpetually dirty and sends the updater into an apply/restart loop that kills
-# ble-transportd (and comma.service) every few minutes.
 /.iqpilot/
+/.iqpilot-install.lock
 /.iqpilot-package-lock-sha256
 /gi
 /k3_log.txt
@@ -70,6 +67,7 @@ compile_commands.json
 compare_runtime*.html
 
 iqpilot/selfdrive/pandad/pandad
+iqpilot/selfdrive/pandad/tests/test_panda_safety
 iqpilot/cereal/services.h
 iqpilot/cereal/gen
 iqpilot/cereal/messaging/bridge
@@ -100,7 +98,6 @@ iqpilot/modeld*/thneed/compile
 iqpilot/modeld*/models/*.thneed
 iqpilot/modeld*/models/*.pkl
 
-# openpilot log files
 *.bz2
 *.zst
 
@@ -111,7 +108,6 @@ build/
 poetry.toml
 Pipfile
 
-### VisualStudioCode ###
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
@@ -119,14 +115,10 @@ Pipfile
 !.vscode/extensions.json
 !.vscode/*.code-snippets
 
-# Local History for Visual Studio Code
 .history/
 
-# Built Visual Studio Code Extensions
 *.vsix
 
-### VisualStudioCode Patch ###
-# Ignore all local history of files
 .history
 .ionide
 
@@ -139,13 +131,13 @@ TASK.md
 /artifacts/iqpilot_alc_private/python/iqpilot_private/konn3kt/iqlvbs/alc_handshake.cpython-312-aarch64-linux-gnu.so
 /artifacts/iqpilot_alc_bundle.json
 /iqpilot/selfdrive/iqlocd/iqlocd
+/iqpilot/selfdrive/iqlocd/tools/relocalize_rlog
 /iqpilot/selfdrive/iqlocd/models/generated/car.cpp
 /iqpilot/selfdrive/iqlocd/models/generated/car.h
 /iqpilot/tools/scripts/debug/
 /iqpilot/tools/scripts/plans/
 !scripts/iqpilot/iqos_usrlocal_larch64.tar.zst
 
-# pretty-build capture logs (model compile / mpc + dbc codegen stdout+stderr)
 *_tinygrad.pkl.log
 *_metadata.pkl.log
 iqpilot/selfdrive/controls/lib/*_mpc_lib/gen.log
@@ -153,7 +145,6 @@ iqpilot/tools/cabana/dbc/*.json.log
 iqpilot/selfdrive/iqlocd/models/generated/
 osmaps_build/
 
-# --- local scratch/debug + large model artifacts (never commit) ---
 /infinite_driver/
 /konn3kt_private/
 /.mull/
@@ -171,20 +162,12 @@ osmaps_build/
 /mcd_*.py
 /shot_*.py
 /verify_crc.py
-/CODEX_HANDOFF_*.md
-/SUNNYPILOT_REMEDIATION_PLAN.md
 /prompt.md
-/iqos44_bluetooth_gamepad_spec.md
 iqpilot/selfdrive/ui/tests/test_ui/nav_demo_report/
 **/__pycache__/
 *.pyc
 *.mlpackage/
 
-
-# fetcher: closed-source precompiled component — ship only the obfuscated .so
-/iqpilot/models_private_src/fetcher.py
-
-# build output: a signed .app is a 233-file sealed bundle, never track a subset
 iqpilot/tools/iqmacd/macos/dist/IQ eMac.app/
 iqpilot/tools/iqmacd/macos/dist/.stage/
 iqpilot/tools/iqmacd/macos/dist/.DS_Store
@@ -192,3 +175,8 @@ iqpilot/tools/iqmacd/macos/dist/.DS_Store
 iqpilot/tools/iqmacd/macos/dist/
 
 iqpilot/tools/scripts/iqemac/clips/README.md
+
+iqpilot/tools/iqpilot/big_hud_preview.py
+artifacts/monrovia_runtime_packages/
+artifacts/iqpilot_*_private/consumer.challenge
+/docs/

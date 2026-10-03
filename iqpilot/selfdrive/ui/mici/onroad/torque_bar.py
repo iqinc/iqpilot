@@ -157,6 +157,11 @@ class TorqueBar(Widget):
     self._always = always
     self._torque_filter = FirstOrderFilter(0, 0.1, 1 / gui_app.target_fps)
     self._torque_line_alpha_filter = FirstOrderFilter(0.0, 0.1, 1 / gui_app.target_fps)
+    self._visibility_filter = FirstOrderFilter(1.0, 0.12, 1 / gui_app.target_fps)
+    self._visible = True
+
+  def set_visible(self, visible: bool) -> None:
+    self._visible = visible
 
   @staticmethod
   def resting_bottom(rect: rl.Rectangle, scale: float = 1.0) -> float:
@@ -190,6 +195,7 @@ class TorqueBar(Widget):
       self._torque_filter.update(-ui_state.sm['carOutput'].actuatorsOutput.torque)
 
   def _render(self, rect: rl.Rectangle) -> None:
+    self._visibility_filter.update(1.0 if self._visible else 0.0)
     # adjust y pos with torque
     torque_line_offset = np.interp(abs(self._torque_filter.x), [0.5, 1], [TORQUE_REST_OFFSET * self._scale, 26 * self._scale])
     torque_line_height = np.interp(abs(self._torque_filter.x), [0.5, 1], [TORQUE_REST_HEIGHT * self._scale, 56 * self._scale])
@@ -201,9 +207,10 @@ class TorqueBar(Widget):
       self._torque_line_alpha_filter.update(1.0)
 
     torque_line_bg_alpha = np.interp(abs(self._torque_filter.x), [0.5, 1.0], [0.25, 0.5])
-    torque_line_bg_color = rl.Color(255, 255, 255, int(255 * torque_line_bg_alpha * self._torque_line_alpha_filter.x))
+    visible_alpha = self._torque_line_alpha_filter.x * self._visibility_filter.x
+    torque_line_bg_color = rl.Color(255, 255, 255, int(255 * torque_line_bg_alpha * visible_alpha))
     if ui_state.status not in (UIStatus.ENGAGED, UIStatus.LAT_ONLY) and not self._demo:
-      torque_line_bg_color = rl.Color(255, 255, 255, int(255 * 0.15 * self._torque_line_alpha_filter.x))
+      torque_line_bg_color = rl.Color(255, 255, 255, int(255 * 0.15 * visible_alpha))
 
     # draw curved line polygon torque bar
     torque_line_radius = 1200 * self._scale
@@ -221,7 +228,10 @@ class TorqueBar(Widget):
     offset = np.array([cx, cy], dtype=np.float32)
 
     # draw bg torque indicator line
-    bg_pts = arc_bar_pts(mid_r, torque_line_height, torque_start_angle, torque_end_angle, cap_radius=7 * self._scale) + offset
+    bg_pts = arc_bar_pts(
+      mid_r, torque_line_height, torque_start_angle, torque_end_angle,
+      cap_radius=7 * self._scale, max_points=384, cap_segs=16, px_per_seg=1.0,
+    ) + offset
     draw_polygon(rect, bg_pts, color=torque_line_bg_color)
 
     # draw torque indicator line
@@ -236,20 +246,19 @@ class TorqueBar(Widget):
     else:
       end_grad_pt = (cx * (1 - 0.65) + (max(bg_pts[:, 0]) * 0.65)) / rect.width
 
-    # Fade to the requested accent colors as we approach max torque.
     start_color = blend_colors(
-      rl.Color(255, 255, 255, int(255 * 0.9 * self._torque_line_alpha_filter.x)),
-      rl.Color(255, 200, 0, int(255 * self._torque_line_alpha_filter.x)),  # yellow (match stock)
+      rl.Color(255, 255, 255, int(255 * 0.9 * visible_alpha)),
+      rl.Color(255, 200, 0, int(255 * visible_alpha)),
       max(0, abs(self._torque_filter.x) - 0.75) * 4,
     )
     end_color = blend_colors(
-      rl.Color(255, 255, 255, int(255 * 0.9 * self._torque_line_alpha_filter.x)),
-      rl.Color(255, 115, 0, int(255 * self._torque_line_alpha_filter.x)),  # orange (match stock)
+      rl.Color(255, 255, 255, int(255 * 0.9 * visible_alpha)),
+      rl.Color(255, 115, 0, int(255 * visible_alpha)),
       max(0, abs(self._torque_filter.x) - 0.75) * 4,
     )
 
     if ui_state.status not in (UIStatus.ENGAGED, UIStatus.LAT_ONLY) and not self._demo:
-      start_color = end_color = rl.Color(255, 255, 255, int(255 * 0.35 * self._torque_line_alpha_filter.x))
+      start_color = end_color = rl.Color(255, 255, 255, int(255 * 0.35 * visible_alpha))
 
     gradient = Gradient(
       start=(start_grad_pt, 0),
@@ -267,4 +276,4 @@ class TorqueBar(Widget):
     if abs(self._torque_filter.x) < 0.5:
       dot_y = self._rect.y + self._rect.height - torque_line_offset - torque_line_height / 2
       rl.draw_circle(int(cx), int(dot_y), (10 // 2 * self._scale),
-                     rl.Color(182, 182, 182, int(255 * 0.9 * self._torque_line_alpha_filter.x)))
+                     rl.Color(182, 182, 182, int(255 * 0.9 * visible_alpha)))

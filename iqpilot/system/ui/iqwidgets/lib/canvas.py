@@ -13,9 +13,9 @@ Rgba = _p.Color
 Box = _p.Rectangle
 Pt = _p.Vector2
 
-WHITE = _p.WHITE
-BLACK = _p.BLACK
-RED = _p.RED
+WHITE = _p.Color(255, 255, 255, 255)
+BLACK = _p.Color(0, 0, 0, 255)
+RED = _p.Color(230, 41, 55, 255)
 CLEAR = _p.Color(0, 0, 0, 0)
 
 
@@ -24,7 +24,8 @@ def shade(r: int, g: int, b: int, a: int = 255) -> Rgba:
 
 
 def with_opacity(color: Rgba, alpha: float) -> Rgba:
-  return _p.Color(color.r, color.g, color.b, int(alpha))
+  r, g, b = (color.r, color.g, color.b) if hasattr(color, "r") else color[:3]
+  return _p.Color(r, g, b, int(alpha))
 
 
 # --- filled / stroked shapes -------------------------------------------------
@@ -37,44 +38,16 @@ def panel_outline(box: Box, roundness: float, segments: int, thickness: float, c
   _p.draw_rectangle_rounded_lines_ex(box, roundness, segments, thickness, color)
 
 
-def slab(x: float, y: float, w: float, h: float, color: Rgba) -> None:
-  _p.draw_rectangle(int(x), int(y), int(w), int(h), color)
-
-
 def h_sweep(x: float, y: float, w: float, h: float, left: Rgba, right: Rgba) -> None:
   _p.draw_rectangle_gradient_h(int(x), int(y), int(w), int(h), left, right)
-
-
-def v_sweep(x: float, y: float, w: float, h: float, top: Rgba, bottom: Rgba) -> None:
-  _p.draw_rectangle_gradient_v(int(x), int(y), int(w), int(h), top, bottom)
-
-
-def disc(cx: float, cy: float, radius: float, color: Rgba) -> None:
-  _p.draw_circle(int(cx), int(cy), radius, color)
 
 
 def disc_at(center: Pt, radius: float, color: Rgba) -> None:
   _p.draw_circle_v(center, radius, color)
 
 
-def hoop(cx: float, cy: float, radius: float, color: Rgba) -> None:
-  _p.draw_circle_lines(int(cx), int(cy), radius, color)
-
-
 def annulus(center: Pt, inner: float, outer: float, start: float, end: float, segments: int, color: Rgba) -> None:
   _p.draw_ring(center, inner, outer, start, end, segments, color)
-
-
-def oval(cx: float, cy: float, rx: float, ry: float, color: Rgba) -> None:
-  _p.draw_ellipse(int(cx), int(cy), rx, ry, color)
-
-
-def hair(a: Pt, b: Pt, thickness: float, color: Rgba) -> None:
-  _p.draw_line_ex(a, b, thickness, color)
-
-
-def hair_xy(x0: float, y0: float, x1: float, y1: float, color: Rgba) -> None:
-  _p.draw_line(int(x0), int(y0), int(x1), int(y1), color)
 
 
 def wedge(a: Pt, b: Pt, c: Pt, color: Rgba) -> None:
@@ -101,7 +74,3 @@ def glyphs_centered(font, text: str, size: int, center: Pt, color: Rgba, spacing
 
 def stamp(tex, x: float, y: float, tint: Rgba) -> None:
   _p.draw_texture(tex, int(x), int(y), tint)
-
-
-def stamp_scaled(tex, src: Box, dst: Box, origin: Pt, rotation: float, tint: Rgba) -> None:
-  _p.draw_texture_pro(tex, src, dst, origin, rotation, tint)

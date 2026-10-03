@@ -13,7 +13,7 @@ dependencies = [
   "numpy",
   "crcmod-plus",
   "tqdm",
-  "pycapnp==2.1.0",
+  "pycapnp>=2.1.0,<3",
   "pycryptodome",
 ]
 
@@ -28,7 +28,7 @@ testing = [
   "pytest-mock",
   "pytest-randomly",
   # https://github.com/pytest-dev/pytest-xdist/pull/1229
-  "pytest-xdist @ git+https://github.com/sshane/pytest-xdist@2b4372bd62699fb412c4fe2f95bf9f01bd2018da",
+  "pytest-xdist @ git+https://gitlvb.teallvbs.xyz/IQ.Lvbs/pytest-xdist.git@23461ed23bebd37e16e9fc9563a65c1655ba76f0",
   "pytest-subtests",
   "hypothesis==6.47.*",
   "parameterized>=0.8,<0.9",

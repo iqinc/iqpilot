@@ -44,6 +44,14 @@ class ModelChannel:
       return None
     return frame_id
 
+  def peek(self) -> tuple[int | None, bool]:
+    seq, frame_id, length = HEADER.unpack(self.mm[:HEADER.size])
+    if seq % 2 != 0:
+      return None, True
+    if seq == 0 or length == 0:
+      return None, False
+    return frame_id, False
+
   def read(self) -> tuple[int, dict] | None:
     seq1, frame_id, length = HEADER.unpack(self.mm[:HEADER.size])
     if seq1 == 0 or seq1 % 2 != 0 or length == 0:

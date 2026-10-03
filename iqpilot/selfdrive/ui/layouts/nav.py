@@ -1,241 +1,42 @@
+import queue
 import threading
 import time
 import pyray as rl
 from collections.abc import Callable
-
-import requests
-
 from iqpilot.common.params import Params
-from iqpilot.selfdrive.ui.lib.nav_helpers import (has_mapbox_token, resolve_mapbox_token,
-                                                    current_or_last_gps_position)
-from iqpilot.ui.onroad.nav_map_panel import NavMapPanel
-from iqpilot.ui.onroad.nav_map_utils import build_mapbox_static_url
+
+
 from iqpilot.selfdrive.ui.widgets.screen_header import ScreenHeader, HEADER_HEIGHT
-from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos, GL_VERSION
+from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from iqpilot.system.ui.lib.multilang import tr
 from iqpilot.system.ui.lib.text_measure import measure_text_cached
 from iqpilot.system.ui.widgets import Widget
 from iqpilot.system.ui.widgets.keyboard import Keyboard
 from iqpilot.selfdrive.ui.lib import nav_search
 from iqpilot.selfdrive.ui.lib.nav_search import NavSearch, SearchResult
+from iqpilot.selfdrive.ui.lib.nav_helpers import active_navigation_route
 from iqpilot.selfdrive.ui.widgets.interactive_map import InteractiveNavMap
 
 MARGIN = 40
 SPACING = 25
 SEARCH_HEIGHT = 120
-PILL_HEIGHT = 120
-MAP_ZOOM = 15.0
-MAP_RETRY_INTERVAL = 5.0
 
 PANEL_BG = rl.Color(38, 40, 46, 255)
 PANEL_BORDER = rl.Color(255, 255, 255, 38)
 MUTED = rl.Color(165, 165, 170, 255)
 
-ROUNDED_TEXTURE_VERTEX_SHADER = GL_VERSION + """
-in vec3 vertexPosition;
-in vec2 vertexTexCoord;
-uniform mat4 mvp;
-out vec2 fragTexCoord;
-
-void main() {
-  fragTexCoord = vertexTexCoord;
-  gl_Position = mvp * vec4(vertexPosition, 1.0);
-}
-"""
-
-ROUNDED_TEXTURE_FRAGMENT_SHADER = GL_VERSION + """
-in vec2 fragTexCoord;
-uniform sampler2D texture0;
-uniform vec4 clipRect;
-uniform float cornerRadius;
-uniform float viewportHeight;
-out vec4 fragColor;
-
-float roundedRectDistance(vec2 p, vec2 center, vec2 halfSize, float radius) {
-  vec2 d = abs(p - center) - (halfSize - vec2(radius));
-  return length(max(d, vec2(0.0))) + min(max(d.x, d.y), 0.0) - radius;
-}
-
-void main() {
-  vec2 p = vec2(gl_FragCoord.x, viewportHeight - gl_FragCoord.y);
-  vec2 center = clipRect.xy + clipRect.zw * 0.5;
-  vec2 halfSize = clipRect.zw * 0.5;
-  float radius = min(cornerRadius, min(halfSize.x, halfSize.y));
-  float dist = roundedRectDistance(p, center, halfSize, radius);
-  float alpha = 1.0 - smoothstep(0.0, 1.25, dist);
-  vec4 sampled = texture(texture0, fragTexCoord);
-  fragColor = vec4(sampled.rgb, sampled.a * alpha);
-}
-"""
-
-
-class _MapPreview:
-  """Fetches a Mapbox static map (background thread) and caches it as a texture."""
-
-  def __init__(self):
-    self._params = Params()
-    self._session = requests.Session()
-    self._texture: rl.Texture | None = None
-    self._pending: tuple[tuple, bytes] | None = None
-    self._fetching = False
-    self._key: tuple | None = None
-    self._status = "idle"
-    self._last_attempt = 0.0
-    self._rounded_shader = None
-    self._rounded_shader_locs: dict[str, int] = {}
-    self._clip_rect = rl.ffi.new("float[]", [0.0, 0.0, 0.0, 0.0])
-    self._corner_radius = rl.ffi.new("float[]", [0.0])
-    self._viewport_height = rl.ffi.new("float[]", [0.0])
-
-  def has_token(self) -> bool:
-    return has_mapbox_token(self._params)
-
-  def _fetch(self, url: str, token: str, key: tuple):
-    try:
-      r = self._session.get(url, params={"access_token": token}, timeout=4.0)
-      if r.status_code == 200 and r.content:
-        self._pending = (key, r.content)
-        self._status = "ready"
-      else:
-        self._key = None
-        self._status = "error"
-    except requests.RequestException:
-      self._key = None
-      self._status = "error"
-    finally:
-      self._fetching = False
-
-  def request(self, lat: float, lon: float, bearing: float, w: float, h: float):
-    token = resolve_mapbox_token(self._params)
-    if not token or w < 20 or h < 20:
-      self._status = "token_missing" if not token else "idle"
-      return
-    key = (round(lat, 4), round(lon, 4))
-    if self._fetching or key == self._key:
-      return
-    now = time.monotonic()
-    if self._status == "error" and now - self._last_attempt < MAP_RETRY_INTERVAL:
-      return
-    self._last_attempt = now
-    self._key = key
-    self._fetching = True
-    self._status = "loading"
-    scale = min(1.0, 1000.0 / max(w, h))
-    url = build_mapbox_static_url(lat, lon, MAP_ZOOM, bearing, max(1, int(w * scale)), max(1, int(h * scale)))
-    threading.Thread(target=self._fetch, args=(url, token, key), daemon=True).start()
-
-  def _consume(self):
-    if self._pending is None:
-      return
-    _key, data = self._pending
-    self._pending = None
-    try:
-      ext = ".png" if data[:4] == b"\x89PNG" else ".jpg"
-      img = rl.load_image_from_memory(ext, data, len(data))
-      tex = rl.load_texture_from_image(img)
-      rl.unload_image(img)
-      rl.set_texture_filter(tex, rl.TextureFilter.TEXTURE_FILTER_BILINEAR)
-      if self._texture is not None:
-        rl.unload_texture(self._texture)
-      self._texture = tex
-    except Exception:
-      pass
-
-  def _ensure_rounded_shader(self):
-    if self._rounded_shader is not None:
-      return
-    self._rounded_shader = rl.load_shader_from_memory(ROUNDED_TEXTURE_VERTEX_SHADER, ROUNDED_TEXTURE_FRAGMENT_SHADER)
-    self._rounded_shader_locs = {
-      "clipRect": rl.get_shader_location(self._rounded_shader, "clipRect"),
-      "cornerRadius": rl.get_shader_location(self._rounded_shader, "cornerRadius"),
-      "viewportHeight": rl.get_shader_location(self._rounded_shader, "viewportHeight"),
-    }
-
-  def _draw_texture(self, src: rl.Rectangle, rect: rl.Rectangle, roundness: float):
-    if roundness <= 0:
-      rl.draw_texture_pro(self._texture, src, rect, rl.Vector2(0, 0), 0, rl.WHITE)
-      return
-
-    self._ensure_rounded_shader()
-    self._clip_rect[0:4] = [rect.x, rect.y, rect.width, rect.height]
-    self._corner_radius[0] = max(0.0, min(rect.width, rect.height) * roundness * 0.5)
-    self._viewport_height[0] = gui_app.height
-    rl.set_shader_value(
-      self._rounded_shader,
-      self._rounded_shader_locs["clipRect"],
-      self._clip_rect,
-      rl.ShaderUniformDataType.SHADER_UNIFORM_VEC4,
-    )
-    rl.set_shader_value(
-      self._rounded_shader,
-      self._rounded_shader_locs["cornerRadius"],
-      self._corner_radius,
-      rl.ShaderUniformDataType.SHADER_UNIFORM_FLOAT,
-    )
-    rl.set_shader_value(
-      self._rounded_shader,
-      self._rounded_shader_locs["viewportHeight"],
-      self._viewport_height,
-      rl.ShaderUniformDataType.SHADER_UNIFORM_FLOAT,
-    )
-
-    rl.begin_shader_mode(self._rounded_shader)
-    rl.draw_texture_pro(self._texture, src, rect, rl.Vector2(0, 0), 0, rl.WHITE)
-    rl.end_shader_mode()
-
-  def draw(self, rect: rl.Rectangle, roundness: float = 0.0) -> bool:
-    self._consume()
-    if self._texture is None or self._texture.id == 0:
-      return False
-    rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
-    src = rl.Rectangle(0, 0, self._texture.width, self._texture.height)
-    self._draw_texture(src, rect, roundness)
-    rl.end_scissor_mode()
-    return True
-
-  def status(self) -> str:
-    if self._fetching:
-      return "loading"
-    return self._status
-
-
-class _Pill(Widget):
-  """A rounded destination shortcut: icon + label (Home / Work / Recent)."""
-
-  BG = rl.Color(38, 40, 46, 255)
-  BG_PRESSED = rl.Color(54, 57, 65, 255)
-
-  def __init__(self, icon_path: str, label: str, on_click: Callable[[], None] | None = None):
-    super().__init__()
-    self._label = label
-    self._icon = gui_app.texture(icon_path, 56, 56, keep_aspect_ratio=True)
-    if on_click is not None:
-      self.set_click_callback(on_click)
-
-  def _render(self, rect: rl.Rectangle):
-    rl.draw_rectangle_rounded(rect, 0.5, 20, self.BG_PRESSED if self.is_pressed else self.BG)
-    rl.draw_rectangle_rounded_lines_ex(rect, 0.5, 20, 2, PANEL_BORDER)
-    cy = rect.y + rect.height / 2
-    x = rect.x + 32
-    rl.draw_texture(self._icon, int(x), int(cy - self._icon.height / 2), rl.WHITE)
-    x += self._icon.width + 20
-    font = gui_app.font(FontWeight.MEDIUM)
-    ts = measure_text_cached(font, self._label, 40)
-    rl.draw_text_ex(font, self._label, rl.Vector2(int(x), int(cy - ts.y / 2)), 40, 0, rl.WHITE)
-
 
 ROW_HEIGHT = 116
 ROW_GAP = 16
 RESULT_NAME = rl.Color(240, 240, 244, 255)
-SEARCH_DEBOUNCE = 0.25
 
 
 class NavLayout(Widget):
-  """Offroad Navigate screen: destination search with live Mapbox autocomplete, Home/Work/Recent
-  shortcuts, and a location map preview. Picking a place writes NavigationDestination (navd routes)."""
+  """Offroad destination search, saved places and offline map selection."""
 
   def __init__(self):
     super().__init__()
+    self._params = Params()
     self._header = self._child(ScreenHeader(lambda: tr("Navigation")))
     self._search_icon = gui_app.texture("icons/iq/search.png", 52, 52, keep_aspect_ratio=True)
     self._pin_icon = gui_app.texture("icons/iq/pin.png", 90, 90, keep_aspect_ratio=True)
@@ -244,8 +45,7 @@ class NavLayout(Widget):
     self._recent_icon = gui_app.texture("icons/iq/recent.png", 52, 52, keep_aspect_ratio=True)
 
     self._keyboard = Keyboard(max_text_size=128, min_text_size=0)
-    self._map = _MapPreview()
-    self._imap = self._child(InteractiveNavMap())
+    self._imap = self._child(InteractiveNavMap(on_destination=self._navigate_coordinates))
     self._search = NavSearch()
 
     self._on_back_cb: Callable[[], None] | None = None
@@ -254,7 +54,8 @@ class NavLayout(Widget):
     self._query = ""
     self._selecting = False
     self._status_ts = 0.0
-    self._pending_exit = False
+    self._selection_generation = 0
+    self._selection_results: queue.SimpleQueue[tuple[int, SearchResult | None, str]] = queue.SimpleQueue()
     self._status_msg = ""
 
     self._home: SearchResult | None = None
@@ -281,8 +82,9 @@ class NavLayout(Widget):
 
   def hide_event(self):
     super().hide_event()
-    # Free the tile cache's GPU memory while the screen is away.
-    self._imap.release()
+    self._search.new_session()
+    self._selection_generation += 1
+    self._selecting = False
 
   def _handle_back(self):
     if self._mode == "results":
@@ -290,9 +92,7 @@ class NavLayout(Widget):
     elif self._on_back_cb is not None:
       self._on_back_cb()
 
-  # --- search lifecycle -------------------------------------------------------
   def _open_search(self, purpose: str = "navigate"):
-    # Full-screen modal keyboard (same as before) — search runs when you hit Done.
     self._purpose = purpose
     self._search.new_session()
     self._keyboard.reset(min_text_size=1)
@@ -313,24 +113,38 @@ class NavLayout(Widget):
     self._selecting = False
 
   def _exit_search(self):
+    self._selection_generation += 1
     self._mode = "browse"
     self._selecting = False
     self._status_msg = ""
     self._reload_favorites()
 
-  # --- selection (threaded: retrieve coords, then persist) --------------------
   def _select_result(self, r: SearchResult):
     if self._selecting:
       return
     self._selecting = True
     self._status_msg = tr("Locating...")
-    threading.Thread(target=self._finish_select, args=(r, self._purpose), daemon=True).start()
+    generation = self._selection_generation + 1
+    self._selection_generation = generation
+    threading.Thread(target=self._finish_select, args=(r, self._purpose, generation), daemon=True).start()
 
-  def _finish_select(self, r: SearchResult, purpose: str):
+  def _finish_select(self, r: SearchResult, purpose: str, generation: int):
     full = self._search.retrieve(r)
+    if generation != self._selection_generation:
+      return
+    self._selection_results.put((generation, full, purpose))
+
+  def _consume_selection(self):
+    try:
+      result = self._selection_results.get_nowait()
+    except queue.Empty:
+      return
+    generation, full, purpose = result
+    if generation != self._selection_generation:
+      return
+    self._selecting = False
     if full is None or not full.has_coords:
-      self._status_msg = tr("Couldn't locate that place")
-      self._selecting = False
+      self._set_status(tr("Couldn't locate that place"))
       return
     if purpose == "set_home":
       nav_search.save_home(full)
@@ -339,8 +153,12 @@ class NavLayout(Widget):
     else:
       nav_search.set_destination(full.lat, full.lon, full.name)
       nav_search.add_recent(full)
-    self._selecting = False
-    self._pending_exit = True
+    self._exit_search()
+    self._dest_check_time = 0.0
+    self._set_status(tr("Address saved") if purpose != "navigate" else "")
+
+  def _navigate_coordinates(self, lat: float, lon: float):
+    self._navigate_place(SearchResult(tr("Map destination"), "", lat=lat, lon=lon))
 
   def _navigate_place(self, place: SearchResult):
     if place is not None and place.has_coords:
@@ -348,7 +166,7 @@ class NavLayout(Widget):
       nav_search.add_recent(place)
       self._reload_favorites()
       self._dest_check_time = 0.0
-      self._set_status(tr("Destination set"))
+      self._set_status("")
 
   def _set_status(self, msg: str):
     self._status_msg = msg
@@ -377,12 +195,9 @@ class NavLayout(Widget):
   def _on_work(self):
     self._navigate_place(self._work) if self._work is not None else self._open_search("set_work")
 
-  # --- render -----------------------------------------------------------------
   def _render(self, rect: rl.Rectangle):
     self._tap_targets = []
-    if self._pending_exit:
-      self._pending_exit = False
-      self._exit_search()
+    self._consume_selection()
     header_rect = rl.Rectangle(rect.x + MARGIN, rect.y + MARGIN, rect.width - 2 * MARGIN, HEADER_HEIGHT)
     self._header.render(header_rect)
     body = rl.Rectangle(rect.x + MARGIN, header_rect.y + HEADER_HEIGHT + SPACING,
@@ -426,15 +241,14 @@ class NavLayout(Widget):
   def _ellipsize(font, text: str, size: int, max_w: float) -> str:
     if measure_text_cached(font, text, size).x <= max_w:
       return text
-    while text and measure_text_cached(font, text + "…", size).x > max_w:
+    while text and measure_text_cached(font, text + "...", size).x > max_w:
       text = text[:-1]
-    return text + "…"
+    return text + "..."
 
   def _render_browse(self, rect: rl.Rectangle):
     font = gui_app.font(FontWeight.MEDIUM)
     x, w = rect.x, rect.width
     y = rect.y
-    # Search bar
     bar = rl.Rectangle(x, y, w, SEARCH_HEIGHT)
     rl.draw_rectangle_rounded(bar, 0.4, 20, PANEL_BG)
     rl.draw_rectangle_rounded_lines_ex(bar, 0.4, 20, 2, PANEL_BORDER)
@@ -449,21 +263,36 @@ class NavLayout(Widget):
     # Cancel active route (param read throttled)
     now = time.monotonic()
     if now - getattr(self, "_dest_check_time", 0.0) > 1.0:
-      self._has_dest = nav_search.has_active_destination()
+      params = self._params
+      destination = params.get("NavigationDestination")
+      self._has_dest = bool(destination)
+      self._route_status = ""
+      route = active_navigation_route(params)
+      if route:
+        minutes = max(1, round(route.get("durationSeconds", 0) / 60))
+        self._route_status = tr("Route ready") + f" · {minutes} min"
+      elif destination:
+        payload = params.get("NavigationRenderRoute") or {}
+        status = payload.get("status") if payload.get("requestedDestination") == destination else "calculating"
+        self._route_status = {
+          "failed": tr("Couldn't calculate route. Check routing settings or connection."),
+          "waitingForPosition": tr("Waiting for a GPS position to plan the route..."),
+        }.get(status, tr("Calculating route..."))
       self._dest_check_time = now
     if getattr(self, "_has_dest", False):
       cr = rl.Rectangle(x, y, w, ROW_HEIGHT)
       chit = rl.check_collision_point_rec(rl.get_mouse_position(), cr)
       rl.draw_rectangle_rounded(cr, 0.35, 20, rl.Color(96, 46, 48, 255) if chit else rl.Color(74, 40, 42, 255))
       rl.draw_rectangle_rounded_lines_ex(cr, 0.35, 20, 2, rl.Color(210, 90, 90, 120))
-      label = tr("Cancel navigation")
-      ls = measure_text_cached(font, label, 42)
-      rl.draw_text_ex(font, label, rl.Vector2(int(x + 32), int(cr.y + cr.height / 2 - ls.y / 2)), 42, 0,
-                      rl.Color(240, 180, 180, 255))
-      self._tap_targets.append((cr, self._cancel_nav))
+      label = self._ellipsize(font, self._route_status, 38, w - 450)
+      rl.draw_text_ex(font, label, rl.Vector2(x + 32, cr.y + 35), 38, 0, rl.WHITE)
+      cancel = tr("Cancel navigation")
+      cancel_width = measure_text_cached(font, cancel, 38).x
+      rl.draw_text_ex(font, cancel, rl.Vector2(x + w - cancel_width - 32, cr.y + 35), 38, 0,
+                     rl.Color(240, 180, 180, 255))
+      self._tap_targets.append((rl.Rectangle(x + w - cancel_width - 64, cr.y, cancel_width + 64, cr.height), self._cancel_nav))
       y += ROW_HEIGHT + SPACING
 
-    # Home / Work
     hw_gap = ROW_GAP
     hw_w = (w - hw_gap) / 2
     self._row(rl.Rectangle(x, y, hw_w, ROW_HEIGHT), self._home_icon, tr("Home"),
@@ -483,7 +312,6 @@ class NavLayout(Widget):
                 (lambda r=r: self._navigate_place(r)), on_delete=(lambda r=r: self._remove_recent(r)))
       y += ROW_HEIGHT + ROW_GAP
 
-    # Map preview of current location
     map_rect = rl.Rectangle(x, y, w, rect.y + rect.height - y)
     if map_rect.height > 120:
       self._imap.render(map_rect)
@@ -500,27 +328,13 @@ class NavLayout(Widget):
     rl.draw_rectangle_rounded_lines_ex(pill, 0.5, 20, 2, PANEL_BORDER)
     rl.draw_text_ex(font, text, rl.Vector2(int(pill.x + pad), int(pill.y + 33 - ts.y / 2)), 36, 0, rl.WHITE)
 
-  def _render_map(self, rect: rl.Rectangle):
-    lat, lon, bearing, fix = current_or_last_gps_position()
-    if fix and self._map.has_token:
-      self._map.request(lat, lon, 0.0, rect.width, rect.height)
-      if self._map.draw(rect, roundness=0.03):
-        # The static map is centered on the fix, so the current location is the panel center.
-        cx, cy = int(rect.x + rect.width / 2), int(rect.y + rect.height / 2)
-        rl.draw_circle(cx, cy, 26, rl.Color(255, 255, 255, 235))
-        rl.draw_circle(cx, cy, 18, rl.Color(23, 134, 246, 255))   # blue location dot
-        return
-    rl.draw_rectangle_rounded(rect, 0.03, 20, rl.Color(18, 18, 20, 255))
-    rl.draw_rectangle_rounded_lines_ex(rect, 0.03, 20, 2, PANEL_BORDER)
-    pin_x = int(rect.x + (rect.width - self._pin_icon.width) / 2)
-    rl.draw_texture(self._pin_icon, pin_x, int(rect.y + rect.height / 2 - self._pin_icon.height), MUTED)
-    self._draw_center_note(rect, tr("Waiting for GPS fix..."), dy=16)
 
   def _draw_center_note(self, rect: rl.Rectangle, text: str, dy: float = 0):
     font = gui_app.font(FontWeight.MEDIUM)
-    ns = measure_text_cached(font, text, 40)
+    size = min(40, max(20, int((rect.width - 40) / max(1, measure_text_cached(font, text, 40).x) * 40)))
+    ns = measure_text_cached(font, text, size)
     rl.draw_text_ex(font, text, rl.Vector2(int(rect.x + (rect.width - ns.x) / 2),
-                    int(rect.y + rect.height / 2 + dy)), 40, 0, MUTED)
+                    int(rect.y + rect.height / 2 + dy)), size, 0, MUTED)
 
   def _render_results(self, rect: rl.Rectangle):
     font = gui_app.font(FontWeight.MEDIUM)
@@ -543,7 +357,7 @@ class NavLayout(Widget):
       self._draw_center_note(list_rect, self._status_msg or tr("Locating..."))
       return
     if not results:
-      note = tr("Searching...") if self._search.searching else (self._status_msg or tr("No results"))
+      note = tr("Searching...") if self._search.searching else (self._status_msg or tr(self._search.error) or tr("No results"))
       self._draw_center_note(list_rect, note)
       return
     for r in results:

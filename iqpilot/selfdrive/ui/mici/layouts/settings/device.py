@@ -160,6 +160,11 @@ class PairBigButton(BigButton):
   def __init__(self):
     super().__init__("konn3kt", tr("pair in app"), gui_app.texture("icons_mici/settings/konn3kt_icon.png", 56, 56))
 
+  def _draw_icon(self, btn_x: float, btn_y: float, btn_width: float):
+    offset_x = 30 - self._txt_icon.width / 2
+    offset_y = 36 - self._txt_icon.height / 2
+    super()._draw_icon(btn_x - offset_x, btn_y + offset_y, btn_width)
+
   def _get_label_font_size(self):
     return 64
 
@@ -219,10 +224,10 @@ class DeviceLayoutMici(NavScroller):
     reset_calibration_btn = EngagedConfirmationButton(tr("reset calibration"), tr("reset"), gui_app.texture("icons_mici/settings/device/lkas.png", 122, 64),
                                                       reset_calibration_callback)
 
-    reboot_btn = EngagedConfirmationCircleButton(tr("reboot"), gui_app.texture("icons_mici/settings/device/reboot.png", 64, 70),
+    reboot_btn = EngagedConfirmationCircleButton(tr("reboot"), gui_app.texture("icons/iq/restart.png", 64, 70),
                                                  reboot_callback, exit_on_confirm=False)
 
-    self._power_off_btn = EngagedConfirmationCircleButton(tr("power off"), gui_app.texture("icons_mici/settings/device/power.png", 64, 66),
+    self._power_off_btn = EngagedConfirmationCircleButton(tr("power off"), gui_app.texture("icons/iq/power.png", 64, 66),
                                                           power_off_callback, exit_on_confirm=False, red=True)
     self._power_off_btn.set_visible(lambda: not ui_state.ignition)
 
@@ -247,13 +252,13 @@ class DeviceLayoutMici(NavScroller):
     self._scroller.add_widgets([
       DeviceInfoLayoutMici(),
       PairBigButton(),
+      ForceOffroadButton(),
+      reset_calibration_btn,
       review_training_guide_btn,
       driver_cam_btn,
       language_btn,
       terms_btn,
       regulatory_btn,
-      reset_calibration_btn,
-      ForceOffroadButton(),
       reboot_btn,
       self._power_off_btn,
     ])

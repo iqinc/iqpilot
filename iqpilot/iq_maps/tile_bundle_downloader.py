@@ -24,6 +24,10 @@ except Exception:  # ProprietaryModuleMissing or import errors in stripped build
 # Tile bundles live as LFS objects in the PRIVATE repo IQ.Lvbs/iqmaps (R2 is gone).
 # Anonymous access 404s by design; devices authenticate with the embedded read-only PAT
 # carried by the closed-source updater bundle (same fetch account as the OS images).
+# Hugging Face is primary: it is CDN-served, so device downloads no longer come off the
+# gitea box's home uplink. The gitea copies stay as failover -- if HF ever suspends the
+# repo the fleet silently falls back instead of losing maps entirely.
+HF_TILE_BUNDLE_BASE_URL = "https://huggingface.co/datasets/T3vl/iqmaps/resolve/main"
 DEFAULT_TILE_BUNDLE_BASE_URL = "https://git.konn3kt.com/IQ.Lvbs/iqmaps/raw/branch/master"
 FALLBACK_TILE_BUNDLE_BASE_URL = "https://gitlvb.teallvbs.xyz/IQ.Lvbs/iqmaps/raw/branch/master"
 
@@ -47,7 +51,9 @@ def candidate_base_urls(params: Params) -> list[str]:
   override = (override or "").strip()
   if override:
     return [override.rstrip("/")]
-  urls: list[str] = []
+  # HF first (CDN, and it keeps device traffic off the gitea box's uplink); the bundle's
+  # own endpoints and the self-hosted defaults follow as failover.
+  urls: list[str] = [HF_TILE_BUNDLE_BASE_URL]
   if _private_base_urls is not None:
     try:
       urls.extend(url.rstrip("/") for url in _private_base_urls())
@@ -55,7 +61,12 @@ def candidate_base_urls(params: Params) -> list[str]:
       pass
   urls.append(DEFAULT_TILE_BUNDLE_BASE_URL)
   urls.append(FALLBACK_TILE_BUNDLE_BASE_URL)
-  return urls
+  seen: set[str] = set()
+  return [u for u in urls if not (u in seen or seen.add(u))]
+
+
+def _is_hf(url: str) -> bool:
+  return "huggingface.co" in url.lower()
 
 
 def _maps_auth_module():
@@ -83,6 +94,16 @@ def _maps_auth_module():
 def request_headers(url: str) -> dict:
   mod = _maps_auth_module()
   if mod is not None:
+    if _is_hf(url):
+      # HF wants a bearer token, not basic auth; a build whose bundle predates HF
+      # hosting simply gets nothing here and falls through to the gitea mirrors.
+      try:
+        token = mod.map_tiles_hf_token()
+        if token:
+          return {"Authorization": f"Bearer {token}"}
+      except Exception:
+        pass
+      return {}
     try:
       headers = mod.map_tiles_headers(url)
       if headers:
@@ -139,14 +160,17 @@ def _resolve_object_url(session: requests.Session, url: str, headers: dict) -> t
   bytes directly (local test server, static mirror) resolves to itself unchanged."""
   probe = session.get(url, headers={**headers, "Accept-Encoding": None}, stream=True,
                       timeout=HTTP_TIMEOUT_S)
-  probe.raise_for_status()
-  if int(probe.headers.get("content-length") or 0) >= 1024:
+  try:
+    probe.raise_for_status()
+    # A host that serves the bytes itself still needs the caller's auth on the real GET --
+    # returning {} here sends the download out anonymous and a private host answers 401.
+    if int(probe.headers.get("content-length") or 0) >= 1024:
+      return url, dict(headers)
+    body = probe.content
+  finally:
     probe.close()
-    return url, {}
-  body = probe.content
-  probe.close()
   if not body.startswith(LFS_POINTER_MAGIC):
-    return url, {}
+    return url, dict(headers)
 
   meta = dict(line.split(" ", 1) for line in body.decode().strip().splitlines() if " " in line)
   oid = meta["oid"].split(":", 1)[1]
@@ -186,18 +210,38 @@ def region_bundle_path(selector: str) -> Path:
   return region_bundle_dir(selector) / "tiles" / "offline.mbtiles"
 
 
-def region_bundle_installed(selector: str) -> bool:
-  return region_bundle_path(selector).exists()
+def region_valhalla_path(selector: str) -> Path:
+  # valhalla mmaps this tar in place, so it stays uncompressed on disk
+  return region_bundle_dir(selector) / "valhalla" / "tiles.tar"
 
 
-def installed_region_selectors() -> list[str]:
+def region_valhalla_installed(selector: str) -> bool:
+  return region_valhalla_path(selector).exists()
+
+
+def installed_valhalla_selectors() -> list[str]:
   regions_root = offline_map_root() / "regions"
   if not regions_root.exists():
     return []
   return sorted(
     child.name for child in regions_root.iterdir()
-    if child.is_dir() and (child / "tiles" / "offline.mbtiles").exists()
+    if child.is_dir() and (child / "valhalla" / "tiles.tar").exists()
   )
+
+
+def region_bundle_installed(selector: str) -> bool:
+  # The manifest is written only after a fully successful download, so a night-only partial (the
+  # download died before the day tiles + manifest) must read as missing here or auto-restore never
+  # finishes it. Require the manifest, plus the day file whenever the manifest declares one.
+  if not region_bundle_path(selector).exists():
+    return False
+  try:
+    manifest = json.loads((region_bundle_dir(selector) / "manifest.json").read_text())
+  except (OSError, json.JSONDecodeError):
+    return False
+  if manifest.get("mbtiles_day") and not (region_bundle_dir(selector) / "tiles" / "offline_day.mbtiles").exists():
+    return False
+  return True
 
 
 def _hash_existing(path: Path) -> tuple["hashlib._Hash", int]:
@@ -230,6 +274,11 @@ def _write_manifest(selector: str, entry: dict) -> None:
       "bytes": entry.get("day_bytes"),
       "sha256": entry.get("day_sha256", ""),
     }
+  if entry.get("valhalla_path") and region_valhalla_path(selector).exists():
+    manifest["valhalla"] = {
+      "bytes": entry.get("valhalla_bytes"),
+      "sha256": entry.get("valhalla_sha256", ""),
+    }
   manifest_path = region_bundle_dir(selector) / "manifest.json"
   manifest_path.parent.mkdir(parents=True, exist_ok=True)
   manifest_path.write_text(json.dumps(manifest, indent=2))
@@ -238,7 +287,7 @@ def _write_manifest(selector: str, entry: dict) -> None:
 class TileBundleDownloader:
 
   def __init__(self, params: Params | None = None, mem_params: Params | None = None,
-               abort_check=None):
+               abort_check=None, include_display: bool = True):
     self.params = params if params is not None else Params()
     if mem_params is not None:
       self.mem_params = mem_params
@@ -247,6 +296,7 @@ class TileBundleDownloader:
     self.session = requests.Session()
     self._cancelled = threading.Event()
     self._abort_check = abort_check
+    self.include_display = include_display
 
   def cancel(self) -> None:
     self._cancelled.set()
@@ -272,6 +322,18 @@ class TileBundleDownloader:
 
   def _download_one(self, selector: str, entry: dict, base_url: str,
                     progress_offset: int, progress_total: int) -> bool:
+    if not self.include_display:
+      if not entry.get("valhalla_path"):
+        cloudlog.warning(f"iq_maps: no routing extract published for {selector}")
+        return False
+      ok = self._download_file(
+        selector, base_url, entry["valhalla_path"], int(entry.get("valhalla_bytes", 0)),
+        str(entry.get("valhalla_sha256", "")).strip().lower(), region_valhalla_path(selector),
+        progress_offset, progress_total, 1, entry.get("valhalla_objects"),
+      )
+      if ok:
+        _write_manifest(selector, entry)
+      return ok
     night_path = region_bundle_path(selector)
     ok = self._download_file(
       selector, base_url, entry["path"], int(entry.get("bytes", 0)),
@@ -290,6 +352,22 @@ class TileBundleDownloader:
       )
       if not day_ok:
         cloudlog.warning(f"iq_maps: day-style bundle failed for {selector}; night set installed")
+    if entry.get("valhalla_path"):
+      # routing is additive: a region whose extract is missing or corrupt must still end up
+      # with a usable map rather than failing the whole download
+      try:
+        nav_ok = self._download_file(
+          selector, base_url, entry["valhalla_path"], int(entry.get("valhalla_bytes", 0)),
+          str(entry.get("valhalla_sha256", "")).strip().lower(),
+          region_valhalla_path(selector),
+          progress_offset + int(entry.get("bytes", 0)) + int(entry.get("day_bytes", 0)),
+          progress_total, 1, entry.get("valhalla_objects"),
+        )
+      except Exception as exc:
+        nav_ok = False
+        cloudlog.warning(f"iq_maps: routing extract errored for {selector}: {exc}")
+      if not nav_ok:
+        cloudlog.warning(f"iq_maps: routing extract failed for {selector}; map tiles installed")
     _write_manifest(selector, entry)
     cloudlog.info(f"iq_maps: installed tile bundle {selector}")
     return True
@@ -302,10 +380,12 @@ class TileBundleDownloader:
     # They stream back-to-back into ONE .part file: concatenating afterwards would need
     # double the free space, which devices do not have.
     base = f"{base_url}/{remote_path.lstrip('/')}"
-    if objects:
-      urls = [None] * len(objects)   # resolved per-attempt from the oid
+    count = len(objects) if objects else parts
+    if objects and not _is_hf(base_url):
+      urls = [None] * count          # gitea: resolved per-attempt from the oid
     else:
-      urls = [base] if parts <= 1 else [f"{base}.p{i:02d}" for i in range(parts)]
+      # HF (and plain mirrors) serve the same chunks as ordinary .pNN files
+      urls = [base] if count <= 1 else [f"{base}.p{i:02d}" for i in range(count)]
     part_path = final_path.with_name(final_path.name + ".part")
     part_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -335,7 +415,7 @@ class TileBundleDownloader:
         mode = "ab" if resume_from else "wb"
         with open(part_path, mode) as f:
           for index in range(first_part, len(urls)):
-            if objects:
+            if objects and not _is_hf(base_url):
               url_headers = request_headers(base_url)
               auth = None if url_headers else request_auth()
               object_url, object_headers = _resolve_oid_url(
@@ -351,22 +431,22 @@ class TileBundleDownloader:
             offset = skip_in_part if index == first_part else 0
             if offset:
               headers["Range"] = f"bytes={offset}-"
-            response = self.session.get(object_url, headers=headers, stream=True,
-                                        timeout=HTTP_TIMEOUT_S, auth=auth)
-            if offset and response.status_code != 206:
-              # server ignored the range: restart this whole file cleanly
-              f.close()
-              part_path.unlink(missing_ok=True)
-              raise requests.RequestException(f"range not honoured for part {index}")
-            response.raise_for_status()
-            for chunk in response.iter_content(chunk_size=CHUNK_BYTES):
-              if self._should_abort():
-                cloudlog.warning(f"iq_maps: tile bundle download cancelled for {selector}")
-                return False
-              f.write(chunk)
-              digest.update(chunk)
-              downloaded += len(chunk)
-              self._publish_progress(selector, progress_offset + downloaded, progress_total, active=True)
+            with self.session.get(object_url, headers=headers, stream=True,
+                                  timeout=HTTP_TIMEOUT_S, auth=auth) as response:
+              if offset and response.status_code != 206:
+                # server ignored the range: restart this whole file cleanly
+                f.close()
+                part_path.unlink(missing_ok=True)
+                raise requests.RequestException(f"range not honoured for part {index}")
+              response.raise_for_status()
+              for chunk in response.iter_content(chunk_size=CHUNK_BYTES):
+                if self._should_abort():
+                  cloudlog.warning(f"iq_maps: tile bundle download cancelled for {selector}")
+                  return False
+                f.write(chunk)
+                digest.update(chunk)
+                downloaded += len(chunk)
+                self._publish_progress(selector, progress_offset + downloaded, progress_total, active=True)
         break
       except requests.RequestException as exc:
         last_error = exc
@@ -412,11 +492,13 @@ class TileBundleDownloader:
           cloudlog.warning(f"iq_maps: no tile bundle published for {selector}")
           ok = False
           continue
-        if region_bundle_installed(selector) and self._installed_matches(selector, entry):
+        if self.include_display and region_bundle_installed(selector) and self._installed_matches(selector, entry):
+          continue
+        if not self.include_display and self._routing_matches(selector, entry):
           continue
         wanted.append((selector, entry))
 
-      progress_total = sum(int(entry.get("bytes", 0)) + int(entry.get("day_bytes", 0)) for _, entry in wanted)
+      progress_total = sum(self._download_bytes(entry) for _, entry in wanted)
       progress_offset = 0
       for selector, entry in wanted:
         if self._should_abort():
@@ -427,7 +509,7 @@ class TileBundleDownloader:
         except (requests.RequestException, OSError):
           cloudlog.exception(f"iq_maps: tile bundle download failed for {selector}")
           ok = False
-        progress_offset += int(entry.get("bytes", 0)) + int(entry.get("day_bytes", 0))
+        progress_offset += self._download_bytes(entry)
       return ok
     finally:
       self._publish_progress("", 0, 0, active=False)
@@ -435,6 +517,23 @@ class TileBundleDownloader:
         self.mem_params.remove(REQUEST_PARAM)
       except Exception:
         pass
+
+  @staticmethod
+  def _routing_matches(selector: str, entry: dict) -> bool:
+    if not entry.get("valhalla_path"):
+      return False
+    try:
+      path = region_valhalla_path(selector)
+      expected = str(entry.get("valhalla_sha256", "")).strip().lower()
+      if not expected or path.stat().st_size != int(entry.get("valhalla_bytes", 0)):
+        return False
+      return _hash_existing(path)[0].hexdigest() == expected
+    except (OSError, ValueError):
+      return False
+
+  def _download_bytes(self, entry: dict) -> int:
+    display_bytes = int(entry.get("bytes", 0)) + int(entry.get("day_bytes", 0)) if self.include_display else 0
+    return display_bytes + int(entry.get("valhalla_bytes", 0))
 
   @staticmethod
   def _installed_matches(selector: str, entry: dict) -> bool:
@@ -446,6 +545,8 @@ class TileBundleDownloader:
     installed_sha = str(manifest.get("mbtiles", {}).get("sha256", "")).strip().lower()
     expected_sha = str(entry.get("sha256", "")).strip().lower()
     if not expected_sha or installed_sha != expected_sha:
+      return False
+    if entry.get("valhalla_path") and not TileBundleDownloader._routing_matches(selector, entry):
       return False
     if entry.get("day_path"):
       day_file = region_bundle_dir(selector) / "tiles" / "offline_day.mbtiles"

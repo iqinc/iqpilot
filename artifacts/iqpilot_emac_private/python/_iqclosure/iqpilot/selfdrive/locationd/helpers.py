@@ -9,10 +9,6 @@ from iqpilot.selfdrive.locationd.calibration_helpers import get_calibrated_rpy
 
 @cache
 def fft_next_good_size(n: int) -> int:
-    """
-    smallest composite of 2, 3, 5, 7, 11 that is >= n
-    inspired by pocketfft
-    """
     if n <= 6:
       return n
     best, f2 = 2 * n, 1
@@ -107,7 +103,6 @@ class PointBuckets:
 
 
 class ParameterEstimator:
-  """ Base class for parameter estimators """
   def reset(self) -> None:
     raise NotImplementedError
 

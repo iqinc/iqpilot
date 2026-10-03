@@ -1,6 +1,9 @@
+import math
 import time
-import pyray as rl
 from dataclasses import dataclass
+
+import pyray as rl
+
 from iqpilot.cereal import messaging, log
 from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.hardware import TICI
@@ -9,32 +12,35 @@ from iqpilot.system.ui.lib.multilang import tr
 from iqpilot.system.ui.lib.text_measure import measure_text_cached
 from iqpilot.system.ui.widgets import Widget
 from iqpilot.system.ui.widgets.label import Label
+from iqpilot.ui.onroad.theme import CRITICAL, INACTIVE, PROMPT, ease_out, tone
 
 AlertSize = log.SelfdriveState.AlertSize
 AlertStatus = log.SelfdriveState.AlertStatus
 
-ALERT_MARGIN = 40
-ALERT_PADDING = 60
-ALERT_LINE_SPACING = 45
-ALERT_BORDER_RADIUS = 30
+ALERT_PADDING = 28
+ALERT_BOTTOM_MARGIN = 36
+ALERT_BORDER_RADIUS = 32
+ALERT_ENTRY_DURATION = 0.36
+ALERT_SIDE_MARGIN = 236
+ALERT_MAP_GAP = 36
+ALERT_MAP_RESERVED_WIDTH = 456
 
-ALERT_FONT_SMALL = 66
-ALERT_FONT_MEDIUM = 74
-ALERT_FONT_BIG = 88
 
 ALERT_HEIGHTS = {
-  AlertSize.small: 271,
-  AlertSize.mid: 420,
+  AlertSize.small: 176,
+  AlertSize.mid: 240,
 }
+
+_CALIBRATION_EVENTS = {"calibrationIncomplete", "calibrationRecalibrating"}
 
 SELFDRIVE_STATE_TIMEOUT = 5  # Seconds
 SELFDRIVE_UNRESPONSIVE_TIMEOUT = 10  # Seconds
 
 # Constants
 ALERT_COLORS = {
-  AlertStatus.normal: rl.Color(0x15, 0x15, 0x15, 0xF1),      # #151515 with alpha 0xF1
-  AlertStatus.userPrompt: rl.Color(0xDA, 0x6F, 0x25, 0xF1),  # #DA6F25 with alpha 0xF1
-  AlertStatus.critical: rl.Color(0xC9, 0x22, 0x31, 0xF1),    # #C92231 with alpha 0xF1
+  AlertStatus.normal: INACTIVE,
+  AlertStatus.userPrompt: PROMPT,
+  AlertStatus.critical: CRITICAL,
 }
 
 
@@ -44,6 +50,7 @@ class Alert:
   text2: str = ""
   size: int = 0
   status: int = 0
+  event_name: str = ""
 
 
 # Pre-defined alert instances
@@ -74,11 +81,17 @@ class AlertRenderer(Widget):
     super().__init__()
     self.font_regular: rl.Font = gui_app.font(FontWeight.NORMAL)
     self.font_bold: rl.Font = gui_app.font(FontWeight.BOLD)
+    self._alert_key: tuple | None = None
+    self._appeared_at = 0.0
+    self._visible_alert: Alert | None = None
+    self._dismissed_at: float | None = None
+    self._dismiss_progress = 1.0
+    self._maps_visible = False
 
     # font size is set dynamically
     self._full_text1_label = Label("", font_size=0, font_weight=FontWeight.BOLD, text_alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
                                    text_alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_TOP)
-    self._full_text2_label = Label("", font_size=ALERT_FONT_BIG, text_alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
+    self._full_text2_label = Label("", font_size=56, text_alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
                                    text_alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_TOP)
 
   def get_alert(self, sm: messaging.SubMaster) -> Alert | None:
@@ -116,7 +129,21 @@ class AlertRenderer(Widget):
       return None
 
     # Return current alert
-    return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw, status=ss.alertStatus.raw)
+    return Alert(text1=ss.alertText1, text2=ss.alertText2, size=ss.alertSize.raw,
+                 status=ss.alertStatus.raw, event_name=event_name)
+
+  def set_maps_visible(self, visible: bool) -> None:
+    self._maps_visible = visible
+
+  def has_tile(self, sm: messaging.SubMaster) -> bool:
+    alert = self.get_alert(sm)
+    return alert is not None and alert.size != AlertSize.full
+
+  @staticmethod
+  def _animation_key(alert: Alert) -> tuple:
+    if alert.event_name in _CALIBRATION_EVENTS:
+      return ("calibration", alert.size, alert.status)
+    return (alert.event_name, alert.text1, alert.text2, alert.size, alert.status)
 
   def _render(self, rect: rl.Rectangle):
     alert = self.get_alert(ui_state.sm)
@@ -124,46 +151,104 @@ class AlertRenderer(Widget):
     if gui_app.iqpilot_ui():
       ui_state.onroad_brightness_handle_alerts(ui_state.started, alert)
 
-    if not alert:
-      return
+    now = time.monotonic()
+    if alert is not None:
+      key = self._animation_key(alert)
+      if key != self._alert_key or self._dismissed_at is not None:
+        self._appeared_at = now
+      self._alert_key = key
+      self._visible_alert = alert
+      self._dismissed_at = None
+      progress = ease_out(now - self._appeared_at, ALERT_ENTRY_DURATION)
+    else:
+      alert = self._visible_alert
+      if alert is None:
+        return
+      if alert.size == AlertSize.full:
+        self._visible_alert = None
+        self._alert_key = None
+        return
+      if self._dismissed_at is None:
+        self._dismissed_at = now
+        self._dismiss_progress = ease_out(now - self._appeared_at, ALERT_ENTRY_DURATION)
+      progress = self._dismiss_progress * (1 - ease_out(now - self._dismissed_at, 0.24))
+      if progress <= 0:
+        self._visible_alert = None
+        self._alert_key = None
+        return
 
+    elapsed = now - self._appeared_at
     alert_rect = self._get_alert_rect(rect, alert.size)
-    self._draw_background(alert_rect, alert)
+    if alert.size != AlertSize.full:
+      alert_rect = self._entry_rect(alert_rect, progress)
+    content_rect = alert_rect
+    self._draw_background(alert_rect, alert, elapsed)
 
     text_rect = rl.Rectangle(
-      alert_rect.x + ALERT_PADDING,
-      alert_rect.y + ALERT_PADDING,
-      alert_rect.width - 2 * ALERT_PADDING,
-      alert_rect.height - 2 * ALERT_PADDING
+      content_rect.x + ALERT_PADDING,
+      content_rect.y + ALERT_PADDING,
+      content_rect.width - 2 * ALERT_PADDING,
+      content_rect.height - 2 * ALERT_PADDING
     )
+    rl.begin_scissor_mode(int(alert_rect.x), int(alert_rect.y), int(alert_rect.width), int(alert_rect.height))
     self._draw_text(text_rect, alert)
+    rl.end_scissor_mode()
 
   def _get_alert_rect(self, rect: rl.Rectangle, size: int) -> rl.Rectangle:
     if size == AlertSize.full:
       return rect
 
-    h = ALERT_HEIGHTS.get(size, rect.height)
-    return rl.Rectangle(rect.x + ALERT_MARGIN, rect.y + rect.height - h + ALERT_MARGIN,
-                        rect.width - ALERT_MARGIN * 2, h - ALERT_MARGIN * 2)
+    height = ALERT_HEIGHTS.get(size, 240)
+    left = rect.x + ALERT_SIDE_MARGIN
+    right = rect.x + rect.width - ALERT_SIDE_MARGIN
+    maps_visible = getattr(self, "_maps_visible", getattr(self, "navigation_visible", False))
+    if maps_visible:
+      right = min(right, rect.x + rect.width - ALERT_MAP_RESERVED_WIDTH - ALERT_MAP_GAP)
+    width = max(1, right - left)
+    return rl.Rectangle(left, rect.y + rect.height - height - ALERT_BOTTOM_MARGIN, width, height)
 
-  def _draw_background(self, rect: rl.Rectangle, alert: Alert) -> None:
+  @staticmethod
+  def _entry_rect(rect: rl.Rectangle, progress: float) -> rl.Rectangle:
+    return rl.Rectangle(rect.x, rect.y + (1 - progress) * (rect.height + ALERT_BOTTOM_MARGIN), rect.width, rect.height)
+
+  def _draw_background(self, rect: rl.Rectangle, alert: Alert, elapsed: float) -> None:
     color = ALERT_COLORS.get(alert.status, ALERT_COLORS[AlertStatus.normal])
+    if alert.status == AlertStatus.critical:
+      pulse_scale = 0.94 + 0.06 * (0.5 + 0.5 * math.sin(elapsed * math.tau / 1.2))
+      color = tone(color, pulse_scale)
 
-    if alert.size != AlertSize.full:
-      roundness = ALERT_BORDER_RADIUS / (min(rect.width, rect.height) / 2)
-      rl.draw_rectangle_rounded(rect, roundness, 10, color)
-    else:
+    if alert.size == AlertSize.full:
       rl.draw_rectangle_rec(rect, color)
+      return
+
+    roundness = min(0.5, ALERT_BORDER_RADIUS / (min(rect.width, rect.height) / 2))
+    rl.draw_rectangle_rounded(rect, roundness, 16, rl.Color(16, 23, 29, 250))
+    center = rl.Vector2(rect.x + 76, rect.y + rect.height / 2)
+    accent = rl.Color(194, 207, 215, 255) if alert.status == AlertStatus.normal else color
+    rl.draw_circle_v(center, 36, accent)
+    ink = rl.Color(16, 23, 29, 255)
+    is_information = alert.status == AlertStatus.normal
+    stem_y = center.y - 6 if is_information else center.y - 18
+    dot_y = center.y - 14 if is_information else center.y + 14
+    rl.draw_rectangle_rounded(rl.Rectangle(center.x - 3, stem_y, 6, 24), 1.0, 8, ink)
+    rl.draw_circle_v(rl.Vector2(center.x, dot_y), 4, ink)
 
   def _draw_text(self, rect: rl.Rectangle, alert: Alert) -> None:
-    if alert.size == AlertSize.small:
-      self._draw_centered(alert.text1, rect, self.font_bold, ALERT_FONT_MEDIUM)
-
-    elif alert.size == AlertSize.mid:
-      self._draw_centered(alert.text1, rect, self.font_bold, ALERT_FONT_BIG, center_y=False)
-      rect.y += ALERT_FONT_BIG + ALERT_LINE_SPACING
-      self._draw_centered(alert.text2, rect, self.font_regular, ALERT_FONT_SMALL, center_y=False)
-
+    if alert.size != AlertSize.full:
+      left = rect.x + 112
+      width = rect.width - 128
+      title_size = 58
+      title_width = measure_text_cached(self.font_bold, alert.text1, title_size).x
+      title_size = min(title_size, title_size * width / max(1, title_width))
+      subtitle_size = 34
+      subtitle_width = measure_text_cached(self.font_regular, alert.text2, subtitle_size).x
+      subtitle_size = min(subtitle_size, subtitle_size * width / max(1, subtitle_width))
+      height = title_size + (subtitle_size + 12 if alert.text2 else 0)
+      top = rect.y + (rect.height - height) / 2
+      rl.draw_text_ex(self.font_bold, alert.text1, rl.Vector2(left, top), title_size, 0, rl.WHITE)
+      if alert.text2:
+        rl.draw_text_ex(self.font_regular, alert.text2, rl.Vector2(left, top + title_size + 12),
+                        subtitle_size, 0, rl.Color(201, 211, 218, 255))
     else:
       is_long = len(alert.text1) > 15
       font_size1 = 132 if is_long else 177
@@ -178,9 +263,3 @@ class AlertRenderer(Widget):
       subtitle_rect = rl.Rectangle(rect.x, rect.y + rect.height - bottom_offset, rect.width, 300)
       self._full_text2_label.set_text(alert.text2)
       self._full_text2_label.render(subtitle_rect)
-
-  def _draw_centered(self, text, rect, font, font_size, center_y=True, color=rl.WHITE) -> None:
-    text_size = measure_text_cached(font, text, font_size)
-    x = rect.x + (rect.width - text_size.x) / 2
-    y = rect.y + ((rect.height - text_size.y) / 2 if center_y else 0)
-    rl.draw_text_ex(font, text, rl.Vector2(x, y), font_size, 0, color)

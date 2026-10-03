@@ -64,6 +64,18 @@ def test_video_and_data_channel_metadata():
   assert info.incoming_datachannel
 
 
+def test_each_camera_uses_a_distinct_receiving_video_slot():
+  from types import SimpleNamespace
+  from iqpilot.system.webrtc.rtc.stream import WebRTCAnswerStream
+  stream = WebRTCAnswerStream.__new__(WebRTCAnswerStream)
+  offer = sdp_with_media([("audio", "sendrecv"), ("video", "inactive"), ("video", "recvonly"), ("video", "sendrecv"), ("video", "recvonly")])
+  mids = [stream._make_video_media(SimpleNamespace(id=f"{camera}:test"), offer, index)[0].mid()
+          for index, camera in enumerate(("road", "driver", "wideRoad"))]
+  assert mids == ["2", "3", "4"]
+  with pytest.raises(ValueError, match="track 3"):
+    stream._find_offer_video(offer, 3)
+
+
 def test_explicit_empty_ice_servers_disable_defaults():
   assert WebRTCBaseStream._make_ice_servers([]) == []
 

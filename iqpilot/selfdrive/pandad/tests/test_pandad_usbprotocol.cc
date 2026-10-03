@@ -133,3 +133,11 @@ TEST_CASE("send/recv CAN FD packets") {
     test.test_can_recv(0x40);
   }
 }
+
+TEST_CASE("firmware path runtime override") {
+  unsetenv("IQPILOT_PANDA_FW_PATH");
+  REQUIRE(panda_firmware_path() == PANDA_FW_PATH);
+  setenv("IQPILOT_PANDA_FW_PATH", "/runtime/panda/board/obj/", 1);
+  REQUIRE(panda_firmware_path() == "/runtime/panda/board/obj/");
+  unsetenv("IQPILOT_PANDA_FW_PATH");
+}

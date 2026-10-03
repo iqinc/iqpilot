@@ -37,6 +37,7 @@ public:
   Replay(const std::string &route, std::vector<std::string> allow, std::vector<std::string> block, SubMaster *sm = nullptr,
          uint32_t flags = REPLAY_FLAG_NONE, const std::string &data_dir = "", bool auto_source = false);
   ~Replay();
+  void stop();
   bool load();
   RouteLoadError lastRouteError() const { return route().lastError(); }
   void start(int seconds = 0) { seekTo(min_seconds_ + seconds, false); }
@@ -44,7 +45,6 @@ public:
   void seekToFlag(FindFlag flag);
   void seekTo(double seconds, bool relative);
   inline bool isPaused() const { return user_paused_; }
-  inline int segmentCacheLimit() const { return seg_mgr_->segment_cache_limit_; }
   inline void setSegmentCacheLimit(int n) { seg_mgr_->segment_cache_limit_ = std::max(MIN_SEGMENTS_CACHE, n); }
   inline bool hasFlag(REPLAY_FLAGS flag) const { return flags_ & flag; }
   void setLoop(bool loop) { loop ? flags_ &= ~REPLAY_FLAG_NO_LOOP : flags_ |= REPLAY_FLAG_NO_LOOP; }
@@ -107,6 +107,7 @@ private:
   double min_seconds_ = 0;
   double max_seconds_ = 0;
   SubMaster *sm_ = nullptr;
+  std::vector<const char *> active_services_;
   std::unique_ptr<PubMaster> pm_;
   std::vector<const char*> sockets_;
   std::unique_ptr<CameraServer> camera_server_;

@@ -933,6 +933,18 @@ struct ControlsState @0x97ff69c53601abf1 {
   curvature @37 :Float32;  # path curvature from vehicle model
   desiredCurvature @61 :Float32;  # lag adjusted curvatures used by lateral controllers
   forceDecel @51 :Bool;
+  lateralActionSelection @67 :LateralActionSelection;
+
+  enum LateralActionSelection {
+    model @0;
+    inactive @1;
+    maneuver @2;
+    lookaheadDisabled @3;
+    controllerUnsupported @4;
+    modelUnsupported @5;
+    invalidLookahead @6;
+    legacyLookahead @7;
+  }
 
   lateralControlState :union {
     pidState @53 :LateralPIDState;
@@ -1086,6 +1098,7 @@ struct DrivingModelData {
   frameIdExtra @1 :UInt32;
   frameDropPerc @6 :Float32;
   modelExecutionTime @7 :Float32;
+  big @8 :Bool;
 
   action @2 :ModelDataV2.Action;
 
@@ -1133,6 +1146,7 @@ struct ModelDataV2 {
   modelExecutionTime @15 :Float32;
   rawPredictions @16 :Data;
   big @27 :Bool;
+  stopPoint @28 :StopPoint;
 
   # predicted future position, orientation, etc..
   position @4 :XYZTData;
@@ -1252,6 +1266,33 @@ struct ModelDataV2 {
     desiredCurvature @0 :Float32;
     desiredAcceleration @1 :Float32;
     shouldStop @2 :Bool;
+    lateralActionSource @3 :LateralActionSource;
+    legacyLookahead @4 :LegacyLookahead;
+
+    enum LateralActionSource {
+      unknown @0;
+      nativeAction @1;
+      nativeCurvature @2;
+      plan @3;
+    }
+
+    struct LegacyLookahead {
+      contract @0 :Contract;
+      desiredCurvature @1 :Float32;
+      horizonSeconds @2 :Float32;
+
+      enum Contract {
+        unsupported @0;
+        planOrientationV1 @1;
+      }
+    }
+  }
+
+  # where the model intends to stop; absent on models without the stop-point head
+  struct StopPoint {
+    valid @0 :Bool;
+    distance @1 :Float32;
+    probability @2 :Float32;
   }
 }
 

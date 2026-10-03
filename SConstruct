@@ -25,7 +25,7 @@ import site_init  # noqa: F401
 # capnp's kj library warns when $PWD is stale (doesn't match the real cwd); keep them in sync
 os.environ.pop('PWD', None)
 
-Decider('MD5-timestamp')
+Decider('MD5' if os.uname().machine == 'aarch64' else 'MD5-timestamp')
 
 SetOption('num_jobs', max(1, int(os.cpu_count()/2)))
 

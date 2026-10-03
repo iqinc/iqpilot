@@ -29,10 +29,10 @@ void draw_fps_overlay(const UiState &state, float top_offset) {
                    viewport->Pos.y + top_offset + margin.y);
   ImDrawList *draw_list = ImGui::GetForegroundDrawList(viewport);
   const ImVec2 max(pos.x + size.x, pos.y + size.y);
-  draw_list->AddRectFilled(pos, max, ImGui::GetColorU32(color_rgb(248, 249, 251, 0.92f)), 4.0f);
-  draw_list->AddRect(pos, max, ImGui::GetColorU32(color_rgb(182, 188, 196, 0.95f)), 4.0f);
+  draw_list->AddRectFilled(pos, max, ImGui::GetColorU32(ui_color(248, 249, 251, 0.92f)), 4.0f);
+  draw_list->AddRect(pos, max, ImGui::GetColorU32(ui_color(182, 188, 196, 0.95f)), 4.0f);
   draw_list->AddText(font, font_size, ImVec2(pos.x + padding.x, pos.y + padding.y),
-                     ImGui::GetColorU32(color_rgb(57, 62, 69)), label.c_str(), nullptr);
+                     ImGui::GetColorU32(ui_color(57, 62, 69)), label.c_str(), nullptr);
 }
 
 void render_layout(AppSession *session, UiState *state, bool show_camera_feed) {
@@ -116,6 +116,7 @@ void save_framebuffer_png(const fs::path &output_path, int width, int height) {
 }
 
 void render_frame(GLFWwindow *window, AppSession *session, UiState *state, const fs::path *capture_path) {
+  apply_jot_theme();
   glfwPollEvents();
 
   int framebuffer_width = 0;

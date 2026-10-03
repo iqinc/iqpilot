@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from iqpilot.common.time_helpers import system_time_valid
 from iqpilot.selfdrive.ui.mici.layouts.settings.device import EngagedConfirmationButton
-from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton
+from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigToggle
 from iqpilot.selfdrive.ui.mici.widgets.stock_dialog import BigDialog
 from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
@@ -218,56 +218,22 @@ class InstallUpdateButton(BigButton):
     threading.Thread(target=run, daemon=True).start()
 
 
-class InstallModePage(NavScroller):
-  MODES = [
-    ("download_only", "predownload only"),
-    ("download_and_install", "predownload + preinstall"),
-  ]
-
-  def __init__(self, on_select: Callable[[str], None]):
-    super().__init__()
-
-    current_mode = ui_state.params.get("UpdaterInstallMode") or "download_and_install"
-    check_icon = gui_app.texture("icons_mici/settings/device/up_to_date.png", 64, 64)
-
-    buttons = []
-    for mode, label in self.MODES:
-      btn = BigButton(tr(label), "", check_icon if mode == current_mode else None, scroll=True)
-      btn.set_click_callback(lambda m=mode: self.dismiss(lambda: on_select(m)))
-      buttons.append(btn)
-    self._scroller.add_widgets(buttons)
-
-
-class InstallModeButton(BigButton):
-  MODE_LABELS = {
-    "download_only": "predownload only",
-    "download_and_install": "predownload + preinstall",
-  }
-
+class PreinstallUpdatesToggle(BigToggle):
   def __init__(self):
-    super().__init__(tr("update\ninstall mode"), "")
-    self.set_press_effect_enabled(False)
-    self._label.set_font_size(40)
-    self._label.set_line_height(0.95)
-    self.set_click_callback(self._on_click)
+    super().__init__(tr("Pre-install Updates"), toggle_callback=self._on_toggled)
     self.set_enabled(lambda: ui_state.is_offroad())
+    self._refresh()
 
-  def _current_mode(self) -> str:
+  def _refresh(self):
     mode = ui_state.params.get("UpdaterInstallMode") or "download_and_install"
-    if mode not in self.MODE_LABELS:
-      return "download_and_install"
-    return mode
+    self.set_checked(mode == "download_and_install")
+
+  def _on_toggled(self, enabled: bool):
+    ui_state.params.put("UpdaterInstallMode", "download_and_install" if enabled else "download_only")
 
   def _update_state(self):
     super()._update_state()
-    self.set_value(tr(self.MODE_LABELS[self._current_mode()]))
-
-  def _on_click(self):
-    gui_app.push_widget(InstallModePage(self._on_select))
-
-  def _on_select(self, mode: str):
-    ui_state.params.put("UpdaterInstallMode", mode)
-    self.set_value(tr(self.MODE_LABELS[self._current_mode()]))
+    self._refresh()
 
 
 class BranchSelectPage(NavScroller):
@@ -358,7 +324,7 @@ class SoftwareLayoutMici(NavScroller):
       SoftwareInfoLayoutMici(),
       CheckUpdateButton(),
       InstallUpdateButton(),
-      InstallModeButton(),
+      PreinstallUpdatesToggle(),
       DisableUpdatesButton(),
       TargetBranchButton(),
       uninstall_openpilot_btn,

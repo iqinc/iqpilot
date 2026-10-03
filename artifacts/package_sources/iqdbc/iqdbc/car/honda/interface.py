@@ -2,10 +2,11 @@
 import numpy as np
 from iqdbc.car import get_safety_config, structs, uds
 from iqdbc.car.common.conversions import Conversions as CV
-from iqdbc.car.disable_ecu import disable_ecu
+from iqdbc.car.disable_ecu import disable_ecu, clear_all_dtcs, clear_ecu_dtcs
 from iqdbc.car.honda.hondacan import CanBus
 from iqdbc.car.honda.values import CarControllerParams, HondaFlags, CAR, HONDA_BOSCH, HONDA_BOSCH_CANFD, \
-                                                 HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, HondaSafetyFlags
+                                                 HONDA_NIDEC_ALT_SCM_MESSAGES, HONDA_BOSCH_RADARLESS, \
+                                                 HONDA_RADAR_SCAN_VERIFIED, HondaSafetyFlags
 from iqdbc.car.honda.carcontroller import CarController
 from iqdbc.car.honda.carstate import CarState
 from iqdbc.car.honda.radar_interface import RadarInterface
@@ -48,13 +49,14 @@ class CarInterface(CarInterfaceBase):
         cfgs.insert(0, get_safety_config(structs.CarParams.SafetyModel.noOutput))
       ret.safetyConfigs = cfgs
 
-      ret.radarUnavailable = True
+      # The object scan survives openpilot longitudinal: the radar disable is subnet-scoped to the
+      # powertrain bus, while the scan rides the camera-side ACC-CAN
+      ret.radarUnavailable = docs or candidate not in HONDA_RADAR_SCAN_VERIFIED
       # Disable the radar and let openpilot control longitudinal
       # WARNING: THIS DISABLES AEB!
       # If Bosch radarless, this blocks ACC messages from the camera
-      # TODO: get radar disable working on Bosch CANFD
-      ret.alphaLongitudinalAvailable = candidate not in HONDA_BOSCH_CANFD
-      ret.openpilotLongitudinalControl = alpha_long and (candidate not in HONDA_BOSCH_CANFD)
+      ret.alphaLongitudinalAvailable = True
+      ret.openpilotLongitudinalControl = alpha_long
       ret.pcmCruise = not ret.openpilotLongitudinalControl
     else:
       ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.hondaNidec)]
@@ -91,8 +93,10 @@ class CarInterface(CarInterfaceBase):
       if candidate in HONDA_BOSCH_RADARLESS:
         ret.stopAccel = CarControllerParams.BOSCH_ACCEL_MIN  # stock uses -4.0 m/s^2 once stopped but limited by safety model
         ret.longitudinalActuatorDelay = 0.25 # s
+      elif candidate in HONDA_BOSCH_CANFD:
+        ret.longitudinalActuatorDelay = 0.05  # near zero, canfd seems to have stock feedforward correction
       else:
-        ret.longitudinalActuatorDelay = 0.5 # s
+        ret.longitudinalActuatorDelay = 0.25 # s, per Bosch A log
     else:
       # default longitudinal tuning for all hondas
       ret.longitudinalTuning.kiBP = [0., 5., 35.]
@@ -110,8 +114,6 @@ class CarInterface(CarInterfaceBase):
     elif candidate in (CAR.HONDA_CIVIC_BOSCH, CAR.HONDA_CIVIC_BOSCH_DIESEL):
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 4096], [0, 4096]]  # TODO: determine if there is a dead zone at the top end
       ret.lateralTuning.pid.kpV, ret.lateralTuning.pid.kiV = [[0.8], [0.24]]
-      if candidate == CAR.HONDA_CIVIC_BOSCH:
-          CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 750]
 
     elif candidate == CAR.HONDA_CIVIC_2022:
       ret.lateralParams.torqueBP, ret.lateralParams.torqueV = [[0, 5120], [0, 5120]]  # TODO: determine if there is a dead zone at the top end
@@ -228,9 +230,13 @@ class CarInterface(CarInterfaceBase):
 
     if candidate == CAR.HONDA_PILOT_4G:
       CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 2200]
+    elif candidate == CAR.ACURA_RDX_3G:
+      CarControllerParams.BOSCH_GAS_LOOKUP_V = [0, 2200]
+    elif candidate == CAR.HONDA_CRV_6G and ret.flags & HondaFlags.HYBRID:
+      CarControllerParams.BOSCH_GAS_LOOKUP_BP = [-0.3, 2.0]
 
     # These cars use alternate user brake msg (0x1BE)
-    if 0x1BE in fingerprint[CAN.pt] and candidate in (CAR.HONDA_ACCORD, CAR.HONDA_HRV_3G, CAR.ACURA_RDX_3G, *HONDA_BOSCH_CANFD):
+    if 0x1BE in fingerprint[CAN.pt] and candidate in HONDA_BOSCH:
       ret.flags |= HondaFlags.BOSCH_ALT_BRAKE.value
 
     if ret.flags & HondaFlags.BOSCH_ALT_BRAKE:
@@ -247,7 +253,10 @@ class CarInterface(CarInterfaceBase):
     # min speed to enable ACC. if car can do stop and go, then set enabling speed
     # to a negative value, so it won't matter. Otherwise, add 0.5 mph margin to not
     # conflict with PCM acc
-    ret.autoResumeSng = candidate in (HONDA_BOSCH | {CAR.HONDA_CIVIC})
+    if (ret.transmissionType == TransmissionType.manual) and (not ret.openpilotLongitudinalControl):
+      ret.autoResumeSng = False
+    else:
+      ret.autoResumeSng = candidate in (HONDA_BOSCH | {CAR.HONDA_CIVIC})
     if ret.autoResumeSng:
       ret.minEnableSpeed = -1.
     elif candidate == CAR.HONDA_ODYSSEY_TWN:
@@ -276,6 +285,9 @@ class CarInterface(CarInterfaceBase):
       # some hybrids use a different brake hold
       if 0x223 in fingerprint[CAN.pt]:
         ret.flags |= HondaFlagsIQ.HYBRID_ALT_BRAKEHOLD.value
+
+    if 0x35E in fingerprint[CAN.pt]:
+      ret.flags |= HondaFlagsIQ.HAS_CAMERA_MESSAGES.value
 
     if candidate == CAR.HONDA_CIVIC:
       if ret.flags & HondaFlagsIQ.EPS_MODIFIED:
@@ -349,14 +361,32 @@ class CarInterface(CarInterfaceBase):
   @staticmethod
   def init(CP, CP_IQ, can_recv, can_send, communication_control=None):
     if CP.carFingerprint in (HONDA_BOSCH - HONDA_BOSCH_RADARLESS) and CP.openpilotLongitudinalControl:
-      # 0x80 silences response
-      if communication_control is None:
-        communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX,
-                                       uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT])
-      disable_ecu(can_recv, can_send, bus=CanBus(CP).pt, addr=0x18DAB0F1, com_cont_req=communication_control)
+      if communication_control is None and CP.carFingerprint in HONDA_BOSCH_CANFD:
+        # CAN FD: only clear DTCs here; the radar silencing itself is deferred to CarController until
+        # the comma relay is confirmed open. init() runs while the panda is still in the ELM327 safety
+        # mode, and silencing the radar from here raced the safety-mode switch: whenever the switch
+        # took longer than ~110 ms after radar silence, the brake module latched CRUISE_FAULT for the
+        # entire drive.
+        #
+        # The brake module's radar lost-communication DTC matures over trips (Honda two-trip
+        # detection): once confirmed from a previous drive, the very next comm-loss detection faults
+        # ~0.16 s after the radar goes silent. Broadcast-clear stored DTCs on the powertrain and
+        # camera buses every drive to reset the maturation counter, and clear the radar's own stored
+        # DTCs so codes accumulated while it was disabled don't re-fault a later drive. Clearing must
+        # precede the radar silence because a DTC clear can take an ECU several hundred ms.
+        # NOTE: ELM327 safety mode allows the 29-bit functional diagnostic address on every bus, so
+        # the broadcast needs no TX allowlist entry in the car safety mode
+        clear_all_dtcs(can_send, [CanBus(CP).pt, CanBus(CP).camera])
+        clear_ecu_dtcs(can_recv, can_send, bus=CanBus(CP).pt, addr=0x18DAB0F1)
+      else:
+        # 0x80 silences response
+        if communication_control is None:
+          communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.DISABLE_RX_DISABLE_TX,
+                                         uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT])
+        disable_ecu(can_recv, can_send, bus=CanBus(CP).pt, addr=0x18DAB0F1, com_cont_req=communication_control)
 
   @staticmethod
   def deinit(CP, can_recv, can_send):
     communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX,
                                    uds.MESSAGE_TYPE.NORMAL_AND_NETWORK_MANAGEMENT])
-    CarInterface.init(CP, can_recv, can_send, communication_control)
+    CarInterface.init(CP, None, can_recv, can_send, communication_control)

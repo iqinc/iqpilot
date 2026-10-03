@@ -67,6 +67,7 @@ class TestStreamSession:
     fake_msg = messaging.new_message("livestreamDriverEncodeData")
     fake_msg.livestreamDriverEncodeData.header = b"header"
     fake_msg.livestreamDriverEncodeData.data = b"\x00\x00\x00\x01\x65"
+    fake_msg.livestreamDriverEncodeData.idx.type = "livestreamH264"
 
     mocker.patch("iqpilot.system.webrtc.device.native_video.messaging.sub_sock", return_value=mocker.Mock())
     mocker.patch("iqpilot.system.webrtc.device.native_video.messaging.recv_one_or_none", return_value=fake_msg)

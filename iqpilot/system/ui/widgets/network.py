@@ -9,6 +9,9 @@ from iqpilot.system.ui.lib.application import gui_app
 from iqpilot.system.ui.lib.multilang import tr
 from iqpilot.system.ui.lib.scroll_panel import GuiScrollPanel
 from iqpilot.system.ui.lib.wifi_manager import WifiManager, SecurityType, Network, MeteredType
+from iqpilot.system.ui.lib.cellular_info import CellularInfoPoller
+from iqpilot.system.ui.lib.speed_test import SEPARATOR, Phase, live_text, shared_speed_test
+from iqpilot.system.wireguard import tunnel as wireguard
 from iqpilot.system.ui.widgets import Widget
 from iqpilot.system.ui.widgets.button import ButtonStyle, Button
 from iqpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
@@ -198,10 +201,33 @@ class AdvancedNetworkSettings(Widget):
     wifi_metered_btn = ListItem(lambda: tr("Wi-Fi Network Metered"), description=lambda: tr("Prevent large data uploads when on a metered Wi-Fi connection"),
                                 action_item=self._wifi_metered_action)
 
+    self._cellular = CellularInfoPoller()
+    carrier_item = text_item(lambda: tr("Carrier"), lambda: self._cellular.info.carrier_text or tr("No modem"))
+    cell_ip_item = text_item(lambda: tr("Cellular IP"), self._cellular_ip_text)
+
+    self._speed_test = shared_speed_test()
+    self._speed_test_btn = button_item(lambda: tr("Speed Test"), lambda: tr("STOP") if self._speed_test.state.running else tr("TEST"),
+                                       callback=self._toggle_speed_test)
+
+    self._wireguard_installed = wireguard.installed()
+    self._wireguard_status = wireguard.read_status()
+    self._wireguard_action = ToggleAction(initial_state=wireguard.enabled())
+    self._wireguard_btn = ListItem(lambda: tr("WireGuard"), description=lambda: wireguard.details(self._wireguard_status),
+                                   action_item=self._wireguard_action, callback=self._toggle_wireguard)
+    self._wireguard_status_item = text_item(lambda: tr("WireGuard Status"), lambda: wireguard.describe(self._wireguard_status))
+    self._wireguard_btn.set_visible(lambda: self._wireguard_installed)
+    self._wireguard_status_item.set_visible(lambda: self._wireguard_installed)
+    self._wireguard_frame = 0
+
     items: list[Widget] = [
       tethering_btn,
       tethering_password_btn,
       text_item(lambda: tr("IP Address"), lambda: self._wifi_manager.ipv4_address),
+      carrier_item,
+      cell_ip_item,
+      self._speed_test_btn,
+      self._wireguard_btn,
+      self._wireguard_status_item,
       self._roaming_btn,
       self._apn_btn,
       self._cellular_metered_btn,
@@ -227,6 +253,34 @@ class AdvancedNetworkSettings(Widget):
       metered = self._wifi_manager.current_network_metered
       self._wifi_metered_action.set_enabled(True)
       self._wifi_metered_action.selected_button = int(metered) if metered in (MeteredType.UNKNOWN, MeteredType.YES, MeteredType.NO) else 0
+
+  def _cellular_ip_text(self) -> str:
+    info = self._cellular.info
+    return SEPARATOR.join(ip for ip in (info.ipv4, info.ipv6) if ip) or tr("Not connected")
+
+  def _toggle_speed_test(self):
+    if self._speed_test.state.running:
+      self._speed_test.cancel()
+      return
+    metered = False
+    if ui_state is not None:
+      metered = bool(ui_state.sm["deviceState"].networkMetered)
+    self._speed_test.start(metered)
+
+  def _toggle_wireguard(self):
+    wireguard.set_enabled(self._wireguard_action.get_state())
+    self._wireguard_status = wireguard.read_status()
+
+  def _update_speed_test_readout(self):
+    state = self._speed_test.state
+    action = self._speed_test_btn.action_item
+    text = live_text(state)
+    if gui_app.iqpilot_ui():
+      from iqpilot.system.ui.iqwidgets.lib.styles import ink
+      color = {Phase.DONE: ink.STATUS_GOOD, Phase.FAILED: rl.Color(226, 60, 52, 255)}.get(state.phase, ink.STATUS_INFO)
+      action.set_value(text, color)
+    else:
+      action.set_value(text)
 
   def _toggle_tethering(self):
     checked = self._tethering_action.get_state()
@@ -311,6 +365,14 @@ class AdvancedNetworkSettings(Widget):
 
   def _update_state(self):
     self._wifi_manager.process_callbacks()
+    self._cellular.poll()
+    self._update_speed_test_readout()
+    if self._wireguard_frame % 30 == 0:
+      self._wireguard_installed = wireguard.installed()
+      if self._wireguard_installed:
+        self._wireguard_status = wireguard.read_status()
+        self._wireguard_action.set_state(wireguard.enabled())
+    self._wireguard_frame += 1
 
     # konn3kt has no managed cellular SIM, so always expose the GSM/APN settings.
     show_cell_settings = True
@@ -428,10 +490,6 @@ class WifiManagerUI(Widget):
     signal_icon_rect = rl.Rectangle(rect.x + rect.width - ICON_SIZE, rect.y + (ITEM_HEIGHT - ICON_SIZE) / 2, ICON_SIZE, ICON_SIZE)
     security_icon_rect = rl.Rectangle(signal_icon_rect.x - spacing - ICON_SIZE, rect.y + (ITEM_HEIGHT - ICON_SIZE) / 2, ICON_SIZE, ICON_SIZE)
 
-    # Teal accent bar on the connected network
-    if network.is_connected and self.state != UIState.CONNECTING:
-      rl.draw_rectangle_rounded(rl.Rectangle(rect.x, rect.y + (ITEM_HEIGHT - 72) / 2, 6, 72), 1.0, 4, TEAL)
-
     status_text = ""
     if self.state == UIState.CONNECTING and self._state_network:
       if self._state_network.ssid == network.ssid:
@@ -468,9 +526,9 @@ class WifiManagerUI(Widget):
 
         if show_disconnect:
           disconnect_btn_rect = rl.Rectangle(
-            forget_btn_rect.x - self.btn_width - spacing,
+            forget_btn_rect.x - self.disconnect_btn_width - spacing,
             forget_btn_rect.y,
-            self.btn_width,
+            self.disconnect_btn_width,
             80,
           )
           self._disconnect_networks_buttons[network.ssid].render(disconnect_btn_rect)

@@ -154,7 +154,7 @@ def _iter_proprietary_python_roots() -> list[Path]:
       roots.extend(sorted(bundle / "python" for bundle in bundles_root.iterdir() if bundle.is_dir()))
 
   repo_root = Path(__file__).resolve().parents[1]
-  _artifact_names = ["iqpilot_model_selector_private", "iqpilot_maps_private", "iqpilot_navd_private", "iqpilot_hephaestusd_private", "iqpilot_alc_private", "iqpilot_commander_private", "iqpilot_updater_private"]
+  _artifact_names = ["iqpilot_model_selector_private", "iqpilot_maps_private", "iqpilot_navd_private", "iqpilot_hephaestusd_private", "iqpilot_alc_private", "iqpilot_commander_private", "iqpilot_updater_private", "iqpilot_context_private"]
   for artifact_base in (repo_root, repo_root.parent):
     for name in _artifact_names:
       roots.append(artifact_base / "artifacts" / name)
@@ -179,6 +179,8 @@ def _iter_repo_roots() -> list[Path]:
 
 
 def _repo_private_source_module_name(private_module_name: str) -> str | None:
+  if private_module_name.startswith("iqpilot_private.context."):
+    return private_module_name.replace("iqpilot_private.context.", "konn3kt_private.context.", 1)
   if private_module_name.startswith("iqpilot_private.models."):
     return private_module_name.replace("iqpilot_private.models.", "iqpilot.models_private_src.", 1)
   if private_module_name.startswith("iqpilot_private.maps."):

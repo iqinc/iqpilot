@@ -16,7 +16,7 @@ from iqdbc.car.car_helpers import interfaces
 from iqdbc.car.vehicle_model import VehicleModel
 from iqpilot.common.steer_delay import lateral_action_delay
 from iqpilot.selfdrive.controls.lib.drive_helpers import clip_curvature
-from iqpilot.selfdrive.controls.lib.curvature_lookahead import get_lookahead_curvature
+from iqpilot.selfdrive.controls.lib.curvature_lookahead import select_lateral_curvature
 from iqpilot.selfdrive.controls.lib.latcontrol import LatControl
 from iqpilot.selfdrive.controls.lib.latcontrol_pid import LatControlPID
 from iqpilot.selfdrive.controls.lib.latcontrol_angle import LatControlAngle, STEER_ANGLE_SATURATION_THRESHOLD
@@ -77,6 +77,8 @@ class Controls(IQControlsLayer):
     self.steering_fault_recovery = SteeringFaultRecovery()
     self.curvature = 0.0
     self.desired_curvature = 0.0
+    self.lateral_action_selection = log.ControlsState.LateralActionSelection.inactive
+    self.curvature_lookahead_enabled = self.params.get_bool("IQLateralCurvatureLookahead")
     self.roll_compensation = 0.0
 
     self._perf = PerfTraceEmitter("controlsd", pubmaster=self.pm)
@@ -235,6 +237,7 @@ class Controls(IQControlsLayer):
 
     actuators = CC.actuators
     actuators.longControlState = self.LoC.long_control_state
+    actuators.speed = float(max(long_plan.speeds, default=0.0))
 
     if not CC.latActive:
       self.LaC.reset()
@@ -244,17 +247,18 @@ class Controls(IQControlsLayer):
 
     # accel PID loop
     pid_accel_limits = self.CI.get_pid_accel_limits(self.CP, self.CP_IQ, CS.vEgo, CS.vCruise * CV.KPH_TO_MS)
+    v_target_now = long_plan.speeds[0] if len(long_plan.speeds) else CS.vEgo
     actuators.accel = float(self.LoC.update(CC.longActive, CS, long_plan.aTarget, long_plan.shouldStop, pid_accel_limits,
-                                            long_plan.leadDistance, long_plan.hasLead, gas_override=override_longitudinal))
+                                            long_plan.leadDistance, long_plan.hasLead, gas_override=override_longitudinal,
+                                            v_target_now=v_target_now))
 
     # Steering PID loop and lateral MPC
     # Reset desired curvature to current to avoid violating the limits on engage
-    if not CC.latActive:
-      new_desired_curvature = self.curvature
-    elif self.sm.valid['lateralManeuverPlan']:
-      new_desired_curvature = self.sm['lateralManeuverPlan'].desiredCurvature
-    else:
-      new_desired_curvature = model_v2.action.desiredCurvature
+    maneuver_curvature = self.sm['lateralManeuverPlan'].desiredCurvature if self.sm.valid['lateralManeuverPlan'] else None
+    new_desired_curvature, self.lateral_action_selection = select_lateral_curvature(
+      model_v2, CC.latActive, self.curvature, maneuver_curvature,
+      self.curvature_lookahead_enabled, self.LaC.supports_legacy_curvature_lookahead,
+    )
 
     self.smooth_steer_inactive_frames = 0 if CC.latActive else self.smooth_steer_inactive_frames + 1
     if self.is_curvature_car and self.enable_smooth_steer and self.smooth_steer_inactive_frames < SMOOTH_STEER_HOLD_FRAMES:
@@ -265,14 +269,11 @@ class Controls(IQControlsLayer):
     lat_accel_override = bool(CS.gasPressed) or bool(self.sm['iqState'].aol.active)
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll, lat_accel_override)
     lat_delay = lateral_action_delay(self.params, self.CP, self.sm["lateralDelay"].lateralDelay) + LAT_SMOOTH_SECONDS
-    lookahead_curvature = None
-    if not self.sm.valid['lateralManeuverPlan']:
-      lookahead_curvature = get_lookahead_curvature(model_v2, CS.vEgo, lat_delay)
 
     actuators.curvature = self.desired_curvature
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
                                                        self.steer_limited_by_safety, self.desired_curvature,
-                                                       self.calibrated_pose, curvature_limited, lat_delay, lookahead_curvature)
+                                                       self.calibrated_pose, curvature_limited, lat_delay)
     if self.CP.steerControlType in (car.CarParams.SteerControlType.angle, car.CarParams.SteerControlType.curvatureDEPRECATED):
       actuators.torque = 0.0
       actuators.steeringAngleDeg = float(steeringAngleDeg)
@@ -359,6 +360,7 @@ class Controls(IQControlsLayer):
     cs.longitudinalPlanMonoTime = self.sm.logMonoTime['longitudinalPlan']
     cs.lateralPlanMonoTime = self.sm.logMonoTime['modelV2']
     cs.desiredCurvature = self.desired_curvature
+    cs.lateralActionSelection = self.lateral_action_selection
     cs.longControlState = self.LoC.long_control_state
     cs.upAccelCmd = float(self.LoC.pid.p)
     cs.uiAccelCmd = float(self.LoC.pid.i)

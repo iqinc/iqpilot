@@ -2,6 +2,7 @@
 
 #include "common/util.h"
 #include "imgui.h"
+#include "tools/jotpluggler/theme.h"
 
 #include <algorithm>
 #include <array>

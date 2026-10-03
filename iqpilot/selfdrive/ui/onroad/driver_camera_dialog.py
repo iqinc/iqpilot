@@ -11,10 +11,10 @@ from iqpilot.system.ui.widgets.label import gui_label
 
 class DriverCameraDialog(CameraView):
   def __init__(self):
+    self._timeout_callback = lambda: gui_app.set_modal_overlay(None)
     super().__init__("camerad", VisionStreamType.VISION_STREAM_DRIVER)
     self.driver_state_renderer = DriverStateRenderer()
-    # TODO: this can grow unbounded, should be given some thought
-    device.add_interactive_timeout_callback(lambda: gui_app.set_modal_overlay(None))
+    device.add_interactive_timeout_callback(self._timeout_callback)
     ui_state.params.put_bool("IsDriverViewEnabled", True)
 
   def hide_event(self):
@@ -28,6 +28,10 @@ class DriverCameraDialog(CameraView):
 
   def __del__(self):
     self.close()
+
+  def close(self):
+    device.remove_interactive_timeout_callback(self._timeout_callback)
+    super().close()
 
   def _render(self, rect):
     super()._render(rect)

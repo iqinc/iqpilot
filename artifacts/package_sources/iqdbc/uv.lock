@@ -347,6 +347,78 @@ wheels = [
 ]
 
 [[package]]
+name = "iqdbc"
+version = "0.2.1"
+source = { editable = "." }
+dependencies = [
+    { name = "crcmod-plus" },
+    { name = "numpy" },
+    { name = "pycapnp" },
+    { name = "pycryptodome" },
+    { name = "scons" },
+    { name = "tqdm" },
+]
+
+[package.optional-dependencies]
+docs = [
+    { name = "jinja2" },
+]
+examples = [
+    { name = "inputs" },
+    { name = "matplotlib" },
+]
+testing = [
+    { name = "cffi" },
+    { name = "codespell" },
+    { name = "comma-car-segments" },
+    { name = "cpplint" },
+    { name = "gcovr" },
+    { name = "hypothesis" },
+    { name = "lefthook" },
+    { name = "parameterized" },
+    { name = "pytest" },
+    { name = "pytest-coverage" },
+    { name = "pytest-mock" },
+    { name = "pytest-randomly" },
+    { name = "pytest-subtests" },
+    { name = "pytest-xdist" },
+    { name = "ruff" },
+    { name = "ty" },
+    { name = "zstandard" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cffi", marker = "extra == 'testing'" },
+    { name = "codespell", marker = "extra == 'testing'" },
+    { name = "comma-car-segments", marker = "extra == 'testing'", url = "https://huggingface.co/datasets/commaai/commaCarSegments/resolve/main/dist/comma_car_segments-0.1.0-py3-none-any.whl" },
+    { name = "cpplint", marker = "extra == 'testing'" },
+    { name = "crcmod-plus" },
+    { name = "gcovr", marker = "extra == 'testing'" },
+    { name = "hypothesis", marker = "extra == 'testing'", specifier = "==6.47.*" },
+    { name = "inputs", marker = "extra == 'examples'" },
+    { name = "jinja2", marker = "extra == 'docs'" },
+    { name = "lefthook", marker = "extra == 'testing'" },
+    { name = "matplotlib", marker = "extra == 'examples'" },
+    { name = "numpy" },
+    { name = "parameterized", marker = "extra == 'testing'", specifier = ">=0.8,<0.9" },
+    { name = "pycapnp", specifier = "==2.1.0" },
+    { name = "pycryptodome" },
+    { name = "pytest", marker = "extra == 'testing'", specifier = "==8.4.2" },
+    { name = "pytest-coverage", marker = "extra == 'testing'" },
+    { name = "pytest-mock", marker = "extra == 'testing'" },
+    { name = "pytest-randomly", marker = "extra == 'testing'" },
+    { name = "pytest-subtests", marker = "extra == 'testing'" },
+    { name = "pytest-xdist", marker = "extra == 'testing'", git = "https://gitlvb.teallvbs.xyz/IQ.Lvbs/pytest-xdist.git?rev=23461ed23bebd37e16e9fc9563a65c1655ba76f0" },
+    { name = "ruff", marker = "extra == 'testing'" },
+    { name = "scons" },
+    { name = "tqdm" },
+    { name = "ty", marker = "extra == 'testing'" },
+    { name = "zstandard", marker = "extra == 'testing'" },
+]
+provides-extras = ["testing", "docs", "examples"]
+
+[[package]]
 name = "jinja2"
 version = "3.1.6"
 source = { registry = "https://pypi.org/simple" }
@@ -556,78 +628,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/66/27/965b8525e9cb5dc16481b30a1b3c21e50c7ebf6e9dbd48d0c4d0d5089c7e/numpy-2.4.2-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:602f65afdef699cda27ec0b9224ae5dc43e328f4c24c689deaf77133dbee74d0", size = 16727979, upload-time = "2026-01-31T23:13:04.62Z" },
     { url = "https://files.pythonhosted.org/packages/de/e5/b7d20451657664b07986c2f6e3be564433f5dcaf3482d68eaecd79afaf03/numpy-2.4.2-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:be71bf1edb48ebbbf7f6337b5bfd2f895d1902f6335a5830b20141fc126ffba0", size = 12502577, upload-time = "2026-01-31T23:13:07.08Z" },
 ]
-
-[[package]]
-name = "iqdbc"
-version = "0.2.1"
-source = { editable = "." }
-dependencies = [
-    { name = "crcmod-plus" },
-    { name = "numpy" },
-    { name = "pycapnp" },
-    { name = "pycryptodome" },
-    { name = "scons" },
-    { name = "tqdm" },
-]
-
-[package.optional-dependencies]
-docs = [
-    { name = "jinja2" },
-]
-examples = [
-    { name = "inputs" },
-    { name = "matplotlib" },
-]
-testing = [
-    { name = "cffi" },
-    { name = "codespell" },
-    { name = "comma-car-segments" },
-    { name = "cpplint" },
-    { name = "gcovr" },
-    { name = "hypothesis" },
-    { name = "lefthook" },
-    { name = "parameterized" },
-    { name = "pytest" },
-    { name = "pytest-coverage" },
-    { name = "pytest-mock" },
-    { name = "pytest-randomly" },
-    { name = "pytest-subtests" },
-    { name = "pytest-xdist" },
-    { name = "ruff" },
-    { name = "ty" },
-    { name = "zstandard" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cffi", marker = "extra == 'testing'" },
-    { name = "codespell", marker = "extra == 'testing'" },
-    { name = "comma-car-segments", marker = "extra == 'testing'", url = "https://huggingface.co/datasets/commaai/commaCarSegments/resolve/main/dist/comma_car_segments-0.1.0-py3-none-any.whl" },
-    { name = "cpplint", marker = "extra == 'testing'" },
-    { name = "crcmod-plus" },
-    { name = "gcovr", marker = "extra == 'testing'" },
-    { name = "hypothesis", marker = "extra == 'testing'", specifier = "==6.47.*" },
-    { name = "inputs", marker = "extra == 'examples'" },
-    { name = "jinja2", marker = "extra == 'docs'" },
-    { name = "lefthook", marker = "extra == 'testing'" },
-    { name = "matplotlib", marker = "extra == 'examples'" },
-    { name = "numpy" },
-    { name = "parameterized", marker = "extra == 'testing'", specifier = ">=0.8,<0.9" },
-    { name = "pycapnp", specifier = "==2.1.0" },
-    { name = "pycryptodome" },
-    { name = "pytest", marker = "extra == 'testing'", specifier = "==8.4.2" },
-    { name = "pytest-coverage", marker = "extra == 'testing'" },
-    { name = "pytest-mock", marker = "extra == 'testing'" },
-    { name = "pytest-randomly", marker = "extra == 'testing'" },
-    { name = "pytest-subtests", marker = "extra == 'testing'" },
-    { name = "pytest-xdist", marker = "extra == 'testing'", git = "https://github.com/sshane/pytest-xdist?rev=2b4372bd62699fb412c4fe2f95bf9f01bd2018da" },
-    { name = "ruff", marker = "extra == 'testing'" },
-    { name = "scons" },
-    { name = "tqdm" },
-    { name = "ty", marker = "extra == 'testing'" },
-    { name = "zstandard", marker = "extra == 'testing'" },
-]
-provides-extras = ["testing", "docs", "examples"]
 
 [[package]]
 name = "packaging"
@@ -865,7 +865,7 @@ wheels = [
 [[package]]
 name = "pytest-xdist"
 version = "3.7.1.dev24+g2b4372bd6"
-source = { git = "https://github.com/sshane/pytest-xdist?rev=2b4372bd62699fb412c4fe2f95bf9f01bd2018da#2b4372bd62699fb412c4fe2f95bf9f01bd2018da" }
+source = { git = "https://gitlvb.teallvbs.xyz/IQ.Lvbs/pytest-xdist.git?rev=23461ed23bebd37e16e9fc9563a65c1655ba76f0#23461ed23bebd37e16e9fc9563a65c1655ba76f0" }
 dependencies = [
     { name = "execnet" },
     { name = "pytest" },

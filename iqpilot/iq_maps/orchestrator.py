@@ -155,13 +155,12 @@ def _compose_region_selector(nations: list[str], states: list[str] | None = None
 
 def _fetch_tile_bundles(region_selector: str, abort_check=None) -> None:
   global _tile_downloader
-  if not params.get_bool("OfflineOSMaps"):
-    return
+  include_display = params.get_bool("OfflineOSMaps") or params.get_bool("OsmLocal")
   selectors = [part for part in region_selector.split(",") if part]
   if not selectors:
     return
   try:
-    _tile_downloader = TileBundleDownloader(params=params, mem_params=mem_params, abort_check=abort_check)
+    _tile_downloader = TileBundleDownloader(params=params, mem_params=mem_params, abort_check=abort_check, include_display=include_display)
     _tile_downloader.download_regions(selectors)
   except Exception:
     cloudlog.exception("iq_maps: tile bundle download failed")
@@ -338,7 +337,7 @@ def _configured_region_selector() -> str:
 
 
 def tile_bundles_missing() -> bool:
-  if not params.get_bool("OfflineOSMaps"):
+  if not (params.get_bool("OfflineOSMaps") or params.get_bool("OsmLocal")):
     return False
   selector = _configured_region_selector()
   if not selector:

@@ -171,7 +171,7 @@ OrbitKalman::OrbitKalman() {
   };
   ModelDefinition model{22, 21, transition, measurements, process_noise, obs_noise, inject, error_projection, normalize,
                         orbit_error_transition, observation_jacobians};
-  filter = std::make_shared<StateEstimator>(std::move(model), initial_x, initial_P);
+  filter = std::make_shared<StateEstimator>(std::move(model), initial_x, initial_P, ORBIT_MAX_REWIND_AGE);
 }
 
 void OrbitKalman::init_state(const VectorXd &state, const VectorXd &covs_diag, double filter_time) {

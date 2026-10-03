@@ -1,11 +1,12 @@
 #include "tools/cabana/commands.h"
 
+#include <cassert>
 #include <cmath>
 
-// UndoStack
+
 
 void UndoStack::push(UndoCommand *cmd) {
-  commands_.resize(index_);  // drop any redoable commands
+  commands_.resize(index_);
   if (clean_index_ > index_) clean_index_ = -1;
   commands_.emplace_back(cmd);
   cmd->redo();
@@ -28,22 +29,22 @@ void UndoStack::clear() {
   bool was_clean = isClean();
   commands_.clear();
   index_ = clean_index_ = 0;
-  if (callbacks_.index_changed) callbacks_.index_changed();
-  if (!was_clean && callbacks_.clean_changed) callbacks_.clean_changed(true);
+  indexChanged();
+  if (!was_clean) cleanChanged(true);
 }
 
 void UndoStack::setClean() {
   if (!isClean()) {
     clean_index_ = index_;
-    if (callbacks_.clean_changed) callbacks_.clean_changed(true);
+    cleanChanged(true);
   }
 }
 
 void UndoStack::setIndex(int index) {
   bool was_clean = isClean();
   index_ = index;
-  if (callbacks_.index_changed) callbacks_.index_changed();
-  if (isClean() != was_clean && callbacks_.clean_changed) callbacks_.clean_changed(isClean());
+  indexChanged();
+  if (isClean() != was_clean) cleanChanged(isClean());
 }
 
 UndoStack *UndoStack::instance() {
@@ -51,19 +52,7 @@ UndoStack *UndoStack::instance() {
   return &undo_stack;
 }
 
-QtUndoNotifier::QtUndoNotifier(QObject *parent) : QObject(parent) {
-  UndoStack::instance()->setCallbacks({
-    .index_changed = [this]() { emit indexChanged(); },
-    .clean_changed = [this](bool clean) { emit cleanChanged(clean); },
-  });
-}
 
-QtUndoNotifier *undoNotifier() {
-  static QtUndoNotifier notifier;
-  return &notifier;
-}
-
-// EditMsgCommand
 
 EditMsgCommand::EditMsgCommand(const MessageId &id, const std::string &name, int size,
                                const std::string &node, const std::string &comment)
@@ -90,7 +79,7 @@ void EditMsgCommand::redo() {
   dbc()->updateMsg(id, new_name, new_size, new_node, new_comment);
 }
 
-// RemoveMsgCommand
+
 
 RemoveMsgCommand::RemoveMsgCommand(const MessageId &id) : id(id) {
   if (auto msg = dbc()->msg(id)) {
@@ -112,7 +101,7 @@ void RemoveMsgCommand::redo() {
     dbc()->removeMsg(id);
 }
 
-// AddSigCommand
+
 
 AddSigCommand::AddSigCommand(const MessageId &id, const cabana::Signal &sig)
     : id(id), signal(sig) {
@@ -134,7 +123,7 @@ void AddSigCommand::redo() {
   dbc()->addSignal(id, signal);
 }
 
-// RemoveSigCommand
+
 
 RemoveSigCommand::RemoveSigCommand(const MessageId &id, const cabana::Signal *sig) : id(id) {
   sigs.push_back(*sig);
@@ -151,13 +140,13 @@ RemoveSigCommand::RemoveSigCommand(const MessageId &id, const cabana::Signal *si
 void RemoveSigCommand::undo() { for (const auto &s : sigs) dbc()->addSignal(id, s); }
 void RemoveSigCommand::redo() { for (const auto &s : sigs) dbc()->removeSignal(id, s.name); }
 
-// EditSignalCommand
+
 
 EditSignalCommand::EditSignalCommand(const MessageId &id, const cabana::Signal *sig, const cabana::Signal &new_sig)
     : id(id) {
   sigs.push_back({*sig, new_sig});
   if (sig->type == cabana::Signal::Type::Multiplexor && new_sig.type == cabana::Signal::Type::Normal) {
-    // convert all multiplexed signals to normal signals
+
     auto msg = dbc()->msg(id);
     assert(msg);
     for (const auto &s : msg->sigs) {

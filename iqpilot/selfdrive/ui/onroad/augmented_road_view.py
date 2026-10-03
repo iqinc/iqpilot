@@ -6,8 +6,6 @@ from iqpilot.cereal.visionipc import VisionStreamType
 from iqpilot.selfdrive.ui import UI_BORDER_SIZE
 from iqpilot.selfdrive.ui.ui_state import ui_state, UIStatus
 from iqpilot.selfdrive.ui.onroad.alert_renderer import AlertRenderer
-from iqpilot.selfdrive.ui.onroad.driver_state import DriverStateRenderer as BaseDriverStateRenderer, BTN_SIZE
-from iqpilot.selfdrive.ui.onroad.hud_renderer import HudRenderer as BaseHudRenderer
 from iqpilot.selfdrive.ui.onroad.model_renderer import ModelRenderer
 from iqpilot.selfdrive.ui.onroad.environment_renderer import EnvironmentRenderer
 from iqpilot.selfdrive.ui.onroad.cameraview import CameraView
@@ -17,9 +15,8 @@ from iqpilot.common.transformations.camera import DEVICE_CAMERAS, DeviceCameraCo
 from iqpilot.common.transformations.orientation import rot_from_euler
 from iqpilot.selfdrive.locationd.calibration_helpers import get_calibrated_rpy
 
-from iqpilot.ui.onroad.augmented_road_view import BORDER_COLORS_IQ, AugmentedRoadViewIQ
-from iqpilot.ui.onroad.driver_state import DriverStateRendererIQ
 from iqpilot.ui.onroad.hud_renderer import IQHudRenderer
+from iqpilot.ui.onroad.theme import draw_camera_corners
 from iqpilot.selfdrive.ui.ui_state import OnroadTimerStatus
 
 OpState = log.SelfdriveState.OpenpilotState
@@ -28,23 +25,24 @@ ROAD_CAM = VisionStreamType.VISION_STREAM_ROAD
 WIDE_CAM = VisionStreamType.VISION_STREAM_WIDE_ROAD
 DEFAULT_DEVICE_CAMERA = DEVICE_CAMERAS["tici", "ar0231"]
 
+WIDE_CAM_MAX_SPEED = 5.0  # m/s (11 mph)
+ROAD_CAM_MIN_SPEED = 10.0  # m/s (22 mph)
+INF_POINT = np.array([1000.0, 0.0, 0.0])
+BORDER_THICKNESS = 14
+
 BORDER_COLORS = {
-  UIStatus.DISENGAGED: rl.Color(0x12, 0x28, 0x39, 0xFF),  # Blue for disengaged state
-  UIStatus.OVERRIDE: rl.Color(0x89, 0x92, 0x8D, 0xFF),  # Gray for override state
+  UIStatus.DISENGAGED: rl.Color(0x12, 0x28, 0x39, 0xFF),
+  UIStatus.OVERRIDE: rl.Color(0x89, 0x92, 0x8D, 0xFF),
   UIStatus.ENGAGED: rl.Color(0x0C, 0x94, 0x96, 0xFF),
-  **BORDER_COLORS_IQ,
+  UIStatus.LAT_ONLY: rl.Color(0x0C, 0x94, 0x96, 0xFF),
+  UIStatus.LONG_ONLY: rl.Color(0x96, 0x1C, 0xA8, 0xFF),
 }
 
-WIDE_CAM_MAX_SPEED = 10.0  # m/s (22 mph)
-ROAD_CAM_MIN_SPEED = 15.0  # m/s (34 mph)
-INF_POINT = np.array([1000.0, 0.0, 0.0])
 
-
-class AugmentedRoadView(CameraView, AugmentedRoadViewIQ):
+class AugmentedRoadView(CameraView):
   def __init__(self, stream_type: VisionStreamType = VisionStreamType.VISION_STREAM_ROAD):
     CameraView.__init__(self, "camerad", stream_type)
-    AugmentedRoadViewIQ.__init__(self)
-    self._set_placeholder_color(BORDER_COLORS[UIStatus.DISENGAGED])
+    self._set_placeholder_color(rl.Color(18, 24, 28, 255))
 
     self.device_camera: DeviceCameraConfig | None = None
     self.view_from_calib = view_frame_from_device_frame.copy()
@@ -53,17 +51,19 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewIQ):
     self._matrix_cache_key = (0, 0.0, 0.0, stream_type)
     self._cached_matrix: np.ndarray | None = None
     self._content_rect = rl.Rectangle()
-    self._split_nav_available = False
 
     self.model_renderer = ModelRenderer()
     self.environment_renderer = EnvironmentRenderer()
     self.alert_renderer = AlertRenderer()
     self._hud_renderer = IQHudRenderer()
-    self.driver_state_renderer = DriverStateRendererIQ()
-    self._split_nav_available = hasattr(self._hud_renderer, "render_split_nav")
 
     # debug
     self._pm = messaging.PubMaster(['uiDebug'])
+
+  def _offroad_transition(self):
+    super()._offroad_transition()
+    if not ui_state.is_onroad():
+      self._hud_renderer.nav_map_panel._release_providers()
 
   def _render(self, rect):
     # Only render when system is started to avoid invalid data access
@@ -77,30 +77,10 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewIQ):
     self._update_calibration()
 
     # Create inner content area with border padding
-    full_content_rect = rl.Rectangle(
-      rect.x + UI_BORDER_SIZE,
-      rect.y + UI_BORDER_SIZE,
-      rect.width - 2 * UI_BORDER_SIZE,
-      rect.height - 2 * UI_BORDER_SIZE,
-    )
-    split_nav_enabled = bool(getattr(self._hud_renderer, "split_nav_enabled", lambda: False)())
-    if split_nav_enabled:
-      split_width = full_content_rect.width * 0.5
-      camera_rect = rl.Rectangle(full_content_rect.x, full_content_rect.y, split_width, full_content_rect.height)
-      map_rect = rl.Rectangle(full_content_rect.x + split_width, full_content_rect.y, full_content_rect.width - split_width, full_content_rect.height)
-    else:
-      camera_rect = full_content_rect
-      map_rect = None
+    full_content_rect = rl.Rectangle(rect.x + UI_BORDER_SIZE, rect.y + UI_BORDER_SIZE,
+                                     rect.width - 2 * UI_BORDER_SIZE, rect.height - 2 * UI_BORDER_SIZE)
+    camera_rect = full_content_rect
     self._content_rect = camera_rect
-
-    if map_rect is not None:
-      self._hud_renderer.render_split_nav(map_rect)
-      rl.draw_line_ex(
-        rl.Vector2(map_rect.x, map_rect.y + 20),
-        rl.Vector2(map_rect.x, map_rect.y + map_rect.height - 20),
-        2.0,
-        rl.Color(255, 255, 255, 20),
-      )
 
     # Enable scissor mode to clip all rendering within content rectangle boundaries
     # This creates a rendering viewport that prevents graphics from drawing outside the border
@@ -114,25 +94,21 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewIQ):
     # Render the base camera view
     super()._render(camera_rect)
 
+    maps_visible = self._hud_renderer.nav_map_panel.maps_enabled()
+    self.alert_renderer.set_maps_visible(maps_visible)
+    self._hud_renderer.set_event_tile_visible(self.alert_renderer.has_tile(ui_state.sm))
+
     # Draw all UI overlays
     self.model_renderer.render(camera_rect)
     self.environment_renderer.render(camera_rect)
-    AugmentedRoadViewIQ.update_fade_out_bottom_overlay(self, camera_rect)
     self._hud_renderer.render(camera_rect)
-
-    # Custom UI extension point - add custom overlays here
-    # Use self._content_rect for positioning within camera bounds
 
     # End clipping region
     rl.end_scissor_mode()
 
-    if hasattr(self._hud_renderer, "render_full_width_overlays"):
-      self._hud_renderer.render_full_width_overlays(full_content_rect)
+    self._hud_renderer.render_navigation(full_content_rect)
 
     self.alert_renderer.render(full_content_rect)
-    self.driver_state_renderer.render(full_content_rect)
-
-    # Draw colored border based on driving state
     self._draw_border(rect)
 
     # publish uiDebug
@@ -148,37 +124,30 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewIQ):
     msg.uiDebug.drawTimeMillis = draw_time_ms
     self._pm.send('uiDebug', msg)
 
-  def _handle_mouse_press(self, mouse_pos):
-    dm = self.driver_state_renderer
-    if ui_state.has_longitudinal_control and dm.is_visible:
-      dx = mouse_pos.x - dm.position_x
-      dy = mouse_pos.y - dm.position_y
-      if dx * dx + dy * dy <= (BTN_SIZE / 2) ** 2:
-        dm.cycle_personality()
-        return
-
-    if not self._hud_renderer.user_interacting() and self._click_callback is not None:
-      self._click_callback()
-
-  def _handle_mouse_release(self, _):
-    # We only call click callback on press if not interacting with HUD
-    pass
-
   def _draw_border(self, rect: rl.Rectangle):
     rl.draw_rectangle_lines_ex(rect, UI_BORDER_SIZE, rl.BLACK)
     border_roundness = 0.12
     border_color = BORDER_COLORS.get(ui_state.status, BORDER_COLORS[UIStatus.DISENGAGED])
     border_rect = rl.Rectangle(rect.x + UI_BORDER_SIZE, rect.y + UI_BORDER_SIZE,
                                rect.width - 2 * UI_BORDER_SIZE, rect.height - 2 * UI_BORDER_SIZE)
+    draw_camera_corners(border_rect, min(border_rect.width, border_rect.height) * border_roundness / 2)
     aol = ui_state.sm["iqState"].aol
     if aol.active and not ui_state.sm["selfdriveState"].enabled:
       bottom_only_height = max(int(UI_BORDER_SIZE * 4), 60)
       clip_y = int(rect.y + rect.height - bottom_only_height)
       rl.begin_scissor_mode(int(rect.x), clip_y, int(rect.width), bottom_only_height)
-      rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, UI_BORDER_SIZE, border_color)
+      rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, BORDER_THICKNESS, border_color)
       rl.end_scissor_mode()
     else:
-      rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, UI_BORDER_SIZE, border_color)
+      rl.draw_rectangle_rounded_lines_ex(border_rect, border_roundness, 10, BORDER_THICKNESS, border_color)
+
+  def _handle_mouse_press(self, mouse_pos):
+    if not self._hud_renderer.user_interacting() and self._click_callback is not None:
+      self._click_callback()
+
+  def _handle_mouse_release(self, _):
+    # We only call click callback on press if not interacting with HUD
+    pass
 
   def _switch_stream_if_needed(self, sm):
     if sm['selfdriveState'].experimentalMode and WIDE_CAM in self.available_streams:
@@ -193,8 +162,7 @@ class AugmentedRoadView(CameraView, AugmentedRoadViewIQ):
     else:
       target = ROAD_CAM
 
-    if self.stream_type != target:
-      self.switch_stream(target)
+    self.switch_stream(target)
 
   def _update_calibration(self):
     # Update device camera if not already set

@@ -121,9 +121,6 @@ class FfmpegDecoder:
       f_e += 1
     return f_b, f_e, self.index[f_b, 1], self.index[f_e, 1]
 
-  def _decode_gop(self, raw: bytes) -> Iterator[np.ndarray]:
-    yield from decompress_video_data(raw, self.w, self.h, pix_fmt=self.pix_fmt, hwaccel=self.hwaccel, loglevel=self.loglevel)
-
   def get_gop_start(self, frame_idx: int):
     return self.iframes[np.searchsorted(self.iframes, frame_idx, side="right") - 1]
 
@@ -137,19 +134,16 @@ class FfmpegDecoder:
         f.seek(off_b)
         raw = self.prefix + f.read(off_e - off_b)
       # number of frames to discard inside this GOP before the wanted one
-      for i, frm in enumerate(decompress_video_data(raw, self.w, self.h, self.pix_fmt, hwaccel=self.hwaccel, loglevel=self.loglevel)):
+      frames = decompress_video_data(raw, self.w, self.h, self.pix_fmt, hwaccel=self.hwaccel, loglevel=self.loglevel)
+      if len(frames) != f_e - f_b:
+        raise DataUnreadableError(f"GOP {f_b}:{f_e}: decoded {len(frames)} frames, expected {f_e - f_b}")
+      for i, frm in enumerate(frames):
         fidx = f_b + i
         if fidx >= end_fidx:
           return
         elif fidx >= start_fidx and (fidx - start_fidx) % frame_skip == 0:
           yield fidx, frm
       fidx += 1
-
-def FrameIterator(fn: str, index_data: dict|None=None, pix_fmt: str = "rgb24",
-                  start_fidx:int=0, end_fidx=None, frame_skip:int=1, hwaccel="auto", loglevel="quiet") -> Iterator[np.ndarray]:
-  dec = FfmpegDecoder(fn, pix_fmt=pix_fmt, index_data=index_data, hwaccel=hwaccel, loglevel=loglevel)
-  for _, frame in dec.get_iterator(start_fidx=start_fidx, end_fidx=end_fidx, frame_skip=frame_skip):
-    yield frame
 
 class FrameReader:
   def __init__(self, fn: str, index_data: dict|None = None, cache_size: int = 30,

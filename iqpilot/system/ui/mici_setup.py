@@ -16,6 +16,7 @@ import pyray as rl
 
 from iqpilot.common.utils import run_cmd
 from iqpilot.system.hardware import HARDWARE
+from iqpilot.system.ui.lib.setup_install import maybe_update_os, write_setup_claim
 from iqpilot.system.ui.lib.application import gui_app, FontWeight
 from iqpilot.system.ui.lib.wifi_manager import WifiManager
 from iqpilot.system.ui.lib.scroll_panel2 import GuiScrollPanel2
@@ -111,41 +112,6 @@ class SetupState(IntEnum):
   DOWNLOADING = 4
   DOWNLOAD_FAILED = 5
   CUSTOM_SOFTWARE_WARNING = 6
-
-
-IQ_GREEN = rl.Color(16, 185, 129, 255)  # konn3kt/IQ accent
-
-
-class SetupBleCodePage(Widget):
-  """The 6-digit pairing code the konn3kt app asks for when setting up this
-  device over Bluetooth. Shown on-screen (Chromecast-style) while a phone drives
-  setup — the code is the setup authorization."""
-  def __init__(self, code_getter: Callable[[], str]):
-    super().__init__()
-    self._code_getter = code_getter
-
-    self._eyebrow = UnifiedLabel("SET UP FROM YOUR PHONE", 26,
-                                 text_color=rl.Color(255, 255, 255, int(255 * 0.55)),
-                                 font_weight=FontWeight.BOLD, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
-                                 alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE, letter_spacing=0.14)
-    self._code = UnifiedLabel(lambda: self._spaced_code(), 76,
-                              text_color=rl.Color(255, 255, 255, int(255 * 0.95)),
-                              font_weight=FontWeight.DISPLAY, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
-                              alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE,
-                              letter_spacing=0.08, elide=False, wrap_text=False)
-    self._hint = UnifiedLabel("Enter this code in the konn3kt app", 27,
-                              text_color=IQ_GREEN, font_weight=FontWeight.MEDIUM,
-                              alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER,
-                              alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE)
-
-  def _spaced_code(self) -> str:
-    c = (self._code_getter() or "").strip()
-    return " ".join(c) if c else "······"
-
-  def _render(self, rect: rl.Rectangle):
-    self._eyebrow.render(rl.Rectangle(rect.x, rect.y + 30, rect.width, 34))
-    self._code.render(rl.Rectangle(rect.x, rect.y + 84, rect.width, 90))
-    self._hint.render(rl.Rectangle(rect.x, rect.y + rect.height - 48, rect.width, 34))
 
 
 class StartPage(Widget):
@@ -746,16 +712,7 @@ class Setup(Widget):
         pass
 
   def _write_setup_claim(self):
-    ble = self.ble_setup
-    if ble is None or not getattr(ble, "phone_active", False):
-      return
-    try:
-      import hashlib
-      claim_id = hashlib.sha256(f"k3setup-claim:v1:{ble.code}:{ble.serial}".encode()).hexdigest()
-      with open("/data/setup_claim_id", "w") as f:
-        f.write(claim_id)
-    except Exception:
-      pass
+    write_setup_claim(self.ble_setup)
 
   def _fork_install_thread(self, user: str, branch: str):
     git_url = GIT_URL_OVERRIDES.get(user) or GITHUB_FORK_URL.format(user=user)
@@ -812,37 +769,7 @@ class Setup(Widget):
       self.download_failed(label, "Invalid URL")
 
   def _maybe_update_os(self, label: str) -> bool:
-    # The freshly-installed fork pins the IQ.OS it needs in launch_env.sh. If it
-    # differs from what we're running, flash it now (via comma's agnos.py) so the
-    # upcoming single reboot lands on a compatible OS instead of dead-ending on
-    # "update required". Returns False (and shows the failed page) on abort.
-    from iqpilot.system.ui.lib.os_update import os_update_needed, run_agnos_update
-    try:
-      needed, current, required = os_update_needed(INSTALL_PATH)
-    except Exception:
-      return True  # never block an install on a version-check failure
-    if not needed:
-      return True
-
-    ble = self.ble_setup
-    if ble is not None and getattr(ble, "phone_active", False):
-      ble.os_update.request(current, required)
-      ble.set_install_progress("os_update_required", 0, os_from=current, os_to=required)
-      if not ble.os_update.wait_for_confirm(timeout=300):
-        ble.set_install_progress("failed", error="os_update_not_confirmed")
-        self.download_failed(label, f"IQ.OS update to {required} was not confirmed.")
-        return False
-
-    def _cb(pct: int, note: str):
-      if ble is not None:
-        ble.set_install_progress("os_updating", pct, error=note, os_from=current, os_to=required)
-
-    if not run_agnos_update(INSTALL_PATH, HARDWARE.get_device_type(), _cb):
-      if ble is not None:
-        ble.set_install_progress("failed", error="os_update_failed")
-      self.download_failed(label, f"IQ.OS update to {required} failed. Please try again.")
-      return False
-    return True
+    return maybe_update_os(INSTALL_PATH, HARDWARE, self.ble_setup, self.download_failed, label)
 
   def _download_thread(self):
     try:

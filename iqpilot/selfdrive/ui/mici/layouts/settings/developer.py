@@ -5,7 +5,7 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 from iqpilot.common.time_helpers import system_time_valid
 from iqpilot.system.hardware.tici.usb_storage import apply_usb_storage_state
 from iqpilot.system.ui.widgets.scroller import NavScroller
-from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigToggle, BigCircleParamControl
+from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigToggle, BigCircleParamControl, BigParamControl
 from iqpilot.selfdrive.ui.mici.widgets.stock_dialog import BigDialog, BigInputDialog
 from iqpilot.system.ui.lib.application import gui_app
 from iqpilot.selfdrive.ui.layouts.settings.common import restart_needed_callback
@@ -52,8 +52,8 @@ class DeveloperLayoutMici(NavScroller):
     self._ssh_keys_btn.set_click_callback(ssh_keys_callback)
 
     self._adb_toggle = BigCircleParamControl(gui_app.texture("icons_mici/adb_short.png", 82, 82), "AdbEnabled", icon_offset=(0, 12))
-    self._usb_storage_toggle = BigCircleParamControl(gui_app.texture("icons_mici/adb_short.png", 82, 82), "UsbStorageEnabled",
-                                                       toggle_callback=apply_usb_storage_state, icon_offset=(0, 12))
+    self._usb_storage_toggle = BigParamControl(tr("USB Storage"), "UsbStorageEnabled",
+                                               toggle_callback=apply_usb_storage_state)
     self._ssh_toggle = BigCircleParamControl(gui_app.texture("icons_mici/ssh_short.png", 82, 82), "SshEnabled", icon_offset=(0, 12))
     self._long_maneuver_toggle = BigToggle(tr("longitudinal maneuver mode"),
                                            initial_state=ui_state.params.get_bool("LongitudinalManeuverMode"),

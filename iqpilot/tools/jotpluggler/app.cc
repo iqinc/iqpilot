@@ -143,35 +143,6 @@ bool is_decoded_can_series_path(std::string_view path) {
 
 bool apply_route_can_decode_update(AppSession *session, UiState *state);
 
-void rebuild_series_lookup_preserving_formats(AppSession *session,
-                                              std::string_view updated_prefix,
-                                              bool refresh_updated_formats_only) {
-  const std::string prefix(updated_prefix);
-  if (!updated_prefix.empty()) {
-    for (auto it = session->route_data.series_formats.begin(); it != session->route_data.series_formats.end();) {
-      if (util::starts_with(it->first, prefix)) {
-        it = session->route_data.series_formats.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
-  session->series_by_path.clear();
-  session->series_by_path.reserve(session->route_data.series.size());
-  for (RouteSeries &series : session->route_data.series) {
-    session->series_by_path.emplace(series.path, &series);
-    if (refresh_updated_formats_only) {
-      if (!updated_prefix.empty() && util::starts_with(series.path, prefix)) {
-        const bool enum_like = session->route_data.enum_info.find(series.path) != session->route_data.enum_info.end();
-        session->route_data.series_formats[series.path] = compute_series_format(series.values, enum_like);
-      }
-    } else {
-      const bool enum_like = session->route_data.enum_info.find(series.path) != session->route_data.enum_info.end();
-      session->route_data.series_formats[series.path] = compute_series_format(series.values, enum_like);
-    }
-  }
-}
-
 bool apply_route_can_decode_update(AppSession *session, UiState *state) {
   const std::string active_dbc_name = !session->dbc_override.empty() ? session->dbc_override : session->route_data.dbc_name;
   if (!active_dbc_name.empty() && !load_dbc_by_name(active_dbc_name).has_value()) {
@@ -316,7 +287,7 @@ void configure_style() {
     {ImGuiCol_TabDimmedSelectedOverline, 92, 109, 136}, {ImGuiCol_DockingEmptyBg, 244, 246, 248},
   };
   for (const auto &c : COLORS) { style.Colors[c.idx] = color_rgb(c.r, c.g, c.b); }
-  style.Colors[ImGuiCol_DockingPreview] = color_rgb(69, 115, 184, 0.22f);
+  style.Colors[ImGuiCol_DockingPreview] = ui_color(69, 115, 184, 0.22f);
 
   ImPlotStyle &plot_style = ImPlot::GetStyle();
   plot_style.PlotBorderSize = 1.0f;
@@ -744,8 +715,8 @@ std::array<uint8_t, 3> app_next_curve_color(const Pane &pane) {
 void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool show_camera_feed) {
   ImGui::SetNextWindowPos(ImVec2(0.0f, ui.top_offset));
   ImGui::SetNextWindowSize(ImVec2(ui.sidebar_width, std::max(1.0f, ui.height - ui.top_offset)));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(238, 240, 244));
-  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(190, 197, 205));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ui_color(238, 240, 244));
+  ImGui::PushStyleColor(ImGuiCol_Border, ui_color(190, 197, 205));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
                                  ImGuiWindowFlags_NoMove |
                                  ImGuiWindowFlags_NoResize |
@@ -768,7 +739,7 @@ void draw_sidebar(AppSession *session, const UiMetrics &ui, UiState *state, bool
       const StreamPollSnapshot stream = session->stream_poller ? session->stream_poller->snapshot() : StreamPollSnapshot{};
       const bool paused = stream.paused || session->stream_paused;
       const bool live = stream.connected && !paused;
-      const ImVec4 status_color = live ? color_rgb(38, 135, 67) : (paused ? color_rgb(168, 119, 34) : color_rgb(155, 63, 63));
+      const ImVec4 status_color = live ? ui_color(38, 135, 67) : (paused ? ui_color(168, 119, 34) : ui_color(155, 63, 63));
       ImGui::TextColored(status_color, "%s %s", live ? "●" : "○", stream.source_label.c_str());
       ImGui::TextDisabled("%s%s", stream_source_kind_label(stream.source_kind), paused ? "  paused" : "");
       const double span = session->route_data.has_time_range ? (session->route_data.x_max - session->route_data.x_min) : 0.0;
@@ -1553,11 +1524,11 @@ void draw_pane_windows(AppSession *session, UiState *state) {
     std::optional<PaneDropAction> drop_action;
     bool close_pane_requested = false;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(2.0f, 2.0f));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(250, 250, 251));
-    ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(194, 198, 204));
-    ImGui::PushStyleColor(ImGuiCol_TitleBg, color_rgb(252, 252, 253));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, color_rgb(252, 252, 253));
-    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, color_rgb(252, 252, 253));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ui_color(250, 250, 251));
+    ImGui::PushStyleColor(ImGuiCol_Border, ui_color(194, 198, 204));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ui_color(252, 252, 253));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ui_color(252, 252, 253));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ui_color(252, 252, 253));
     const ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
     const std::string window_name = pane_window_name(tab_state->runtime_id, static_cast<int>(i), pane);
     const bool opened = ImGui::Begin(window_name.c_str(), nullptr, flags);
@@ -1617,8 +1588,8 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
   ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.content_y));
   ImGui::SetNextWindowSize(ImVec2(ui.content_w, ui.content_h));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(244, 246, 248));
-  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(186, 191, 198));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ui_color(244, 246, 248));
+  ImGui::PushStyleColor(ImGuiCol_Border, ui_color(186, 191, 198));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
                                  ImGuiWindowFlags_NoMove |
                                  ImGuiWindowFlags_NoResize |
@@ -1725,16 +1696,16 @@ void draw_workspace(AppSession *session, const UiMetrics &ui, UiState *state) {
         }
       }
       ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(12.0f, 5.0f));
-      ImGui::PushStyleColor(ImGuiCol_Tab, color_rgb(210, 217, 225));
-      ImGui::PushStyleColor(ImGuiCol_TabHovered, color_rgb(224, 230, 237));
-      ImGui::PushStyleColor(ImGuiCol_TabSelected, color_rgb(242, 245, 248));
+      ImGui::PushStyleColor(ImGuiCol_Tab, ui_color(210, 217, 225));
+      ImGui::PushStyleColor(ImGuiCol_TabHovered, ui_color(224, 230, 237));
+      ImGui::PushStyleColor(ImGuiCol_TabSelected, ui_color(242, 245, 248));
       if (ImGui::TabItemButton("   ##new_tab_button", ImGuiTabItemFlags_Trailing)) {
         pending_action = TabActionKind::New;
       }
       {
         const ImRect rect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax());
         ImDrawList *draw_list = ImGui::GetWindowDrawList();
-        const ImU32 color = ImGui::GetColorU32(color_rgb(72, 79, 88));
+        const ImU32 color = ImGui::GetColorU32(ui_color(72, 79, 88));
         const ImVec2 center((rect.Min.x + rect.Max.x) * 0.5f, (rect.Min.y + rect.Max.y) * 0.5f);
         constexpr float half_extent = 6.25f;
         constexpr float thickness = 2.0f;
@@ -1825,6 +1796,7 @@ int run(const Options &options) {
     .layout = options.layout.empty() ? make_empty_layout() : load_sketch_layout(layout_path),
   };
   UiState ui_state;
+  ui_state.open_open_route = options.route_name.empty() && !options.stream;
   if (!layout_path.empty() && !session.autosave_path.empty() && fs::exists(session.autosave_path)) {
     session.layout = load_sketch_layout(session.autosave_path);
     ui_state.layout_dirty = true;
@@ -1843,11 +1815,13 @@ int run(const Options &options) {
       route_progress.update(update);
     });
     route_progress.finish();
+    remember_route(session, &ui_state);
   }
 
   GlfwRuntime glfw_runtime(options);
   ImGuiRuntime imgui_runtime(glfw_runtime.window());
   configure_style();
+  initialize_jot_theme();
   session.map_data = std::make_unique<MapDataManager>();
   for (std::unique_ptr<CameraFeedView> &feed : session.pane_camera_feeds) {
     feed = std::make_unique<CameraFeedView>();

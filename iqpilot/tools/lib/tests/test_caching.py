@@ -44,6 +44,20 @@ def host():
 
 class TestFileDownload:
 
+  def test_head_connection_released(self, monkeypatch):
+    class Response:
+      status = 200
+      headers = {"content-length": "4"}
+      released = False
+
+      def release_conn(self):
+        self.released = True
+
+    response = Response()
+    monkeypatch.setattr(URLFile, "_request", lambda self, method, url, headers=None: response)
+    assert URLFile("https://example.com/test").get_length_online() == 4
+    assert response.released
+
   def test_pipeline_defaults(self, host):
     # TODO: parameterize the defaults so we don't rely on hard-coded values in xx
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -18,14 +19,25 @@ static const std::vector<cereal::PandaState::PandaType> SUPPORTED_PANDA_TYPES = 
 
 class PandaSafety {
 public:
-  PandaSafety(const std::vector<Panda *> &pandas) : pandas_(pandas) {}
+  PandaSafety(const std::vector<Panda *> &pandas, const std::string &params_path = {}) : pandas_(pandas), params_(params_path) {}
   void configureSafetyMode(bool is_onroad);
   bool getOffroadMode();
 
 private:
   void updateMultiplexingMode();
-  std::vector<std::string> fetchCarParams();
-  void setSafetyMode(const std::vector<std::string> &params_string);
+  struct DeviceSafety {
+    cereal::CarParams::SafetyModel model = cereal::CarParams::SafetyModel::SILENT;
+    uint16_t parameter = 0;
+  };
+
+  struct SafetyConfiguration {
+    uint16_t alternative_experience;
+    uint16_t iq_flags;
+    std::vector<DeviceSafety> devices;
+  };
+
+  std::optional<SafetyConfiguration> readSafetyConfiguration();
+  void applySafetyConfiguration(const SafetyConfiguration &configuration);
 
   bool initialized_ = false;
   bool log_once_ = false;

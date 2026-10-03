@@ -261,10 +261,11 @@ class IQSpeedLimitAssist:
       for btn in sm["carState"].buttonEvents:
         if btn.pressed:
           continue
-        if is_lower and btn.type in CONFIRM_LOWER_BUTTONS:
+        button_type = getattr(btn.type, "raw", btn.type)
+        if is_lower and button_type in CONFIRM_LOWER_BUTTONS:
           confirmed = True
           break
-        elif not is_lower and btn.type in CONFIRM_HIGHER_BUTTONS:
+        elif not is_lower and button_type in CONFIRM_HIGHER_BUTTONS:
           confirmed = True
           break
     except (AttributeError, TypeError):
@@ -314,6 +315,10 @@ class SpeedLimitController:
 
     self.override_slc = False
     self.overridden_speed = 0.0
+    self._last_override_request_id = 0
+    self._blocked_override_gesture = 0
+    self._override_limit = None
+    self._override_set_speed = False
 
     self._resolved_limit = 0.0
     self._resolved_source = "None"
@@ -357,6 +362,9 @@ class SpeedLimitController:
     self._offset_cache = {}
     self._offset_cache_t = 0.0
     self._last_mapbox_log_t = 0.0
+    self.mapbox_backoff_token = ""
+    self.mapbox_backoff_until = 0.0
+    self.mapbox_consecutive_failures = 0
     self._last_mapbox_diag_t = 0.0
     self._last_mapbox_diag_message = None
 
@@ -499,6 +507,13 @@ class SpeedLimitController:
     cloudlog.info(message)
     k3_slc_log(message)
 
+  def _back_off_mapbox(self, status) -> None:
+    if status in (401, 403, 429):
+      self.mapbox_backoff_until = time.monotonic() + 3600.0
+      return
+    self.mapbox_consecutive_failures += 1
+    self.mapbox_backoff_until = time.monotonic() + min(600.0, 10.0 * (2 ** min(self.mapbox_consecutive_failures, 6)))
+
   def get_mapbox_speed_limit(self, now, time_validated, v_ego, sm):
     if requests is None or self.session is None:
       self._log_mapbox_diag("SLC Mapbox skipped: requests session unavailable")
@@ -516,6 +531,14 @@ class SpeedLimitController:
     if v_ego < 1:
       return
 
+    if self.mapbox_token != self.mapbox_backoff_token:
+      self.mapbox_backoff_token = self.mapbox_token
+      self.mapbox_backoff_until = 0.0
+      self.mapbox_consecutive_failures = 0
+    if time.monotonic() < self.mapbox_backoff_until:
+      self.mapbox_limit = 0.0
+      return
+
     if self.segment_distance > 0:
       self.segment_distance -= v_ego * DT_MDL
       return
@@ -531,7 +554,7 @@ class SpeedLimitController:
 
         if not is_url_pingable(self.mapbox_host):
           self._log_mapbox_diag("SLC Mapbox skipped: host not pingable", force=True)
-          self.segment_distance = 1000
+          self._back_off_mapbox(None)
           return None
 
         if time_validated:
@@ -572,8 +595,10 @@ class SpeedLimitController:
         response = self.session.get(url, params=mapbox_params, timeout=10)
         response.raise_for_status()
         successful = True
+        self.mapbox_consecutive_failures = 0
         return response.json()
       except Exception as exception:
+        self._back_off_mapbox(getattr(getattr(exception, "response", None), "status_code", None))
         now_mono = time.monotonic()
         if now_mono - self._last_mapbox_log_t >= 5.0:
           self._last_mapbox_log_t = now_mono
@@ -772,7 +797,15 @@ class SpeedLimitController:
       self.segment_distance = 0.0
       self.tomtom_segment_distance = 0.0
 
-    online_limit = self.tomtom_limit if self.tomtom_limit > 0 else self.mapbox_limit
+    nav_mapbox_limit = 0.0
+    if getattr(sm, "alive", {}).get("iqNavState", False) and getattr(sm, "valid", {}).get("iqNavState", False):
+      nav_state = sm["iqNavState"]
+      if getattr(nav_state, "mapboxSpeedLimitValid", False):
+        candidate = float(getattr(nav_state, "mapboxSpeedLimit", 0.0))
+        if math.isfinite(candidate) and candidate >= LIMIT_MIN_SPEED:
+          nav_mapbox_limit = candidate
+    mapbox_limit = nav_mapbox_limit if nav_mapbox_limit > 0 else self.mapbox_limit
+    online_limit = self.tomtom_limit if self.tomtom_limit > 0 else mapbox_limit
 
     dashboard_limit = float(dashboard_speed_limit) if dashboard_speed_limit else 0.0
     resolved_limit, resolved_source = self._resolver.resolve(dashboard_limit, online_limit, slc_params)
@@ -807,9 +840,44 @@ class SpeedLimitController:
       self.pending_events.append(EventNameIQ.constructionZoneDetected)
     self._czone_was_limiting = czone_limiting
 
+  def reset_override(self, sm):
+    self.override_slc = False
+    self.overridden_speed = 0.0
+    self._last_override_request_id = int(getattr(sm["iqCarState"], "slcSetSpeedRequestId", 0))
+    self._blocked_override_gesture = int(getattr(sm["iqCarState"], "slcSetSpeedGestureId", 0))
+    self._override_limit = None
+
   def update_override(self, v_cruise, v_cruise_diff, v_ego, v_ego_diff, sm, slc_params, is_metric):
     offset = self.get_offset(is_metric)
     target = self._assist.target
+    set_speed_override = slc_params.get("speed_limit_controller_override_set_speed", False)
+    mode_changed = set_speed_override != self._override_set_speed
+    self._override_set_speed = set_speed_override
+
+    if set_speed_override:
+      request_id = int(getattr(sm["iqCarState"], "slcSetSpeedRequestId", 0))
+      gesture_id = int(getattr(sm["iqCarState"], "slcSetSpeedGestureId", 0))
+      request_speed = float(getattr(sm["iqCarState"], "slcSetSpeedRequestKph", 0.0)) * CV.KPH_TO_MS
+      new_request = request_id != self._last_override_request_id
+      limit = (target, self._assist.source)
+      reset = (mode_changed or limit != self._override_limit or self._assist.just_confirmed or
+               self._assist.state == SpeedLimitAssistState.preActive or
+               not bool(getattr(sm["selfdriveState"], "enabled", False)) or target <= 0 or self._resolved_source == "Construction")
+      cruise_speed = v_cruise + v_cruise_diff
+      above_limit = cruise_speed > target + offset + 1e-3
+      if reset or (self.override_slc and not above_limit):
+        self.reset_override(sm)
+      elif above_limit:
+        driver_increase = new_request and gesture_id != self._blocked_override_gesture and request_speed > target + offset + 1e-3
+        gas_override = sm["carState"].gasPressed and v_ego > target + offset
+        self.override_slc = self.override_slc or driver_increase or gas_override
+        self.overridden_speed = cruise_speed if self.override_slc else 0.0
+      self._last_override_request_id = request_id
+      self._override_limit = limit
+      return
+
+    if mode_changed:
+      self.reset_override(sm)
 
     self.override_slc = self.overridden_speed > target + offset > 0
     self.override_slc |= sm["carState"].gasPressed and v_ego > target + offset > 0
@@ -820,7 +888,5 @@ class SpeedLimitController:
         if sm["carState"].gasPressed:
           self.overridden_speed = max(v_ego + v_ego_diff, self.overridden_speed)
         self.overridden_speed = float(np.clip(self.overridden_speed, target + offset, v_cruise + v_cruise_diff))
-      elif slc_params.get("speed_limit_controller_override_set_speed", False):
-        self.overridden_speed = v_cruise + v_cruise_diff
     else:
       self.overridden_speed = 0.0

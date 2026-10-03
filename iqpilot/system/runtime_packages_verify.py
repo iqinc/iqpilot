@@ -11,7 +11,7 @@ import sys
 from importlib import metadata
 from pathlib import Path
 
-PACKAGES = ("iqdbc", "msgq", "panda", "tinygrad")
+PACKAGES = ("iqdbc", "msgq", "panda", "tinygrad", "pycapnp")
 
 missing = []
 for name in PACKAGES:

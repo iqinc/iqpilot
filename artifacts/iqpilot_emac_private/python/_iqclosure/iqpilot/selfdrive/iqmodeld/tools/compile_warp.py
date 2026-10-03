@@ -87,8 +87,6 @@ def main() -> None:
     print(f"saved warp JIT to {out} ({os.path.getsize(out) / 1e6:.2f} MB)")
 
 
-if __name__ == "__main__":
-  main()
 
 
 def selftest_inputs(cam_w: int, cam_h: int, nv12_size: int):
@@ -117,3 +115,7 @@ def selftest_digest(compiled, cam_w: int, cam_h: int, nv12_size: int) -> str:
                  frame=Tensor(frame, device=dev).realize(),
                  big_frame=Tensor(big_frame, device=dev).realize())
   return hashlib.sha256(out.numpy().astype(np.uint8).tobytes()).hexdigest()
+
+
+if __name__ == "__main__":
+  main()

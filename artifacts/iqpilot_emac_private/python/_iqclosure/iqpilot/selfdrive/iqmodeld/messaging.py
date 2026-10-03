@@ -7,7 +7,7 @@ import capnp
 import numpy as np
 
 from iqpilot.cereal import log
-from iqpilot.selfdrive.iqmodeld.models.helpers import plan_x_idxs_helper
+from iqpilot.selfdrive.iqmodeld.cot_decode import ReasoningWire
 from iqpilot.selfdrive.iqmodeld.config import ModelConstants, Plan
 from iqpilot.selfdrive.controls.lib.drive_helpers import get_curvature_from_plan
 
@@ -143,6 +143,8 @@ def _write_temporal_pose(model_packet, outputs: dict[str, np.ndarray]) -> None:
 
 
 def _write_lane_family(model_packet, driving_packet, outputs: dict[str, np.ndarray]) -> None:
+  # private-only helper: a module-level import breaks log migration (clip, process_replay) on public non-aarch64 checkouts
+  from iqpilot.selfdrive.iqmodeld.models.helpers import plan_x_idxs_helper
   time_axis = plan_x_idxs_helper(ModelConstants, Plan, outputs)
   model_packet.init("laneLines", 4)
   for lane_idx in range(4):
@@ -209,6 +211,16 @@ def _write_meta(model_packet, outputs: dict[str, np.ndarray], memory: DrivePacke
   model_packet.confidence = _confidence_bucket(outputs, memory, meta_layout, frame_id)
 
 
+def fill_stop_point(model_packet, outputs: dict[str, np.ndarray]) -> None:
+  distance, probability = outputs.get("stop_point_m"), outputs.get("stop_point_prob")
+  if distance is None or probability is None:
+    return
+  stop_point = model_packet.stopPoint
+  stop_point.distance = float(np.asarray(distance).reshape(-1)[0])
+  stop_point.probability = float(np.asarray(probability).reshape(-1)[0])
+  stop_point.valid = True
+
+
 def populate_drive_messages(primary_msg: capnp._DynamicStructBuilder, extended_msg: capnp._DynamicStructBuilder,
                             outputs: dict[str, np.ndarray], action: log.ModelDataV2.Action,
                             memory: DrivePacketMemory, vipc_frame_id: int, vipc_frame_id_extra: int,
@@ -234,6 +246,7 @@ def populate_drive_messages(primary_msg: capnp._DynamicStructBuilder, extended_m
   model_packet.timestampEof = timestamp_eof
   model_packet.modelExecutionTime = model_execution_time
   model_packet.action = action
+  fill_stop_point(model_packet, outputs)
 
   _write_plan_family(model_packet, driving_packet, outputs)
   _write_temporal_pose(model_packet, outputs)
@@ -248,22 +261,55 @@ def populate_drive_messages(primary_msg: capnp._DynamicStructBuilder, extended_m
 def populate_odometry_message(msg: capnp._DynamicStructBuilder, outputs: dict[str, np.ndarray],
                               vipc_frame_id: int, vipc_dropped_frames: int,
                               timestamp_eof: int, live_calib_seen: bool) -> None:
-  msg.valid = live_calib_seen & (vipc_dropped_frames < 1)
+  pose = outputs["pose"][0, :6]
+  pose_stds = outputs["pose_stds"][0, :6]
+  pose_finite = bool(np.isfinite(pose).all() and np.isfinite(pose_stds).all())
+  msg.valid = live_calib_seen & (vipc_dropped_frames < 1) & pose_finite
   odo = msg.cameraOdometry
   odo.frameId = vipc_frame_id
   odo.timestampEof = timestamp_eof
-  odo.trans = outputs["pose"][0, :3].tolist()
-  odo.rot = outputs["pose"][0, 3:].tolist()
+  odo.trans = pose[:3].tolist()
+  odo.rot = pose[3:6].tolist()
   odo.wideFromDeviceEuler = outputs["wide_from_device_euler"][0, :].tolist()
   odo.roadTransformTrans = outputs["road_transform"][0, :3].tolist()
-  odo.transStd = outputs["pose_stds"][0, :3].tolist()
-  odo.rotStd = outputs["pose_stds"][0, 3:].tolist()
+  odo.transStd = pose_stds[:3].tolist()
+  odo.rotStd = pose_stds[3:6].tolist()
   odo.wideFromDeviceEulerStd = outputs["wide_from_device_euler_stds"][0, :].tolist()
   odo.roadTransformTransStd = outputs["road_transform_stds"][0, :3].tolist()
+
+
+def populate_iq_model_speed_limit(message: capnp._DynamicStructBuilder, outputs: dict[str, np.ndarray]) -> bool:
+  values = outputs.get("speed_limit")
+  valid = False
+  if values is not None:
+    try:
+      speed, probability, unit = np.asarray(values, dtype=np.float32).reshape(-1)
+      valid = bool(np.isfinite((speed, probability, unit)).all() and 0.0 <= speed <= 50.0 and 0.0 <= probability <= 1.0)
+    except (TypeError, ValueError):
+      valid = False
+  message.speedLimitMps = float(speed) if valid else 0.0
+  message.speedLimitProb = float(probability) if valid else 0.0
+  message.speedLimitIsMph = bool(unit >= 0.5) if valid else False
+  return valid
+
+
+def populate_iq_model_reasoning(message: capnp._DynamicStructBuilder, outputs: dict[str, np.ndarray],
+                                reasoning_wire: ReasoningWire, frame_id: int, mono_ns: int) -> bool:
+  reasoning = reasoning_wire.update(outputs, frame_id, mono_ns)
+  if reasoning is None:
+    return False
+  fields = set(message.schema.fields)
+  if not {"reasoningText", "reasoningState"} <= fields:
+    return False
+  message.reasoningText = reasoning["text"]
+  message.reasoningState = reasoning["state"]
+  return True
 
 __all__ = [
   "DrivePacketMemory",
   "pick_curvature",
   "populate_drive_messages",
+  "populate_iq_model_reasoning",
+  "populate_iq_model_speed_limit",
   "populate_odometry_message",
 ]

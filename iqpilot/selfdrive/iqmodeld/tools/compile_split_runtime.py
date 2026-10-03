@@ -6,7 +6,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 from __future__ import annotations
 
 import argparse
-import atexit
 import os
 import pickle
 import time
@@ -15,31 +14,10 @@ from functools import partial
 
 import numpy as np
 
-
-def _patch_firmware_fetch() -> None:
-  import hashlib
-  import pathlib
-
-  import zstandard
-  from tinygrad import helpers
-
-  if not hasattr(helpers, "fetch_fw"):
-    return
-
-  original_fetch = helpers.fetch_fw
-
-  def fetch_fw(path, name, sha256):
-    archive_path = pathlib.Path(f"/lib/firmware/{path}/{name}.zst")
-    if archive_path.is_file():
-      blob = zstandard.ZstdDecompressor().stream_reader(archive_path.read_bytes()).read()
-      if hashlib.sha256(blob).hexdigest() == sha256:
-        return blob
-    return original_fetch(path, name, sha256)
-
-  helpers.fetch_fw = fetch_fw
+from iqpilot.selfdrive.iqmodeld.tools.firmware import patch_firmware_fetch
 
 
-_patch_firmware_fetch()
+patch_firmware_fetch()
 
 from tinygrad.device import Device
 from tinygrad.engine.jit import TinyJit
@@ -62,14 +40,9 @@ WARP_DEVICE = os.getenv("WARP_DEV")
 
 
 def _read_shared_copy(path: str) -> str:
-  from iqpilot.common.file_chunker import read_file_chunked
+  from iqpilot.common.file_chunker import stage_file_chunked
   from iqpilot.system.hardware.hw import Paths
-
-  shm_path = os.path.join(Paths.shm_path(), os.path.basename(path))
-  atexit.register(lambda: os.path.exists(shm_path) and os.remove(shm_path))
-  with open(shm_path, "wb") as handle:
-    handle.write(read_file_chunked(path))
-  return shm_path
+  return stage_file_chunked(path, Paths.shm_path())
 
 
 def _parse_size(text: str) -> tuple[int, int]:

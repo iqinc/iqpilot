@@ -1,11 +1,9 @@
 import time
-import os
 import pyray as rl
 from collections.abc import Callable
 from enum import IntEnum
 from iqpilot.cereal import log
 from iqpilot.common.params import Params
-from iqpilot.common.basedir import BASEDIR
 from iqpilot.selfdrive.ui.widgets.offroad_alerts import UpdateAlert, OffroadAlert
 from iqpilot.selfdrive.ui.widgets.setup import SetupWidget
 from iqpilot.selfdrive.ui.widgets.inspire_widget import InspireWidget
@@ -17,23 +15,22 @@ from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.ui.lib.text_measure import measure_text_cached
 from iqpilot.system.ui.lib.application import gui_app, FontWeight, MouseEvent, MousePos
 from iqpilot.system.ui.lib.multilang import tr, trn
-from iqpilot.system.ui.lib.wrap_text import wrap_text
-from iqpilot.system.ui.widgets.label import gui_label, UnifiedLabel
+from iqpilot.system.ui.widgets.label import UnifiedLabel
 from iqpilot.system.ui.widgets import Widget
-from iqpilot.system.ui.widgets.button import Button, ButtonStyle
+from iqpilot.ui.onroad.big_model_status import DockStatus, SourceState, egpu_dock_status, resolve_source
+from iqpilot.ui.onroad.emac_status import dock_icon_width, draw_dock_icon, draw_source_icon, source_icon
 
 STATUS_BAR_HEIGHT = 120
+DOCK_ICON_H = 56
 HEAD_BUTTON_FONT_SIZE = 40
 CONTENT_MARGIN = 40
 SPACING = 25
 TILE_GAP = 24
 STATS_PANEL_VERTICAL_INSET = TILE_GAP
 REFRESH_INTERVAL = 10.0
-CHANGELOG_REFRESH_INTERVAL = 15.0
 HOLD_THRESHOLD = 0.6  # seconds to trigger the panel picker
 
 PANEL_KEY = "HomePanelWidget"
-PANEL_CHANGELOG = "changelog"
 PANEL_STATS = "stats"
 PANEL_MAP = "map"
 PANEL_INSPIRE = "inspire"
@@ -54,264 +51,6 @@ STATUS_WARN = rl.Color(245, 166, 35, 255)    # orange
 STATUS_DANGER = rl.Color(226, 72, 58, 255)   # red
 
 
-class ChangelogWidget(Widget):
-  PANEL_BG_COLOR = rl.Color(34, 36, 42, 255)
-  PANEL_BORDER = rl.Color(255, 255, 255, 26)
-  BODY_COLOR = rl.Color(235, 235, 235, 255)
-  HEADING_COLOR = rl.Color(255, 255, 255, 255)
-
-  def __init__(self):
-    super().__init__()
-    self._show_all = False
-    self._latest_text = ""
-    self._all_text = ""
-    self._render_latest: list[dict] = []
-    self._render_all: list[dict] = []
-    self._wrap_width = 0
-    self._last_load = 0.0
-    self._scroll_px = 0.0
-    self._max_scroll = 0.0
-    self._is_dragging = False
-    self._drag_last_y = 0.0
-    self._text_rect = rl.Rectangle(0, 0, 0, 0)
-    self._btn_rect = rl.Rectangle(0, 0, 0, 0)
-    self._latest_btn = Button("Latest", self._show_latest, button_style=ButtonStyle.PRIMARY, font_size=28)
-    self._all_btn = Button("All", self._show_all_logs, button_style=ButtonStyle.NORMAL, font_size=28)
-    self._load_changelog(force=True)
-
-  def show_event(self):
-    self._load_changelog(force=True)
-
-  def _show_latest(self) -> None:
-    self._show_all = False
-    self._scroll_px = 0.0
-    self._is_dragging = False
-
-  def _show_all_logs(self) -> None:
-    self._show_all = True
-    self._scroll_px = 0.0
-    self._is_dragging = False
-
-  def _load_changelog(self, force: bool = False) -> None:
-    now = time.monotonic()
-    if not force and (now - self._last_load) < CHANGELOG_REFRESH_INTERVAL:
-      return
-    self._last_load = now
-
-    paths = [os.path.join(BASEDIR, "iqpilot", "docs", "CHANGELOG.md")]
-    content = ""
-    for p in paths:
-      try:
-        with open(p, encoding="utf-8") as f:
-          content = f.read().strip()
-          if content:
-            break
-      except OSError:
-        pass
-
-    if not content:
-      content = "No changelog found.\n\nAdd iqpilot/docs/CHANGELOG.md."
-
-    ordered = self._reorder_sections_newest_first(content)
-    self._latest_text = self._build_latest_text(ordered)
-    self._all_text = ordered
-    self._render_latest = []
-    self._render_all = []
-    self._wrap_width = 0
-
-  def _reorder_sections_newest_first(self, content: str) -> str:
-    lines = content.splitlines()
-    intro: list[str] = []
-    sections: list[list[str]] = []
-    current: list[str] | None = None
-
-    for line in lines:
-      if line.startswith("## "):
-        if current is not None:
-          sections.append(current)
-        current = [line]
-      else:
-        if current is None:
-          intro.append(line)
-        else:
-          current.append(line)
-
-    if current is not None:
-      sections.append(current)
-
-    out: list[str] = []
-    if intro:
-      out.extend(intro)
-      out.append("")
-
-    for i, section in enumerate(reversed(sections)):
-      out.extend(section)
-      if i != len(sections) - 1:
-        out.append("")
-
-    return "\n".join(out).strip()
-
-  def _build_latest_text(self, content: str) -> str:
-    lines = content.splitlines()
-    if not lines:
-      return "No updates available."
-
-    out: list[str] = []
-    section_count = 0
-    for line in lines:
-      if line.startswith("## "):
-        section_count += 1
-        if section_count > 2:
-          break
-      out.append(line)
-    return "\n".join(out).strip() or content
-
-  @staticmethod
-  def _clean_inline_markdown(text: str) -> str:
-    return text.replace("**", "").replace("`", "").strip()
-
-  def _build_render_lines(self, text: str, width: int) -> list[dict]:
-    lines: list[dict] = []
-    for raw in text.splitlines():
-      stripped = raw.strip()
-      if not stripped:
-        lines.append({"text": "", "font_size": 16, "font_weight": FontWeight.NORMAL, "indent": 0, "color": self.BODY_COLOR, "height": 18})
-        continue
-
-      font_size = 34
-      font_weight = FontWeight.NORMAL
-      indent = 0
-      color = self.BODY_COLOR
-      text_line = stripped
-      extra_spacing = 0
-
-      if stripped.startswith("### "):
-        text_line = self._clean_inline_markdown(stripped[4:])
-        font_size = 34
-        font_weight = FontWeight.BOLD
-        color = self.HEADING_COLOR
-        extra_spacing = 8
-      elif stripped.startswith("## "):
-        text_line = self._clean_inline_markdown(stripped[3:])
-        font_size = 38
-        font_weight = FontWeight.BOLD
-        color = self.HEADING_COLOR
-        extra_spacing = 10
-      elif stripped.startswith("# "):
-        text_line = self._clean_inline_markdown(stripped[2:])
-        font_size = 42
-        font_weight = FontWeight.BOLD
-        color = self.HEADING_COLOR
-        extra_spacing = 12
-      elif stripped.startswith(("- ", "* ")):
-        text_line = "• " + self._clean_inline_markdown(stripped[2:])
-        font_size = 34
-        indent = 8
-      else:
-        text_line = self._clean_inline_markdown(stripped)
-
-      font = gui_app.font(font_weight)
-      wrapped = wrap_text(font, text_line, font_size, max(50, width - indent))
-      if not wrapped:
-        wrapped = [text_line]
-
-      for i, w in enumerate(wrapped):
-        line_indent = indent if i == 0 else indent + 18
-        line_h = int(font_size * 1.15)
-        lines.append({
-          "text": w,
-          "font_size": font_size,
-          "font_weight": font_weight,
-          "indent": line_indent,
-          "color": color,
-          "height": line_h,
-        })
-
-      if extra_spacing > 0:
-        lines.append({"text": "", "font_size": extra_spacing, "font_weight": FontWeight.NORMAL, "indent": 0, "color": self.BODY_COLOR, "height": extra_spacing})
-
-    return lines
-
-  def _ensure_wrapped(self, text_w: int):
-    if text_w <= 0:
-      return
-    if self._wrap_width == text_w and self._render_latest and self._render_all:
-      return
-    self._wrap_width = text_w
-    self._render_latest = self._build_render_lines(self._latest_text, text_w)
-    self._render_all = self._build_render_lines(self._all_text, text_w)
-
-  @staticmethod
-  def _total_height(lines: list[dict]) -> int:
-    return sum(line["height"] for line in lines)
-
-  def _clamp_scroll(self):
-    self._scroll_px = max(0.0, min(self._max_scroll, self._scroll_px))
-
-  def _handle_mouse_press(self, mouse_pos: MousePos):
-    if rl.check_collision_point_rec(mouse_pos, self._text_rect):
-      self._is_dragging = True
-      self._drag_last_y = mouse_pos.y
-
-  def _handle_mouse_event(self, mouse_event):
-    if not self._is_dragging or not mouse_event.left_down:
-      return
-    dy = mouse_event.pos.y - self._drag_last_y
-    self._drag_last_y = mouse_event.pos.y
-    self._scroll_px -= dy
-    self._clamp_scroll()
-
-  def _handle_mouse_release(self, mouse_pos: MousePos):
-    self._is_dragging = False
-
-  def _render(self, rect: rl.Rectangle):
-    self._load_changelog()
-    rl.draw_rectangle_rounded(rect, 0.06, 24, self.PANEL_BG_COLOR)
-    rl.draw_rectangle_rounded_lines_ex(rect, 0.06, 24, 2, self.PANEL_BORDER)
-
-    title_rect = rl.Rectangle(rect.x + 36, rect.y + 24, rect.width - 72, 50)
-    gui_label(title_rect, "Latest Updates", 44, rl.WHITE, font_weight=FontWeight.BOLD, alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
-
-    btn_w = 150
-    btn_h = 54
-    btn_gap = 12
-    self._btn_rect = rl.Rectangle(rect.x + rect.width - (btn_w * 2) - btn_gap - 36, rect.y + 84, (btn_w * 2) + btn_gap, btn_h)
-    latest_rect = rl.Rectangle(self._btn_rect.x, self._btn_rect.y, btn_w, btn_h)
-    all_rect = rl.Rectangle(self._btn_rect.x + btn_w + btn_gap, self._btn_rect.y, btn_w, btn_h)
-
-    self._latest_btn.set_button_style(ButtonStyle.PRIMARY if not self._show_all else ButtonStyle.NORMAL)
-    self._all_btn.set_button_style(ButtonStyle.PRIMARY if self._show_all else ButtonStyle.NORMAL)
-    self._latest_btn.render(latest_rect)
-    self._all_btn.render(all_rect)
-
-    self._text_rect = rl.Rectangle(rect.x + 36, rect.y + 154, rect.width - 72, rect.height - 182)
-    self._ensure_wrapped(int(self._text_rect.width))
-
-    lines = self._render_all if self._show_all else self._render_latest
-    total_h = self._total_height(lines)
-    self._max_scroll = max(0.0, total_h - self._text_rect.height)
-    self._clamp_scroll()
-
-    # Clip content region and draw formatted lines
-    rl.begin_scissor_mode(int(self._text_rect.x), int(self._text_rect.y), int(self._text_rect.width), int(self._text_rect.height))
-    y = self._text_rect.y - self._scroll_px
-    for line in lines:
-      line_h = line["height"]
-      if line["text"] and (y + line_h) >= self._text_rect.y and y <= (self._text_rect.y + self._text_rect.height):
-        font = gui_app.font(line["font_weight"])
-        x = self._text_rect.x + line["indent"]
-        rl.draw_text_ex(font, line["text"], rl.Vector2(x, y), line["font_size"], 0, line["color"])
-      y += line_h
-    rl.end_scissor_mode()
-
-    if self._max_scroll > 0.0:
-      hint = "Drag to scroll"
-      hint_size = measure_text_cached(gui_app.font(FontWeight.NORMAL), hint, 24)
-      hint_x = self._text_rect.x + self._text_rect.width - hint_size.x
-      hint_y = rect.y + rect.height - 12 - hint_size.y
-      rl.draw_text_ex(gui_app.font(FontWeight.NORMAL), hint, rl.Vector2(hint_x, hint_y), 24, 0, rl.Color(180, 180, 180, 220))
-
-
 def _format_updater_description(description: str | None) -> str:
   brand = "IQ.Pilot"
   if not description:
@@ -325,7 +64,6 @@ def _format_updater_description(description: str | None) -> str:
   if cleaned.lower().startswith(brand.lower()):
     return cleaned
   return f"{brand} {cleaned}" if cleaned else brand
-
 
 class LauncherTile(Widget):
   """A large offroad launcher tile: teal-gradient icon over a dark rounded card, label beneath."""
@@ -412,6 +150,9 @@ class HomeLayout(Widget):
     self._status_word = tr("READY")
     self._expanded = False
     self._expanded_metrics: list[tuple[str, str, rl.Color]] = []
+    self._source_poll = 0.0
+    self._source: tuple[str, SourceState] = ("", SourceState.HIDDEN)
+    self._dock: tuple[DockStatus, float] = (DockStatus.HIDDEN, 0.0)
     self._net_type = NETWORK_TYPES.get(NetworkType.none)
     self._on_wifi = False
     self._battery_pct: int | None = None
@@ -427,14 +168,15 @@ class HomeLayout(Widget):
     self.alert_notif_rect = rl.Rectangle(0, 0, 220, 60)
 
     self._setup_widget = SetupWidget()
-    self._changelog_widget = ChangelogWidget()
     self._inspire_widget = InspireWidget()
-    self._map_panel_widget = MapPanelWidget()
+    self._map_panel_widget = self._child(MapPanelWidget())
     self._stats_panel_widget = TripsLayout()
 
     # Right-panel widget selection
     saved = self.params.get(PANEL_KEY) or ""
-    self._panel_widget = saved if saved in (PANEL_CHANGELOG, PANEL_STATS, PANEL_MAP, PANEL_INSPIRE) else PANEL_CHANGELOG
+    self._panel_widget = saved if saved in (PANEL_STATS, PANEL_MAP, PANEL_INSPIRE) else PANEL_MAP
+    if saved != self._panel_widget:
+      self.params.put(PANEL_KEY, self._panel_widget)
 
     # Hold-to-pick
     self._press_start: float | None = None
@@ -479,7 +221,7 @@ class HomeLayout(Widget):
     self._setup_callbacks()
 
   def show_event(self):
-    self._changelog_widget.show_event()
+    super().show_event()
     self.last_refresh = time.monotonic()
     self._refresh()
 
@@ -592,6 +334,10 @@ class HomeLayout(Widget):
   def _update_status_info(self):
     # Read the expanded-status toggle every frame (not gated by deviceState updates)
     self._expanded = self.params.get_bool("IQExpandedStatus")
+    if time.monotonic() - self._source_poll >= 1.0:
+      self._source_poll = time.monotonic()
+      self._source = resolve_source(self.params, ui_state.engaged)
+      self._dock = egpu_dock_status(self.params, ui_state.sm['deviceState'])
 
     sm = ui_state.sm
     # Network + battery — updated from cached state every frame so values are never stale
@@ -691,8 +437,8 @@ class HomeLayout(Widget):
         self.params.put(PANEL_KEY, self._panel_widget)
         if self._panel_widget == PANEL_INSPIRE:
           self._inspire_widget.show_event()
-        elif self._panel_widget == PANEL_CHANGELOG:
-          self._changelog_widget.show_event()
+        if self._panel_widget != PANEL_MAP:
+          self._map_panel_widget.hide_event()
       self._show_picker = False
       self._picker_hover = None
       return
@@ -730,6 +476,9 @@ class HomeLayout(Widget):
     if self._battery_pct is not None:
       batt_text = f"{self._battery_pct}%"
       cluster_w += gap + self._icon_battery.width + 10 + measure_text_cached(font, batt_text, text_fs).x
+    dock_status, dock_progress = self._dock
+    if dock_status != DockStatus.HIDDEN:
+      cluster_w += gap + dock_icon_width(dock_status, DOCK_ICON_H)
     cluster_w += pad
 
     pill = rl.Rectangle(rect.x, rect.y, cluster_w, rect.height)
@@ -762,6 +511,10 @@ class HomeLayout(Widget):
       x += self._icon_battery.width + 10
       batt_size = measure_text_cached(font, batt_text, text_fs)
       rl.draw_text_ex(font, batt_text, rl.Vector2(int(x), int(cy - batt_size.y / 2)), text_fs, 0, rl.Color(215, 215, 215, 255))
+      x += batt_size.x + gap
+
+    if dock_status != DockStatus.HIDDEN:
+      x += draw_dock_icon(dock_status, dock_progress, DOCK_ICON_H, x, cy)
 
     right_x = rect.x + rect.width
     version_fs = 44
@@ -792,6 +545,16 @@ class HomeLayout(Widget):
         rl.draw_circle(int(ccx), int(cy), dot_r, color)
         rl.draw_text_ex(font, ctext, rl.Vector2(int(ccx + dot_r + 14), int(cy - label_fs / 2 - 3)), label_fs, 0, rl.WHITE)
         chip_x += chip_w + 16
+      label, state = self._source
+      icon_h = int(chip_h - 22)
+      icon = None if label == "GPU" and dock_status != DockStatus.HIDDEN else source_icon(label, state, icon_h)
+      if icon is not None:
+        chip_w = chip_pad + icon[0].width + chip_pad
+        if chip_x + chip_w <= max_x:
+          chip = rl.Rectangle(chip_x, rect.y + 8, chip_w, chip_h)
+          rl.draw_rectangle_rounded(chip, 0.5, 16, rl.Color(28, 30, 36, 255))
+          rl.draw_rectangle_rounded_lines_ex(chip, 0.5, 16, 2, rl.Color(255, 255, 255, 22))
+          draw_source_icon(label, state, icon_h, rl.Vector2(chip.x + chip_w / 2, cy))
 
     # --- right cluster: version (small), then notification chips to its left ---
     if version_size.x <= version_rect.width:
@@ -851,7 +614,7 @@ class HomeLayout(Widget):
     elif self._panel_widget == PANEL_INSPIRE:
       self._inspire_widget.render(rect)
     else:
-      self._changelog_widget.render(rect)
+      self._map_panel_widget.render(rect)
 
     # Hold-progress ring drawn over the panel while user is holding
     if self._press_start is not None and not self._show_picker:
@@ -866,7 +629,6 @@ class HomeLayout(Widget):
     rl.draw_rectangle_rounded(rect, 0.06, 24, PICKER_BG)
 
     options = [
-      (PANEL_CHANGELOG, "Changelog",   "Latest updates"),
       (PANEL_STATS,     "Stats",       "Your drive history"),
       (PANEL_MAP,       "Map",         "Last known location"),
       (PANEL_INSPIRE,   "Inspiration", "Daily message"),

@@ -7,8 +7,8 @@ import time
 
 import numpy as np
 
-from iqpilot.selfdrive.locationd.models.car_kf import CarKalman
-from iqpilot.selfdrive.locationd.models.constants import ObservationKind
+from iqpilot.selfdrive.iqlocd.models.car_kf import CarKalman
+from iqpilot.selfdrive.iqlocd.models.constants import ObservationKind
 from iqpilot.selfdrive.locationd.models.pose_kf import PoseKalman
 
 

@@ -2,6 +2,7 @@ import numpy as np
 from iqpilot.cereal import car
 from iqpilot.common.realtime import DT_CTRL
 from iqpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
+from iqpilot.common.filter_simple import FirstOrderFilter
 from iqpilot.common.pid import PIDController
 from iqpilot.selfdrive.iqmodeld.config import ModelConstants
 from iqpilot.selfdrive.controls.lib.smooth_stops import SmoothStopController
@@ -10,33 +11,14 @@ CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
 LongCtrlState = car.CarControl.Actuators.LongControlState
 
+# measured accel response: EV6 0.15 s dead time + 0.7 s lag, 2021 Elantra 0.4 s + 1.1 s, where a speed-error loop hunts
+SPEED_ERROR_PID_CARS = {"KIA_EV6"}
+FILTERED_A_EGO_CARS = {"HYUNDAI_ELANTRA_2021"}
+A_EGO_FILTER_TS = 0.3
+# closed-loop replay of 2021 Elantra drives: at gain 1 the accel-error loop cycles throttle and brake around a smooth plan
+# (17.7 flips/min in the city), at 0.4 it halves that and actual accel tracking is unchanged
+ACCEL_ERROR_KP = {"HYUNDAI_ELANTRA_2021": 0.4}
 
-def long_control_state_trans(CP_IQ, active, long_control_state, should_stop, brake_pressed, cruise_standstill):
-  # Gas Interceptor
-  cruise_standstill = cruise_standstill and not CP_IQ.enableGasInterceptor
-
-  starting_condition = (not should_stop and
-                        not cruise_standstill and
-                        not brake_pressed)
-
-  if not active:
-    long_control_state = LongCtrlState.off
-
-  else:
-    if long_control_state == LongCtrlState.off:
-      if not starting_condition:
-        long_control_state = LongCtrlState.stopping
-      else:
-        long_control_state = LongCtrlState.pid
-
-    elif long_control_state == LongCtrlState.stopping:
-      if starting_condition:
-        long_control_state = LongCtrlState.pid
-
-    elif long_control_state == LongCtrlState.pid:
-      if should_stop:
-        long_control_state = LongCtrlState.stopping
-  return long_control_state
 
 class LongControl:
   def __init__(self, CP, CP_IQ):
@@ -49,23 +31,44 @@ class LongControl:
     self.last_output_accel = 0.0
     self.stopping_decel_rate = CP_IQ.stoppingDecelRateOverride or 1.0
     self.smooth = SmoothStopController()
+    self.speed_error_pid = CP.carFingerprint in SPEED_ERROR_PID_CARS
+    self.filter_a_ego = CP.carFingerprint in FILTERED_A_EGO_CARS
+    self.a_ego_filter = FirstOrderFilter(0.0, A_EGO_FILTER_TS, DT_CTRL, initialized=False)
+    if CP.carFingerprint in ACCEL_ERROR_KP:
+      self.pid._k_p = ([0.0], [ACCEL_ERROR_KP[CP.carFingerprint]])
 
   def reset(self):
     self.pid.reset()
 
-  def update(self, active, CS, a_target, should_stop, accel_limits, lead_distance=0.0, has_lead=False, gas_override=False):
-    """Update longitudinal control. This updates the state machine and runs a PID loop"""
+  def _update_state(self, active, car_state, stop_requested):
+    if not active:
+      self.long_control_state = LongCtrlState.off
+      return
+
+    holding = self.long_control_state == LongCtrlState.stopping
+    hold_requested = stop_requested
+    if self.smooth.enabled and not holding:
+      hold_requested = self.smooth.want_hold(stop_requested, car_state.vEgo, car_state.standstill)
+
+    if hold_requested:
+      self.long_control_state = LongCtrlState.stopping
+      return
+
+    if self.long_control_state == LongCtrlState.pid:
+      return
+
+    release_blocked = car_state.brakePressed or (
+      car_state.cruiseState.standstill and not self.CP_IQ.enableGasInterceptor
+    )
+    self.long_control_state = LongCtrlState.stopping if release_blocked else LongCtrlState.pid
+
+  def update(self, active, CS, a_target, should_stop, accel_limits, lead_distance=0.0, has_lead=False, gas_override=False, *, v_target_now):
     self.pid.neg_limit = accel_limits[0]
     self.pid.pos_limit = accel_limits[1]
     self.smooth.update()
+    a_ego = self.a_ego_filter.update(CS.aEgo) if self.filter_a_ego else CS.aEgo
 
-    if self.smooth.enabled and active and self.long_control_state != LongCtrlState.stopping:
-      stop_now = self.smooth.want_hold(should_stop, CS.vEgo, CS.standstill)
-    else:
-      stop_now = should_stop
-
-    self.long_control_state = long_control_state_trans(self.CP_IQ, active, self.long_control_state, stop_now, CS.brakePressed,
-                                                       CS.cruiseState.standstill)
+    self._update_state(active, CS, should_stop)
     if self.long_control_state == LongCtrlState.off:
       self.reset()
       self.smooth.reset()
@@ -75,17 +78,16 @@ class LongControl:
       output_accel = self.last_output_accel
       if output_accel > self.CP.stopAccel:
         output_accel = min(output_accel, 0.0)
-        # TODO: can we just go straight to stopAccel?
-        output_accel -= self.stopping_decel_rate * DT_CTRL  # m/s^2/s while trying to stop
+        output_accel -= self.stopping_decel_rate * DT_CTRL
       self.reset()
       self.smooth.reset()
 
-    else:  # LongCtrlState.pid
+    else:
       if self.smooth.enabled and active and should_stop:
         output_accel = self.smooth.settle(a_target, CS.vEgo, lead_distance, has_lead, self.last_output_accel)
         self.reset()
       else:
-        error = a_target - CS.aEgo
+        error = v_target_now - CS.vEgo if self.speed_error_pid else a_target - a_ego
         output_accel = self.pid.update(error, speed=CS.vEgo,
                                        feedforward=a_target,
                                        freeze_integrator=gas_override)

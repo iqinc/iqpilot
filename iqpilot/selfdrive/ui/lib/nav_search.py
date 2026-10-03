@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from pathlib import Path
 from dataclasses import dataclass
 from types import SimpleNamespace
 
@@ -19,10 +20,11 @@ import requests
 
 from iqpilot.common.params import Params
 from iqpilot.common.swaglog import cloudlog
+from iqpilot.system.hardware.hw import Paths
 from iqpilot.selfdrive.ui.lib.nav_helpers import resolve_mapbox_token, current_or_last_gps_position
 
 SEARCHBOX = "https://api.mapbox.com/search/searchbox/v1"
-FAVORITES_PATH = "/data/nav_favorites.json"
+FAVORITES_PATH = str(Path(Paths.params()).parent / "nav_favorites.json")
 MAX_RESULTS = 6
 MAX_RECENTS = 8
 
@@ -66,14 +68,18 @@ class NavSearch:
     self._last_query = ""
     self._searching = False
     self._amap_adcode = ""
+    self.error = ""
 
   def new_session(self) -> None:
     # A Search Box "session" groups suggest+retrieve for billing; start one per search visit.
     self._session = str(uuid.uuid4())
     with self._lock:
+      self._seq += 1
       self._results = []
+      self._searching = False
     self._last_query = ""
     self._amap_adcode = ""
+    self.error = ""
 
   def results(self) -> list[SearchResult]:
     with self._lock:
@@ -88,6 +94,7 @@ class NavSearch:
     if query == self._last_query:
       return
     self._last_query = query
+    self.error = ""
     self._seq += 1
     seq = self._seq
     if len(query) < 2:
@@ -95,6 +102,16 @@ class NavSearch:
         self._results = []
       self._searching = False
       return
+    # Coordinate entry works completely offline, including Home/Work setup.
+    try:
+      lat, lon = (float(v.strip()) for v in query.split(","))
+      if -90 <= lat <= 90 and -180 <= lon <= 180:
+        with self._lock:
+          self._results = [SearchResult(query, "Coordinates", lat=lat, lon=lon, provider="coordinates")]
+        self._searching = False
+        return
+    except ValueError:
+      pass
     self._searching = True
     threading.Thread(target=self._do_search, args=(query, seq), daemon=True).start()
 
@@ -134,6 +151,12 @@ class NavSearch:
         return
 
       token = resolve_mapbox_token(self._params)
+      if not token:
+        with self._lock:
+          if seq == self._seq:
+            self._results = []
+            self.error = "Configure address search, enter latitude, longitude, or choose a point on the map."
+        return
       params = {"q": query, "access_token": token, "session_token": self._session,
                 "limit": MAX_RESULTS, "language": "en"}
       if fix:
@@ -157,6 +180,7 @@ class NavSearch:
       if seq == self._seq:
         with self._lock:
           self._results = []
+          self.error = "Search unavailable. Check your connection and search provider."
     finally:
       if seq == self._seq:
         self._searching = False
@@ -209,6 +233,7 @@ def set_destination(lat: float, lon: float, name: str) -> None:
   params.put_bool("NavigationActive", False)
   # NavigationDestination is a JSON-typed param: pass the object, not a pre-serialized string.
   params.put("NavigationDestination", {"latitude": float(lat), "longitude": float(lon), "name": name or ""})
+  params.put_bool("NavigationEnabled", True)
 
 
 def cancel_navigation() -> None:
@@ -217,13 +242,6 @@ def cancel_navigation() -> None:
   params.remove("NavigationDestination")
   params.remove("AthenaNavigationRoute")
   params.put_bool("NavigationActive", False)
-
-
-def has_active_destination() -> bool:
-  try:
-    return bool(Params().get("NavigationDestination"))
-  except Exception:
-    return False
 
 
 def _load_favorites() -> dict:

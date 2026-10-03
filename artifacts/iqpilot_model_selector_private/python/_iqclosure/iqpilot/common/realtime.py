@@ -41,6 +41,21 @@ def config_realtime_process(cores: int | list[int], priority: int) -> None:
   set_core_affinity(c)
 
 
+class CycleCollector:
+  # config_realtime_process disables the collector; without this, reference cycles (failed requests, tracebacks) are never freed.
+  def __init__(self, interval_s: float = 30.0):
+    self._interval_s = interval_s
+    gc.collect()
+    gc.freeze()
+    self._next = time.monotonic() + interval_s
+
+  def tick(self) -> None:
+    now = time.monotonic()
+    if now >= self._next:
+      gc.collect()
+      self._next = now + self._interval_s
+
+
 def config_background_thread() -> None:
   if sys.platform == 'linux' and not PC:
     os.sched_setscheduler(0, os.SCHED_OTHER, os.sched_param(0))

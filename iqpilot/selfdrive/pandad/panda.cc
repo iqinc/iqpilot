@@ -12,6 +12,11 @@
 
 const bool PANDAD_MAXOUT = getenv("PANDAD_MAXOUT") != nullptr;
 
+std::string panda_firmware_path() {
+  const char *runtime_path = getenv("IQPILOT_PANDA_FW_PATH");
+  return runtime_path != nullptr ? runtime_path : PANDA_FW_PATH;
+}
+
 Panda::Panda(std::string serial, uint32_t bus_offset) : bus_offset(bus_offset) {
   // try USB first, then SPI
   try {
@@ -138,7 +143,7 @@ std::optional<std::string> Panda::get_serial() {
 bool Panda::up_to_date() {
   if (auto fw_sig = get_firmware_version()) {
     for (auto fn : { "panda.bin.signed", "panda_h7.bin.signed" }) {
-      auto content = util::read_file(std::string(PANDA_FW_PATH) + fn);
+      auto content = util::read_file(panda_firmware_path() + fn);
       if (content.size() >= fw_sig->size() &&
           memcmp(content.data() + content.size() - fw_sig->size(), fw_sig->data(), fw_sig->size()) == 0) {
         return true;

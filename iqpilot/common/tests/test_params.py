@@ -117,6 +117,7 @@ class TestParams:
     self.params.remove("LanguageSetting")
     self.params.remove("LongitudinalPersonality")
     self.params.remove("LiveParameters")
+    self.params.remove("IQSpeedLimitCompliance")
 
     assert self.params.get("LanguageSetting") is None
     assert self.params.get("LanguageSetting", return_default=False) is None
@@ -124,6 +125,16 @@ class TestParams:
     assert isinstance(self.params.get("LongitudinalPersonality", return_default=True), int)
     assert self.params.get("LiveParameters") is None
     assert self.params.get("LiveParameters", return_default=True) is None
+    assert self.params.get("IQSpeedLimitCompliance") is None
+    assert self.params.get("IQSpeedLimitCompliance", return_default=True) is False
+
+  def test_speed_limit_compliance_survives_ui_defaults(self, tmp_path):
+    from iqpilot.common.ui_defaults import apply_ui_defaults
+
+    params = Params(str(tmp_path))
+    params.put_bool("IQSpeedLimitCompliance", True)
+    apply_ui_defaults(params)
+    assert params.get_bool("IQSpeedLimitCompliance")
 
   def test_params_get_type(self):
     # json

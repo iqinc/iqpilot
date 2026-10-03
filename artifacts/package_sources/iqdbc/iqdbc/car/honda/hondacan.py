@@ -77,7 +77,7 @@ def create_brake_command(packer, CAN, apply_brake, pump_on, pcm_override, pcm_ca
   return packer.make_can_msg("BRAKE_COMMAND", CAN.pt, values)
 
 
-def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, car_fingerprint, gas_force):
+def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_counter, CP, gas_force):
   commands = []
   min_gas_accel = CarControllerParams.BOSCH_GAS_LOOKUP_BP[0]
 
@@ -92,15 +92,17 @@ def create_acc_commands(packer, CAN, enabled, active, accel, gas, stopping_count
   acc_control_values = {
     'ACCEL_COMMAND': accel_command,
     'STANDSTILL': standstill,
-    'BRAKE_REQUEST': braking,
   }
 
-  if car_fingerprint in HONDA_BOSCH_RADARLESS:
+  if CP.flags & HondaFlags.BOSCH_RADARLESS:
     acc_control_values.update({
       "CONTROL_ON": enabled,
+      # hybrid and alt-brake cars require this bit whenever braking; others use it for idle stop after 4s at 50Hz
+      "COMPUTER_BRAKE_ASSIST": braking if CP.flags & (HondaFlags.HYBRID | HondaFlags.BOSCH_ALT_BRAKE) else stopping_counter > 200,
     })
   else:
     acc_control_values.update({
+      'BRAKE_REQUEST': braking,
       # setting CONTROL_ON causes car to set POWERTRAIN_DATA->ACC_STATUS = 1
       "CONTROL_ON": control_on,
       "GAS_COMMAND": gas_command,  # used for gas
@@ -153,10 +155,14 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
     'SET_ME_X01_2': 1,
   }
 
+  if CP.flags & HondaFlags.BOSCH_CANFD:
+    acc_hud_values['SET_ME_X01'] = int(enabled and (bool(acc_hud_values['HUD_LEAD']) or (pcm_accel < 0.2)))
+    acc_hud_values['SET_ME_X01_2'] = int(enabled and (bool(acc_hud_values['HUD_LEAD']) or (pcm_accel < 0.2)))
+
   if CP.carFingerprint in HONDA_BOSCH:
     acc_hud_values['ACC_ON'] = int(enabled)
-    acc_hud_values['FCM_OFF'] = 1
-    acc_hud_values['FCM_OFF_2'] = 1
+    acc_hud_values['FCM_OFF'] = 0
+    acc_hud_values['FCM_OFF_2'] = 0
   else:
     # Shows the distance bars, TODO: stock camera shows updates temporarily while disabled
     acc_hud_values['ACC_ON'] = int(enabled)
@@ -171,7 +177,8 @@ def create_acc_hud(packer, bus, CP, enabled, pcm_speed, pcm_accel, hud_control, 
   return packer.make_can_msg("ACC_HUD", bus, acc_hud_values)
 
 
-def create_lkas_hud(packer, bus, CP, hud_control, lat_active, steering_available, reduced_steering, alert_steer_required, lkas_hud, dashed_lanes):
+def create_lkas_hud(packer, bus, CP, hud_control, lat_active, steering_available, reduced_steering, alert_steer_required, lkas_hud, dashed_lanes,
+                    steer_fault_permanent=False, lkas_state_change=None):
   commands = []
 
   lkas_hud_values = {
@@ -183,14 +190,29 @@ def create_lkas_hud(packer, bus, CP, hud_control, lat_active, steering_available
     'BEEP': 0,
   }
 
+  # the stock camera holds LKAS_STATE_CHANGE low, pulsing it high ~3s around HUD state changes;
+  # holding it high permanently suppresses the dash lane-line rendering
+  if lkas_state_change is not None:
+    lkas_hud_values['LKAS_STATE_CHANGE'] = int(lkas_state_change)
+
   if CP.carFingerprint in (HONDA_BOSCH_RADARLESS | HONDA_BOSCH_CANFD):
     lkas_hud_values['LANE_LINES'] = 3
     lkas_hud_values['DASHED_LANES'] = lat_active
 
     # car likely needs to see LKAS_PROBLEM fall within a specific time frame, so forward from camera
-    # TODO: needed for Bosch CAN FD?
     if CP.carFingerprint in HONDA_BOSCH_RADARLESS:
       lkas_hud_values['LKAS_PROBLEM'] = lkas_hud['LKAS_PROBLEM']
+
+    if CP.carFingerprint in HONDA_BOSCH_CANFD:
+      lkas_hud_values['LKAS_PROBLEM'] = steer_fault_permanent
+      # CAN FD: dashed lanes are the AOL armed indication (dashed_lanes is aol.enabled and not
+      # latActive, which is not standstill-gated - so parked LKAS button presses produce cluster
+      # feedback). ORed with lat_active so the engaged payload keeps SOLID and DASHED set together,
+      # byte-matching the stock camera's lanes-on state
+      lkas_hud_values['DASHED_LANES'] = dashed_lanes or lat_active
+      # every payload change must coincide with an LKAS_STATE_CHANGE pulse (see carcontroller); keyed
+      # on lat_active, not lanesVisible, so the dash LKAS indication follows AOL's lateral state
+      lkas_hud_values['SOLID_LANES'] = lat_active
 
   if not (CP.flags & HondaFlags.BOSCH_EXT_HUD):
     lkas_hud_values['RDM_OFF'] = 1
@@ -225,19 +247,68 @@ def create_legacy_brake_command(packer, bus):
   return packer.make_can_msg("LEGACY_BRAKE_COMMAND", bus, {})
 
 
-def spam_buttons_command(packer, CAN, button_val, car_fingerprint):
+def spam_buttons_command(packer, CAN, cruise_button, cruise_setting, ambient_light, car_fingerprint, bus=None):
   values = {
-    'CRUISE_BUTTONS': button_val,
-    'CRUISE_SETTING': 0,
+    'CRUISE_BUTTONS': cruise_button,
+    'CRUISE_SETTING': cruise_setting,
+    # the camera consumes this byte too (adaptive high beam); echo the SCM's live value
+    'AMBIENT_LIGHT_MAYBE': ambient_light,
   }
-  # send buttons to camera on radarless (camera does ACC) cars
-  bus = CAN.camera if car_fingerprint in HONDA_BOSCH_RADARLESS else CAN.pt
+  if bus is None:
+    # send buttons to camera on radarless (camera does ACC) cars
+    bus = CAN.camera if car_fingerprint in HONDA_BOSCH_RADARLESS else CAN.pt
   return packer.make_can_msg("SCM_BUTTONS", bus, values)
+
+
+def create_radar_hud_canfd(packer, bus, acc, acc_pulse=False):
+  values = {
+    # the stock radar raises this bit only in short bursts right after ACC engages, never held
+    'CMBS_ENABLED_MAYBE': 1 if (acc and acc_pulse) else 0,
+    'ACC_ON': acc,
+    'SET_ME_X01': 0x01,
+    'SET_ME_X01_2': 0x01,
+  }
+  return packer.make_can_msg("RADAR_HUD_CANFD", bus, values)
+
+
+def create_canfd_supplemental(packer, bus):
+  values = {
+    'SET_ME_X01': 0x01,
+    'SET_ME_X41': 0x41,
+  }
+  return packer.make_can_msg("BOSCH_SUPPLEMENTAL_CANFD", bus, values)
+
+
+def create_canfd_5hz_radar_messages(packer, bus, radar_ref_cntr, lane_path_length=6, left_lane=0, right_lane=0):
+  commands = []
+
+  radar_lead_values = {
+    'CNTR_REF': radar_ref_cntr,
+    'SET_ME_X01': 0x01,
+    # stock radar transmits a constant 140 here; 120 causes a camera mismatch
+    'TARGET_SPEED_MAYBE': 140,
+    'LEFT_LANE': left_lane,
+    'RIGHT_LANE': right_lane,
+    # the dash cross-checks this against the LANE_PATH in-band terminator; a mismatch suppresses the lane lines
+    'LANE_PATH_LENGTH': lane_path_length,
+  }
+  commands.append(packer.make_can_msg('RADAR_LEAD', bus, radar_lead_values))
+
+  radar_lead2_values = {
+    'SET_ME_X88': 136,
+    'SET_ME_X78': 120,
+    'LEAD_DISTANCE_MAYBE': 0,
+  }
+  commands.append(packer.make_can_msg('RADAR_LEAD2', bus, radar_lead2_values))
+
+  return commands
 
 
 def honda_checksum(address: int, sig, d: bytearray) -> int:
   s = 0
   extended = address > 0x7FF
+  # extended ids above 0x100000 use a different checksum constant, observed on Bosch CAN FD radar messages
+  high_extended = address > 0x100000
   addr = address
   while addr:
     s += addr & 0xF
@@ -249,5 +320,5 @@ def honda_checksum(address: int, sig, d: bytearray) -> int:
     s += (x & 0xF) + (x >> 4)
   s = 8 - s
   if extended:
-    s += 3
+    s += 10 if high_extended else 3
   return s & 0xF

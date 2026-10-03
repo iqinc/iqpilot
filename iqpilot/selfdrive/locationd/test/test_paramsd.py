@@ -3,7 +3,7 @@ import numpy as np
 
 from iqpilot.cereal import messaging
 from iqpilot.selfdrive.locationd.paramsd import retrieve_initial_vehicle_params, migrate_cached_vehicle_params_if_needed
-from iqpilot.selfdrive.locationd.models.car_kf import CarKalman
+from iqpilot.selfdrive.iqlocd.models.car_kf import CarKalman
 from iqpilot.selfdrive.locationd.test.test_locationd_scenarios import TEST_ROUTE
 from iqpilot.selfdrive.test.process_replay.migration import migrate, migrate_carParams
 from iqpilot.common.params import Params

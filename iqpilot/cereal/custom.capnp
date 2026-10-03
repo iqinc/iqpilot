@@ -171,6 +171,20 @@ struct IQPlan @0xda401323ae805f2b {
   aTarget @5 :Float32;
   events @6 :List(IQOnroadEvent.Event);
   e2eAlerts @7 :E2eAlerts;
+  distanceControl @8 :DistanceControl;
+  accelBoost @9 :Float32;
+
+  struct DistanceControl {
+    enabled @0 :Bool;
+    active @1 :Bool;
+    inhibitionReason @2 :Text;
+    targetTimeGap @3 :Float32;
+    excessDistance @4 :Float32;
+    requestedCorrection @5 :Float32;
+    appliedCorrection @6 :Float32;
+    originalAcceleration @7 :Float32;
+    correctedAcceleration @8 :Float32;
+  }
 
   struct IQDynamicControl {
     state @0 :IQDynamicControlState;
@@ -323,6 +337,8 @@ struct IQOnroadEvent @0xf4621d3ee9233bc9 {
     # camera hardware
     wideCamFaulty @32;
 
+    lateralEdgeBlocked @33;
+
   }
 }
 
@@ -441,6 +457,9 @@ struct IQCarState @0xb1c39318bb6bc2b3 {
   # VW PQ stock ACC radar feedback for the IQ.Dynamics radar_manager (Blend feature)
   accRadarStaAdr @4 :UInt8;   # ACC_System.ACS_Sta_ADR (0 not-active, 1 active, 2 passive, 3 irrev_Fehler)
   accRadarFehler @5 :Bool;    # ACC_System.ACS_Fehler (stored fault -> radar dead for the drive)
+  slcSetSpeedRequestId @6 :UInt32;
+  slcSetSpeedGestureId @7 :UInt32;
+  slcSetSpeedRequestKph @8 :Float32;
 }
 
 struct IQLiveData @0xf2e2b608e51f4b0e {
@@ -502,8 +521,29 @@ enum IQTurnSignalDirection {
   turnRight @2;
 }
 
+enum IQLateralEdgeBlock {
+  none @0;
+  left @1;
+  right @2;
+}
+
 struct IQDriveModelData @0xcdf0f7f14f46cb86 {
   turnSignalDirection @0 :IQTurnSignalDirection;
+  lateralEdgeBlock @1 :IQLateralEdgeBlock;
+  speedLimitMps @2 :Float32;
+  speedLimitProb @3 :Float32;
+  speedLimitIsMph @4 :Bool;
+  driveProfile @5 :UInt8;
+  arrivalUrgency @6 :Float32;
+  reasoningText @7 :Text;
+  reasoningState @8 :Text;
+  backupPath @9 :IQModelPath;
+}
+
+struct IQModelPath @0xe0b60694a7e33f3d {
+  x @0 :List(Float32);
+  y @1 :List(Float32);
+  z @2 :List(Float32);
 }
 
 enum NavDirection {
@@ -596,6 +636,8 @@ struct IQNavState @0xaae9afb364368cd9 {
   cameraChime @59 :Bool;
   cameraTrusted @60 :Bool;
   cameraSourceAge @61 :Float32;
+  mapboxSpeedLimit @62 :Float32;
+  mapboxSpeedLimitValid @63 :Bool;
 
   enum CameraType {
     none @0;

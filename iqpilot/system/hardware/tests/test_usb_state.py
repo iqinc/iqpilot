@@ -265,3 +265,15 @@ def test_rom_mode_dock_is_neither_present_nor_ready(tmp_path):
   _mkdev(root, "1-1", vid=vid, pid=pid, product="USB 3.2 PCIe TinyEnclosure")
   assert not egpu_dock_present(root / "bus")
   assert not egpu_dock_ready(root / "bus")
+
+
+class TestEnsureHostRole:
+  def test_already_host_needs_no_write(self, tmp_path):
+    from iqpilot.system.hardware.usb import ensure_host_role
+    mode = tmp_path / "mode"
+    mode.write_text("host\n")
+    assert ensure_host_role(mode)
+
+  def test_missing_controller_is_false(self, tmp_path):
+    from iqpilot.system.hardware.usb import ensure_host_role
+    assert not ensure_host_role(tmp_path / "absent" / "mode")

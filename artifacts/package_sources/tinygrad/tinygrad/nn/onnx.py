@@ -46,6 +46,7 @@ class Domain(enum.Enum):
   MICROSOFT_NCHWC = "com.microsoft.nchwc"
   MICROSOFT_EXPERIMENTAL = "com.microsoft.experimental"
   PYTORCH_ATEN = "org.pytorch.aten"
+  TINYGRAD = "org.tinygrad"
   @classmethod
   def from_onnx(cls, domain: str | None) -> "Domain": return cls.ONNX if domain is None or domain == "" else cls(domain)
 
@@ -554,6 +555,9 @@ def get_onnx_ops() -> dict[str, types.FunctionType|dict[OpSetId, types.FunctionT
     # otherwise, use condition to select the output in python
     cond = _resolve_const(_to_python_const(condition))
     return tuple(t if cond else e for t,e in zip(then_out.values(), else_out.values()))
+
+  def contiguous_1(x:Tensor): return x.contiguous()
+  Contiguous = {OpSetId(Domain.TINYGRAD, 1):contiguous_1}
 
   def Identity(x:Tensor): return x
   def Constant(sparse_value:Tensor|None=None, value:Tensor|None=None, value_float:float|None=None, value_floats:list[float]|None=None,

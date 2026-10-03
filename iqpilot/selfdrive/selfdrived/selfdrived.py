@@ -19,22 +19,15 @@ from iqpilot.common.gps import get_gps_location_service
 from iqpilot.selfdrive.car.car_specific import CarSpecificEvents
 from iqpilot.selfdrive.locationd.helpers import PoseCalibrator, Pose
 from iqpilot.selfdrive.selfdrived.events import Events, ET
-from iqpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck
+from iqpilot.selfdrive.selfdrived.helpers import ExcessiveActuationCheck, SteerShortfallCheck
 from iqpilot.selfdrive.selfdrived.state import StateMachine
 from iqpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
+from iqpilot.selfdrive.longitudinal_settings import get_runtime_personality
 
 from iqpilot.system.version import get_build_metadata
 from iqpilot.system.hardware import HARDWARE
 
 from iqpilot.sab.behavior import SteeringAssistanceBehavior
-def get_sanitize_int_param(key, min_val, max_val, params):
-  stored = params.get(key, return_default=True)
-  bounded = min(max(stored, min_val), max_val)
-  if bounded != stored:
-    params.put(key, bounded)
-  return bounded
-
-
 from iqpilot.selfdrive.controls.lib.helpers.lane_change import NAV_EXIT_COMMIT_DISTANCE
 from iqpilot.vehicle.vehicle import VehicleEvents
 from iqpilot.selfdrive.car.gap_button_actions import GapButtonActions
@@ -60,7 +53,7 @@ TurnDirection = custom.IQTurnSignalDirection
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
-NON_BLOCKING_PROCESSES = {'mapd', 'iqmapd', 'navd', 'navincidentd', 'navrenderd'}
+NON_BLOCKING_PROCESSES = {'mapd', 'iqmapd', 'navd', 'navincidentd', 'navrenderd', 'iqsentryd', 'k3wgd'}
 
 
 def _cleanup_startup_params(CP: car.CarParams, params: Params) -> None:
@@ -94,6 +87,7 @@ class SelfdriveD(GapButtonActions):
     self.pose_calibrator = PoseCalibrator()
     self.calibrated_pose: Pose | None = None
     self.excessive_actuation_check = ExcessiveActuationCheck()
+    self.steer_shortfall_check = SteerShortfallCheck()
     self.excessive_actuation = self.params.get("Offroad_ExcessiveActuation") is not None
 
     # Setup sockets
@@ -158,12 +152,7 @@ class SelfdriveD(GapButtonActions):
     self.not_running_prev = None
     self.wide_cam_faulty = False
     self.experimental_mode = False
-    self.personality = get_sanitize_int_param(
-      "LongitudinalPersonality",
-      min(log.LongitudinalPersonality.schema.enumerants.values()),
-      max(log.LongitudinalPersonality.schema.enumerants.values()),
-      self.params
-    )
+    self.personality = get_runtime_personality(self.params)
     self.recalibrating_seen = False
     self.state_machine = StateMachine()
     self.rk = Ratekeeper(100, print_delay_threshold=None)
@@ -225,6 +214,9 @@ class SelfdriveD(GapButtonActions):
 
     model_data = self._get_model_data_ext()
     model_events = []
+    if model_data.lateralEdgeBlock != custom.IQLateralEdgeBlock.none:
+      model_events.append(custom.IQOnroadEvent.EventName.lateralEdgeBlocked)
+
     lane_turn_direction = model_data.turnSignalDirection
     if lane_turn_direction == TurnDirection.turnLeft:
       model_events.append(custom.IQOnroadEvent.EventName.modelTurnLeft)
@@ -245,10 +237,11 @@ class SelfdriveD(GapButtonActions):
     nav_state = self.sm['iqNavState']
     nav_events: list[int] = []
     if getattr(nav_state, 'active', False):
-      if getattr(nav_state, 'navTurnDesireDirection', 0) == 1:
-        nav_events.append(custom.IQOnroadEvent.EventName.navTurnLeft)
-      elif getattr(nav_state, 'navTurnDesireDirection', 0) == 2:
-        nav_events.append(custom.IQOnroadEvent.EventName.navTurnRight)
+      if self.nav_exit_lane_change and getattr(nav_state, 'shouldSendLaneChangeDesire', False):
+        if getattr(nav_state, 'navLaneChangeDesireDirection', 0) == 1:
+          nav_events.append(custom.IQOnroadEvent.EventName.navExitLeft)
+        elif getattr(nav_state, 'navLaneChangeDesireDirection', 0) == 2:
+          nav_events.append(custom.IQOnroadEvent.EventName.navExitRight)
       elif self.nav_exit_lane_change and \
           getattr(nav_state, 'nextManeuverValid', False) and \
           getattr(nav_state, 'nextManeuverType', custom.IQNavState.ManeuverType.none) == custom.IQNavState.ManeuverType.exit and \
@@ -283,7 +276,10 @@ class SelfdriveD(GapButtonActions):
       dock_present = self.sm['deviceState'].egpuDockPresent
       mac_active = self.params.get_bool("MacModelActive")
       model_unavailable = big_active is True and self.sm.seen['modelV2'] and not self.sm.alive['modelV2']
-      big_failed = (big_active is False or model_unavailable
+      # an explicit False before this session's first activation is just the selector arming
+      # (it pre-clears the param on startup); alerting on it pops "big model failed" on every
+      # return to the road until the latch warms up
+      big_failed = ((self.big_model_active and big_active is False) or model_unavailable
                     or (self.big_model_active and not dock_present)) and not mac_active
       if big_failed:
         self.events.add(EventName.bigModelFailed)
@@ -540,15 +536,15 @@ class SelfdriveD(GapButtonActions):
     recent_steer_pressed = (self.sm.frame - self.last_steering_pressed_frame)*DT_CTRL < 2.0
     controlstate = self.sm['controlsState']
     lac = getattr(controlstate.lateralControlState, controlstate.lateralControlState.which())
-    if lac.active and not recent_steer_pressed and not self.CP.notCar:
-      clipped_speed = max(CS.vEgo, 0.3)
-      actual_lateral_accel = controlstate.curvature * (clipped_speed**2)
-      desired_lateral_accel = self.sm['modelV2'].action.desiredCurvature * (clipped_speed**2)
-      undershooting = abs(desired_lateral_accel) / abs(1e-3 + actual_lateral_accel) > 1.2
-      turning = abs(desired_lateral_accel) > 1.0
-      # TODO: lac.saturated includes speed and other checks, should be pulled out
-      if undershooting and turning and lac.saturated:
-        self.events.add(EventName.steerSaturated)
+    if self.calibrated_pose is not None and self.sm['deviceMotion'].posenetOK:
+      actual_lateral_accel = CS.vEgo * self.calibrated_pose.angular_velocity.yaw
+    else:
+      actual_lateral_accel = controlstate.curvature * CS.vEgo ** 2
+    steer_shortfall = self.steer_shortfall_check.update(self.sm['modelV2'].action.desiredCurvature, CS.vEgo, actual_lateral_accel,
+                                                        self.sm['lateralDelay'].lateralDelay,
+                                                        lac.active and not recent_steer_pressed and not self.CP.notCar)
+    if steer_shortfall:
+      self.events.add(EventName.steerSaturated)
 
     # Check for FCW
     stock_long_is_braking = self.enabled and not self.CP.openpilotLongitudinalControl and CS.aEgo < -1.25
@@ -783,16 +779,7 @@ class SelfdriveD(GapButtonActions):
       self.is_ldw_enabled = self.params.get_bool("IsLdwEnabled")
       self.disengage_on_accelerator = self.params.get_bool("DisengageOnAccelerator")
       self.experimental_mode = self.params.get_bool("ExperimentalMode") and self.CP.openpilotLongitudinalControl
-      # Params can be changed while selfdrived is running. Keep the live value in
-      # the same valid enum range enforced during startup; otherwise a stale value
-      # (for example 3) makes the alert callback lookup raise KeyError and kills
-      # selfdrived.
-      self.personality = get_sanitize_int_param(
-        "LongitudinalPersonality",
-        min(log.LongitudinalPersonality.schema.enumerants.values()),
-        max(log.LongitudinalPersonality.schema.enumerants.values()),
-        self.params,
-      )
+      self.personality = get_runtime_personality(self.params)
       self.nav_exit_lane_change = self._read_nav_exit_lane_change()
       self.model_download_pending = self.params.get("ModelManager_DownloadIndex") is not None
 

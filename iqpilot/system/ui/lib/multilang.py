@@ -3,6 +3,7 @@ from importlib.resources import files
 import os
 import json
 import gettext
+import time
 from iqpilot.common.basedir import BASEDIR
 from iqpilot.common.swaglog import cloudlog
 
@@ -34,6 +35,7 @@ class Multilang:
     self.codes = {}
     self._translation: gettext.NullTranslations | gettext.GNUTranslations = gettext.NullTranslations()
     self._change_callbacks: list[Callable[[], None]] = []
+    self._next_refresh = 0.0
     self._load_languages()
 
   @property
@@ -62,6 +64,9 @@ class Multilang:
   def change_language(self, language_code: str) -> None:
     # Reinstall gettext with the selected language
     self._params.put("LanguageSetting", language_code)
+    self._apply_language(language_code)
+
+  def _apply_language(self, language_code: str) -> None:
     self._language = language_code
     self.setup()
     for callback in self._change_callbacks:
@@ -69,6 +74,19 @@ class Multilang:
         callback()
       except Exception:
         cloudlog.exception("multilang: language change callback failed")
+
+  def refresh(self) -> None:
+    now = time.monotonic()
+    if self._params is None or now < self._next_refresh:
+      return
+    self._next_refresh = now + 1.0
+    try:
+      value = self._params.get("LanguageSetting")
+      language = (value.decode() if isinstance(value, bytes) else str(value)).removeprefix("main_")
+      if language in self.codes and language != self._language:
+        self._apply_language(language)
+    except Exception:
+      cloudlog.exception("multilang: language refresh failed")
 
   def tr(self, text: str) -> str:
     return self._translation.gettext(text)

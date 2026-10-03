@@ -122,6 +122,7 @@ class CarState(CarStateBase):
     self.tcs = None
     self.mdps = None
     self.steer_touch_2af = None
+    self.canfdSccHoldActive = False
     self.cruise_buttons_msg = None
     self.cam_0x362 = None
     self.cam_0x2a4 = None
@@ -240,15 +241,16 @@ class CarState(CarStateBase):
         else:
           print("cp_alt.seen_addresses = None")
       if not canfd:
+        cp_cruise = self.cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC else self.cp
+        # openpilot longitudinal silences the radar, so its SCC/FCA frames stop before this ladder registers them.
+        stock_scc_frames_expected = not self.CP.openpilotLongitudinalControl or self.CP.flags & HyundaiFlags.CAMERA_SCC
         if self.controls_ready_count == 104:
-          cp_cruise = self.cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC else self.cp
-          add_and_cache(cp_cruise, "FCA11", "fca11")
+          if stock_scc_frames_expected:
+            add_and_cache(cp_cruise, "FCA11", "fca11")
           add_and_cache(self.cp_cam, "LKAS11", "lkas11")
           add_and_cache(self.cp, "CLU11", "clu11")
         elif self.controls_ready_count == 105:
-          cp_cruise = self.cp_cam if self.CP.flags & HyundaiFlags.CAMERA_SCC else self.cp
-          scc_messages_expected = not self.CP.openpilotLongitudinalControl or self.CP.flags & HyundaiFlags.CAMERA_SCC
-          if scc_messages_expected:
+          if stock_scc_frames_expected:
             add_and_cache(cp_cruise, "SCC11", "scc11")
             add_and_cache(cp_cruise, "SCC12", "scc12")
             add_and_cache(cp_cruise, "SCC13", "scc13")
@@ -634,6 +636,7 @@ class CarState(CarStateBase):
       self.main_enabled = True
     # CAN FD cars enable on main button press, set available if no TCS faults preventing engagement
     ret.cruiseState.available = self.main_enabled and self.controls_ready_count >= READY_COUNT_OK #cp.vl["TCS"]["ACCEnable"] == 0
+    self.canfdSccHoldActive = cp.vl["ESP_STATUS"]["AUTO_HOLD"] == 1
     if self.CP.flags & HyundaiFlags.CAMERA_SCC.value:
       self.MainMode_ACC = cp_cam.vl["SCC_CONTROL"]["MainMode_ACC"] == 1
       self.ACCMode = cp_cam.vl["SCC_CONTROL"]["ACCMode"]

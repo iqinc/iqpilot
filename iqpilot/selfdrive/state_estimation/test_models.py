@@ -4,8 +4,8 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 
 import numpy as np
 
-from iqpilot.selfdrive.locationd.models.car_kf import CarKalman, States as CarStates
-from iqpilot.selfdrive.locationd.models.constants import ObservationKind
+from iqpilot.selfdrive.iqlocd.models.car_kf import CarKalman, States as CarStates
+from iqpilot.selfdrive.iqlocd.models.constants import ObservationKind
 from iqpilot.selfdrive.locationd.models.pose_kf import PoseKalman, States as PoseStates
 
 
@@ -56,3 +56,13 @@ def test_pose_zero_rotation_preserves_orientation() -> None:
   estimator.init_state(PoseKalman.initial_x, PoseKalman.initial_P, 0.0)
   estimator.predict(1.0)
   np.testing.assert_allclose(estimator.x[PoseStates.NED_ORIENTATION], np.zeros(3), atol=1e-12)
+
+
+def test_legacy_car_estimator_imports_share_canonical_types():
+  from iqpilot.selfdrive.iqlocd.models import car_kf, constants
+  from iqpilot.selfdrive.locationd.models import car_kf as legacy_car, constants as legacy_constants
+
+  assert legacy_car.CarKalman is car_kf.CarKalman
+  assert legacy_car.States is car_kf.States
+  assert legacy_constants.ObservationKind is constants.ObservationKind
+  assert legacy_constants.SAT_OBS is constants.SAT_OBS

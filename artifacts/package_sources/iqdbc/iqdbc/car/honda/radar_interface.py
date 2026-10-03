@@ -2,6 +2,7 @@
 from iqdbc.can import CANParser
 from iqdbc.car import Bus, structs
 from iqdbc.car.interfaces import RadarInterfaceBase
+from iqdbc.car.honda.radar_scan import SCAN_DBC_NAME, HondaRadarScanner
 from iqdbc.car.honda.values import DBC
 
 
@@ -18,13 +19,20 @@ class RadarInterface(RadarInterfaceBase):
     self.radar_fault = False
     self.radar_wrong_config = False
     self.radar_off_can = CP.radarUnavailable
+    self.scanner = None
 
-    # Nidec
     if self.radar_off_can:
       self.rcp = None
+      self.trigger_msg = 0x445
+    elif DBC[CP.carFingerprint].get(Bus.radar) == SCAN_DBC_NAME:
+      self.scanner = HondaRadarScanner(CP)
+      self.rcp = self.scanner.rcp
+      self.pts = self.scanner.pts
+      self.trigger_msg = self.scanner.trigger_msg
     else:
+      # Nidec
       self.rcp = _create_nidec_can_parser(CP.carFingerprint)
-    self.trigger_msg = 0x445
+      self.trigger_msg = 0x445
     self.updated_messages = set()
 
   def update(self, can_strings):
@@ -37,6 +45,8 @@ class RadarInterface(RadarInterfaceBase):
     self.updated_messages.update(vls)
 
     if self.trigger_msg not in self.updated_messages:
+      if self.scanner is not None and self.scanner.sweep_overdue():
+        return self.scanner.quiet_bus_radardata()
       return None
 
     rr = self._update(self.updated_messages)
@@ -44,6 +54,9 @@ class RadarInterface(RadarInterfaceBase):
     return rr
 
   def _update(self, updated_messages):
+    if self.scanner is not None:
+      return self.scanner.process_sweep(updated_messages)
+
     ret = structs.RadarData()
 
     for ii in sorted(updated_messages):

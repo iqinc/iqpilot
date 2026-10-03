@@ -1,29 +1,24 @@
-import pyray as rl
 import numpy as np
 import time
 import threading
 from collections.abc import Callable
-from enum import Enum, IntEnum
+from enum import Enum
 from iqpilot.cereal import messaging, car, log, custom
 from iqpilot.common.filter_simple import FirstOrderFilter
 from iqpilot.common.params import Params
 from iqpilot.common.swaglog import cloudlog
 from iqpilot.common.auto_units import AutoUnits
+from iqpilot.ui.engagement import resolve_engagement_display
+from iqpilot.ui.display_idle import DisplayIdleTimer
+from iqpilot.ui.render_preferences import RenderPreferences
 from iqpilot.selfdrive.ui.lib.prime_state import PrimeState
 from iqpilot.system.ui.lib.application import gui_app
 from iqpilot.system.hardware import HARDWARE, PC
 
 BACKLIGHT_OFFROAD = 65 if HARDWARE.get_device_type() == "mici" else 50
 
-OpenpilotState = log.SelfdriveState.OpenpilotState
-GuidanceState = custom.AlwaysOnLateral.AlwaysOnLateralState
-
-ONROAD_BRIGHTNESS_TIMER_PAUSED = -1
-
 
 def log_param_from_bytes(params: Params, key: str, schema):
-  # a capnp param written by anything other than the daemon that owns it takes the whole UI
-  # down at import time, and the UI cannot repair it -- read it defensively and carry on
   dat = params.get(key)
   if not dat:
     return None
@@ -40,24 +35,19 @@ class OnroadTimerStatus(Enum):
   RESUME = 2
 
 
-class OnroadBrightness(IntEnum):
-  AUTO = 0
-  AUTO_DARK = 1
-
-
 class IQUIState:
   def __init__(self):
     self.params = Params()
     self.sm_services_ext = [
       "iqModelManager", "iqState", "iqPlan", "iqNavState",
       "gpsLocation", "lateralTorqueParameters",
-      "iqLiveData", "iqNavRenderState", "lateralDelay"
+      "iqLiveData", "iqNavRenderState", "lateralDelay", "iqDriveModelData"
     ]
 
+    self._onroad_idle = DisplayIdleTimer()
     self.update_params()
 
     self.auto_units = AutoUnits(self.params)
-    self.onroad_brightness_timer: int = 0
     self.custom_interactive_timeout: int = self.params.get("InteractivityTimeout", return_default=True)
     self.reset_onroad_sleep_timer()
 
@@ -65,95 +55,30 @@ class IQUIState:
     self.auto_units.update()
 
   def onroad_brightness_handle_alerts(self, started: bool, alert):
-    # while an alert is on screen the dim countdown is frozen and re-armed; otherwise it ticks down
-    alert_showing = bool(started and alert is not None and self.onroad_brightness != OnroadBrightness.AUTO)
-    self.update_onroad_brightness(alert_showing)
-    if alert_showing:
-      self.reset_onroad_sleep_timer()
-
-  def update_onroad_brightness(self, has_alert: bool) -> None:
-    if not has_alert and self.onroad_brightness_timer > 0:
-      self.onroad_brightness_timer -= 1
+    self._onroad_idle.set_alert(bool(started and alert is not None))
 
   def reset_onroad_sleep_timer(self, timer_status: OnroadTimerStatus = OnroadTimerStatus.NONE) -> None:
-    paused = self.onroad_brightness_timer == ONROAD_BRIGHTNESS_TIMER_PAUSED
-
-    # an explicit PAUSE latches the timer and never re-arms
-    if timer_status == OnroadTimerStatus.PAUSE:
-      if not paused:
-        self.onroad_brightness_timer = ONROAD_BRIGHTNESS_TIMER_PAUSED
-      return
-
-    dimming_active = self.onroad_brightness_timer_param >= 0 and self.onroad_brightness != OnroadBrightness.AUTO
-    if timer_status == OnroadTimerStatus.RESUME or (dimming_active and not paused):
-      seconds = 15 if self.onroad_brightness == OnroadBrightness.AUTO_DARK else self.onroad_brightness_timer_param
-      self.onroad_brightness_timer = seconds * gui_app.target_fps
+    if timer_status == OnroadTimerStatus.NONE:
+      self._onroad_idle.wake()
+    else:
+      self._onroad_idle.set_visible(timer_status == OnroadTimerStatus.RESUME)
 
   @property
   def onroad_brightness_timer_expired(self) -> bool:
-    if self.onroad_brightness == OnroadBrightness.AUTO:
-      return False
-    return self.onroad_brightness_timer == 0
+    return self._onroad_idle.expired
 
   @property
   def auto_onroad_brightness(self) -> bool:
-    return self.onroad_brightness in (OnroadBrightness.AUTO, OnroadBrightness.AUTO_DARK)
+    # Accept the retired value 1 as Auto; manual brightness keeps values 2–21.
+    return self.onroad_brightness in (0, 1)
 
   @staticmethod
   def guidance_phase(ss, ss_iq, onroad_evt) -> str:
-    state = ss.state
-    guidance = ss_iq.aol
-    guidance_state = guidance.state
-
-    if state == OpenpilotState.preEnabled:
-      return "standby"
-
-    if state == OpenpilotState.overriding and (not guidance.available or any(e.overrideLongitudinal for e in onroad_evt)):
-      return "standby"
-
-    if guidance_state in (GuidanceState.paused, GuidanceState.overriding):
-      return "standby"
-
-    if guidance.enabled or ss.enabled:
-      return "active"
-
-    return "standby"
+    return resolve_engagement_display(ss, ss_iq, onroad_evt).phase
 
   @staticmethod
   def update_status(ss, ss_iq, onroad_evt) -> str:
-    state = ss.state
-    guidance = ss_iq.aol
-    guidance_state = guidance.state
-
-    if state == OpenpilotState.preEnabled:
-      return "override"
-
-    if state == OpenpilotState.overriding:
-      if not guidance.available:
-        return "override"
-
-      if any(e.overrideLongitudinal for e in onroad_evt):
-        return "override"
-
-    if guidance_state in (GuidanceState.paused, GuidanceState.overriding):
-      return "override"
-
-    if not guidance.available:
-      return "engaged" if ss.enabled else "disengaged"
-
-    if not guidance.enabled and not ss.enabled:
-      return "disengaged"
-
-    if guidance.enabled and ss.enabled:
-      return "engaged"
-
-    if guidance.enabled:
-      return "lat_only"
-
-    if ss.enabled:
-      return "long_only"
-
-    return "disengaged"
+    return resolve_engagement_display(ss, ss_iq, onroad_evt).status
 
   _PARAM_MIRROR = {
     "active_bundle": ("ModelManager_ActiveBundle", "raw"),
@@ -162,12 +87,12 @@ class IQUIState:
     "developer_ui": ("IQDevUIInfo", "raw"),
     "night_mode": ("NightMode", "bool"),
     "road_name_toggle": ("IQRoadNameOverlay", "bool"),
-    "rocket_fuel": ("IQAccelMeter", "bool"),
     "torque_bar": ("IQSteerEffortArc", "bool"),
     "turn_signals": ("IQBlinkerIndicators", "bool"),
     "custom_interactive_timeout": ("InteractivityTimeout", "default"),
     "onroad_brightness_timer_param": ("OnroadScreenOffTimer", "default"),
     "speed_limit_mode": ("IQSpeedAssistMode", "default"),
+    "gas_override_boost": ("IQGasOverrideBoost", "bool"),
   }
 
   def update_params(self) -> None:
@@ -184,8 +109,19 @@ class IQUIState:
         value = self.params.get(key)
       setattr(self, attr, value)
 
+    try:
+      self.onroad_brightness_timer_param = int(float(self.onroad_brightness_timer_param))
+    except (TypeError, ValueError):
+      self.onroad_brightness_timer_param = 15
+
+    self.render_preferences = RenderPreferences.read(self.params, has_active_model=bool(self.active_bundle))
     self.is_night = self._compute_is_night() if self.night_mode else False
     self.onroad_brightness = int(float(self.params.get("OnroadScreenOffBrightness", return_default=True)))
+    if self.auto_onroad_brightness:
+      delay = 15
+    else:
+      delay = max(0, self.onroad_brightness_timer_param)
+    self._onroad_idle.configure(delay)
 
   def _compute_is_night(self) -> bool:
     try:
@@ -210,27 +146,24 @@ class IQDevice:
     if not awake or not _ui_state.started:
       return cur_brightness
 
-    if _ui_state.onroad_brightness_timer != 0:
-      if _ui_state.onroad_brightness == OnroadBrightness.AUTO_DARK:
+    if not _ui_state.onroad_brightness_timer_expired:
+      if _ui_state.auto_onroad_brightness:
         return max(30.0, cur_brightness)
       return cur_brightness
 
-    if _ui_state.onroad_brightness == OnroadBrightness.AUTO:
-      return cur_brightness
-    elif _ui_state.onroad_brightness == OnroadBrightness.AUTO_DARK:
+    if _ui_state.auto_onroad_brightness:
       return cur_brightness
 
     return float((_ui_state.onroad_brightness - 1) * 5)
 
   @staticmethod
   def set_min_onroad_brightness(_ui_state, min_brightness: int) -> int:
-    dark = _ui_state.onroad_brightness == OnroadBrightness.AUTO_DARK
-    return 10 if dark else min_brightness
+    return 10 if _ui_state.auto_onroad_brightness else min_brightness
 
   @staticmethod
   def wake_from_dimmed_onroad_brightness(_ui_state, evs) -> None:
     expired = _ui_state.onroad_brightness_timer_expired
-    dimmed = expired or _ui_state.onroad_brightness == OnroadBrightness.AUTO_DARK
+    dimmed = expired or _ui_state.auto_onroad_brightness
     if not (_ui_state.started and dimmed):
       return
     if not any(ev.left_down for ev in evs):
@@ -285,6 +218,7 @@ class UIState(IQUIState):
         "carOutput",
         "carControl",
         "vehicleParameters",
+        "egpuDockState",
       ] + self.sm_services_ext
     )
 
@@ -321,6 +255,10 @@ class UIState(IQUIState):
 
   def add_offroad_transition_callback(self, callback: Callable[[], None]):
     self._offroad_transition_callbacks.append(callback)
+
+  def remove_offroad_transition_callback(self, callback: Callable[[], None]):
+    if callback in self._offroad_transition_callbacks:
+      self._offroad_transition_callbacks.remove(callback)
 
   def add_engaged_transition_callback(self, callback: Callable[[], None]):
     self._engaged_transition_callbacks.append(callback)
@@ -419,10 +357,17 @@ class UIState(IQUIState):
         self._last_non_disengaged_status = UIStatus.DISENGAGED
         self._last_non_disengaged_time = 0.0
 
-      for callback in self._offroad_transition_callbacks:
+      for callback in tuple(self._offroad_transition_callbacks):
         callback()
 
       self._started_prev = self.started
+
+  def measured_steer_delay(self) -> float | None:
+    # estimatord is onroad-only, so offroad the lateralDelay socket reads back a default 0.0
+    if self.sm.alive['lateralDelay']:
+      return float(self.sm['lateralDelay'].lateralDelay)
+    lag = log_param_from_bytes(self.params, "LiveDelay", log.Event)
+    return float(lag.lateralDelay.lateralDelay) if lag is not None else None
 
   def update_params(self) -> None:
     CP = log_param_from_bytes(self.params, "CarParamsPersistent", car.CarParams)
@@ -479,7 +424,12 @@ class Device(IQDevice):
     self._interaction_time = time.monotonic() + self.interactive_timeout
 
   def add_interactive_timeout_callback(self, callback: Callable):
-    self._interactive_timeout_callbacks.append(callback)
+    if callback not in self._interactive_timeout_callbacks:
+      self._interactive_timeout_callbacks.append(callback)
+
+  def remove_interactive_timeout_callback(self, callback: Callable):
+    if callback in self._interactive_timeout_callbacks:
+      self._interactive_timeout_callbacks.remove(callback)
 
   def update(self):
     if self._interaction_time <= 0:
@@ -557,7 +507,7 @@ class Device(IQDevice):
 
     interaction_timeout = time.monotonic() > self._interaction_time
     if interaction_timeout and not self._prev_timed_out:
-      for callback in self._interactive_timeout_callbacks:
+      for callback in tuple(self._interactive_timeout_callbacks):
         callback()
     self._prev_timed_out = interaction_timeout
 

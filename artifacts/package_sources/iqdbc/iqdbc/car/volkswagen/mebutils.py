@@ -157,6 +157,60 @@ class LongControlLimit():
     return self.lower_limit   
 
 
+class LongStopHold():
+  HOLD_CLEAR_TIME = 0.3
+  DRIVE_OFF_CONFIRM_TIME = 0.25
+  HOLD_RELEASE_SPEED = 0.3
+  HOLD_ACCEL_CEILING = 0.0
+
+  def __init__(self, dt=DT_CTRL):
+    self.dt = dt
+    self.esp_hold = False
+    self.hold_clear_timer = 0.
+    self.stopping = False
+    self.drive_off_timer = 0.
+
+  def reset(self, stopping, esp_hold):
+    self.esp_hold = esp_hold
+    self.hold_clear_timer = 0.
+    self.stopping = stopping
+    self.drive_off_timer = 0.
+
+  def _update_hold(self, esp_hold, v_ego):
+    if esp_hold:
+      self.esp_hold = True
+      self.hold_clear_timer = 0.
+    elif self.esp_hold:
+      self.hold_clear_timer += self.dt
+      if self.hold_clear_timer >= self.HOLD_CLEAR_TIME or v_ego > self.HOLD_RELEASE_SPEED:
+        self.esp_hold = False
+        self.hold_clear_timer = 0.
+
+  def update(self, long_active, stopping, starting, accel, esp_hold, v_ego, override):
+    if not long_active or override:
+      self.reset(stopping, esp_hold)
+      return stopping, starting, esp_hold, accel
+
+    self._update_hold(esp_hold, v_ego)
+
+    holding = self.stopping and (self.esp_hold or v_ego <= self.HOLD_RELEASE_SPEED)
+    if holding and not stopping:
+      if starting or accel > self.HOLD_ACCEL_CEILING:
+        self.drive_off_timer += self.dt
+      else:
+        self.drive_off_timer = 0.
+      committed = self.drive_off_timer >= self.DRIVE_OFF_CONFIRM_TIME or v_ego > self.HOLD_RELEASE_SPEED
+      self.stopping = not committed
+    else:
+      self.drive_off_timer = 0.
+      self.stopping = stopping
+
+    if self.stopping:
+      return True, False, self.esp_hold, min(accel, self.HOLD_ACCEL_CEILING)
+
+    return self.stopping, starting, self.esp_hold, accel
+
+
 def sigmoid_curvature_boost_meb(kappa: float, v_ego: float, kappa_thresh: float = 0.0) -> float:
   # compensate non linear behaviour: boost low curvatures
   # this is either a model issue (nerfing low curvatures) or a specific steering rack behaviour

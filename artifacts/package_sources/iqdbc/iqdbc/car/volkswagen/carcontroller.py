@@ -3,7 +3,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 """
 import sys
 import os
-import math
 import numpy as np
 import random
 from iqdbc.can import CANPacker
@@ -14,11 +13,12 @@ from iqdbc.car.common.conversions import Conversions as CV
 from iqdbc.car.common.numpy_fast import clip, interp
 from iqdbc.car.interfaces import CarControllerBase
 from iqdbc.car.volkswagen import mlbcan, mqbcan, pqcan, mebcan
+from iqdbc.car.volkswagen.hud import AccHudState
 from iqdbc.car.volkswagen.pq_radar_handler import PQRadarHandler
 from iqdbc.car.volkswagen.values import (
   CanBus, CarControllerParams, MQB_A0_CARS, VolkswagenFlags, VolkswagenFlagsIQ, apply_pq_stopping_accel,
 )
-from iqdbc.car.volkswagen.mebutils import LongControlJerk, LongControlLimit, LatControlCurvature
+from iqdbc.car.volkswagen.mebutils import LongControlJerk, LongControlLimit, LatControlCurvature, LongStopHold
 from iqdbc.car.vehicle_model import VehicleModel
 
 iqpilot_path = os.path.join(os.path.dirname(__file__), '..', '..', '..')
@@ -41,153 +41,6 @@ def dVisual(CCS, CS):
   else:
     decelV = False
   return decelV
-
-class MQBStandstillManager:
-  BRAKE_TORQUE_RAMP_RATE = 2000.0     # Nm/s
-  ASSUMED_WHEEL_RADIUS = 0.328        # m, typical tire rolling radius
-  GRAVITY = 9.81                      # m/s^2
-  WEGIMPULSE_STILLNESS_FRAMES = 5     # frames of no wheel tick change before assuming standstill
-  ESP_OVERRIDE_SPEED = 9.5 * CV.KPH_TO_MS
-  MAX_SAFE_STOPPING_SPEED = 10.0 * CV.KPH_TO_MS
-
-  def __init__(self, vehicle_mass: float = 1540.0, accel_min: float = -3.5):
-    self.vehicle_mass = vehicle_mass
-    self.accel_min = accel_min
-    self.can_stop_forever = False
-    self.rollback_detected = False
-    self.start_commit_active = False
-    self.frames_since_last_wheel_pulse = 0
-    self.prev_sum_wegimpulse: int | None = None
-    self.prev_accel = 0
-    self.hold_recovery_active = False
-
-  def get_hill_hold_decel_deficit(self, pitch: float, brake_torque: float) -> float:
-    if self.vehicle_mass <= 0:
-      return 0.0
-    uphill_pitch = max(pitch, 0.0)
-    hill_hold_decel = self.GRAVITY * math.sin(uphill_pitch)
-    brake_decel = max(brake_torque, 0.0) / (self.vehicle_mass * self.ASSUMED_WHEEL_RADIUS)
-    return max(hill_hold_decel - brake_decel, 0.0)
-
-  def get_safe_speed_for_brake_torque(self, pitch: float, brake_torque: float) -> float:
-    missing_brake_decel = self.get_hill_hold_decel_deficit(pitch, brake_torque)
-    if missing_brake_decel <= 0 or self.vehicle_mass <= 0:
-      return 0.0
-    brake_decel_build_rate = self.BRAKE_TORQUE_RAMP_RATE / (self.vehicle_mass * self.ASSUMED_WHEEL_RADIUS)
-    forward_speed_needed_while_brake_builds = 1.5 * missing_brake_decel ** 2 / brake_decel_build_rate
-    return min(forward_speed_needed_while_brake_builds, self.MAX_SAFE_STOPPING_SPEED)
-
-  def get_blended_brake_accel(self, raw_accel: float, v_ego: float, pitch: float, brake_torque: float) -> float:
-    zero_brake_decel_deficit = self.get_hill_hold_decel_deficit(pitch, 0.0)
-    current_brake_decel_deficit = self.get_hill_hold_decel_deficit(pitch, brake_torque)
-    zero_brake_safe_speed = self.get_safe_speed_for_brake_torque(pitch, 0.0)
-    if zero_brake_decel_deficit <= 0 or zero_brake_safe_speed <= 0:
-      return raw_accel
-    brake_deficit_risk = current_brake_decel_deficit / zero_brake_decel_deficit
-    speed_risk = max(zero_brake_safe_speed - v_ego, 0.0) / zero_brake_safe_speed
-    rollback_risk = float(np.clip(speed_risk * brake_deficit_risk, 0.0, 1.0))
-    blended_accel = raw_accel + rollback_risk * (self.accel_min - raw_accel)
-    return min(raw_accel, blended_accel)
-
-  def update(self, CS, long_active: bool, accel: float, stopping: bool, starting: bool,
-             max_planned_speed: float, pitch: float = 0.0,
-             tsk_brake_torque: float = 0.0) -> tuple[bool, float, bool, bool, bool | None, bool | None]:
-
-    safe_stopping_speed = self.get_safe_speed_for_brake_torque(pitch, 0.0)
-    below_safe_stop_speed = CS.out.vEgo < safe_stopping_speed
-    can_accelerate = max_planned_speed > safe_stopping_speed
-    uphill_grade_pct = max(math.tan(pitch) * 100.0, 0.0)
-    takeoff_acceleration = max(0.2, 0.1 * uphill_grade_pct)
-
-    if CS.out.vEgo < self.ESP_OVERRIDE_SPEED:
-      esp_starting_override: bool | None = True
-      esp_stopping_override: bool | None = False
-    else:
-      esp_starting_override = None
-      esp_stopping_override = None
-
-    if CS.rolling_backward:
-      self.rollback_detected = True
-    elif CS.rolling_forward:
-      self.rollback_detected = False
-
-    wheel_did_pulse = CS.sum_wegimpulse != self.prev_sum_wegimpulse
-    self.prev_sum_wegimpulse = CS.sum_wegimpulse
-    if wheel_did_pulse:
-      self.frames_since_last_wheel_pulse = 0
-    else:
-      self.frames_since_last_wheel_pulse += 1
-    near_standstill = self.frames_since_last_wheel_pulse >= self.WEGIMPULSE_STILLNESS_FRAMES
-
-    # acc type 1 is sensitive to control signals when brake is pressed (when preEnabled)
-    if CS.out.brakePressed:
-      long_active = False
-
-    if long_active and not CS.out.gasPressed:
-      if CS.esp_hold_confirmation:
-        self.start_commit_active = True
-      if can_accelerate and below_safe_stop_speed and accel > 0:
-        self.start_commit_active = True
-      elif self.start_commit_active:
-        if CS.out.vEgo > safe_stopping_speed:
-          self.start_commit_active = False
-    else:
-      self.start_commit_active = False
-
-    if long_active:
-      raw_accel = accel
-      if self.start_commit_active:
-        accel = max(accel, takeoff_acceleration)
-        stopping = False
-        starting = True
-      elif self.rollback_detected:
-        accel = self.accel_min
-        stopping = True
-        starting = False
-      elif below_safe_stop_speed:
-        accel = self.get_blended_brake_accel(accel, CS.out.vEgo, pitch, tsk_brake_torque)
-        if accel < raw_accel:
-          stopping = True
-          starting = False
-      if near_standstill and accel < 0 and tsk_brake_torque == 0:
-        accel = self.accel_min
-        stopping = True
-        starting = False
-      if CS.out.standstill and accel < 0:
-        accel = min(accel, self.prev_accel)
-
-    if long_active:
-      if CS.out.vEgo > self.ESP_OVERRIDE_SPEED:
-        self.can_stop_forever = False
-      if CS.esp_hold_confirmation:
-        self.can_stop_forever = False
-        self.hold_recovery_active = True
-
-      if self.start_commit_active:
-        esp_starting_override = True
-        esp_stopping_override = False
-      elif CS.esp_stopping:
-        self.can_stop_forever = True
-        self.hold_recovery_active = False
-        esp_starting_override = True
-        esp_stopping_override = False
-      elif self.can_stop_forever:
-        esp_starting_override = True
-        esp_stopping_override = False
-      elif near_standstill:
-        esp_starting_override = False
-        esp_stopping_override = True
-      # recover from hold confirmations while moving to prevent reconfirming them
-      elif self.hold_recovery_active and not CS.out.standstill:
-        esp_starting_override = False
-        esp_stopping_override = True
-    else:
-      self.can_stop_forever = False
-      self.hold_recovery_active = False
-
-    self.prev_accel = accel
-    return long_active, accel, stopping, starting, esp_starting_override, esp_stopping_override
-
 
 def accel_during_driver_override(accel: float, gas_pressed: bool, keep_long_active: bool) -> float:
   return 0.0 if gas_pressed and keep_long_active else accel
@@ -249,13 +102,14 @@ class CarController(CarControllerBase):
     self.steering_power_last = 0
     self.long_jerk_control = LongControlJerk(dt=(DT_CTRL * self.CCP.ACC_CONTROL_STEP)) if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) else None
     self.long_limit_control = LongControlLimit(dt=(DT_CTRL * self.CCP.ACC_CONTROL_STEP)) if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) else None
+    self.long_stop_hold = LongStopHold(dt=(DT_CTRL * self.CCP.ACC_CONTROL_STEP)) if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) else None
     self.gra_acc_counter_last = None
     self.gra_cancel_ticks = 0
     self.motor3_frame_last = None
     self.motor3_was_stopping = False
     self.motor3_resuming = False
     self.sng_handoff_active = False
-    self.acc_counter_seeded = False
+    self.acc_counters_seeded: set[str] = set()
     self.klr_counter_last = None
     self.ea_counter_last = None
     self.ea_tx_counter = None
@@ -269,6 +123,7 @@ class CarController(CarControllerBase):
     self.leadDistanceBars = 0
     self.lead_distance_bars_last = None
     self.distance_bar_frame = 0
+    self.acc_hud_state = AccHudState()
     self.mlb_hud_text = 0
     self.mlb_hud_text_frame = 0
     self.mlb_set_speed_last = 0
@@ -286,7 +141,7 @@ class CarController(CarControllerBase):
     self.hca_frame_low_torque = 0
     self.acc_hold_type_last = mebcan.ACC_HMS_NO_REQUEST
     self.acc_hold_ramp_counter = 0
-    self.standstill_manager = MQBStandstillManager(CP.mass, self.CCP.ACCEL_MIN) if self.CCS == mqbcan else None
+    self.mqb_long_state = mqbcan.MqbLongStateMachine(CP.mass, self.CCP.ACCEL_MIN) if self.CCS == mqbcan else None
     self.radar_handler = PQRadarHandler(self.CAN) if self.CCS is pqcan else None
     self.blend_stock_radar = False
     self.unavailable = False
@@ -489,20 +344,24 @@ class CarController(CarControllerBase):
                                                          left_blinker, right_blinker, self.hide_ea_error, self.ea_tx_counter))
         self.ea_counter_last = CS.ea_hud_stock_values["COUNTER"]
 
-    if self.CP.openpilotLongitudinalControl and self.CCS in (mqbcan, mlbcan) and not self.acc_counter_seeded and CS.acc_stock_counters:
+    if self.CP.openpilotLongitudinalControl and self.CCS in (mqbcan, mlbcan):
       seed_msgs = ("ACC_01", "ACC_02") if self.CCS is mlbcan else ("ACC_02", "ACC_06", "ACC_07", "ACC_10")
       for name in seed_msgs:
-        addr = self.packer_pt.dbc.name_to_msg[name].address
-        self.packer_pt.counters[addr] = (CS.acc_stock_counters[name] + 1) % 16
-      self.acc_counter_seeded = True
+        if name in CS.acc_stock_counters and name not in self.acc_counters_seeded:
+          addr = self.packer_pt.dbc.name_to_msg[name].address
+          self.packer_pt.counters[addr] = (CS.acc_stock_counters[name] + 1) % 16
+          self.acc_counters_seeded.add(name)
 
     if self.frame % self.CCP.ACC_CONTROL_STEP == 0 and self.CP.openpilotLongitudinalControl and not CS.out.radarDisableFailed:
       stopping = actuators.longControlState == LongCtrlState.stopping
       if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO):
-        starting = actuators.longControlState == LongCtrlState.pid and (CS.esp_hold_confirmation or CS.out.vEgo < 0.25)
+        long_override = CC.cruiseControl.override or CS.out.gasPressed
+        starting = mebcan.acc_starting(CC.longActive, actuators.longControlState, actuators.accel,
+                                       CS.esp_hold_confirmation, CS.out.vEgo, long_override)
         accel = float(np.clip(actuators.accel, self.CCP.ACCEL_MIN, self.CCP.ACCEL_MAX) if CC.enabled else 0)
 
-        long_override = CC.cruiseControl.override or CS.out.gasPressed
+        stopping, starting, esp_hold, accel = self.long_stop_hold.update(
+          CC.longActive, stopping, starting, accel, CS.esp_hold_confirmation, CS.out.vEgo, long_override)
 
 
         critical_state = hud_control.visualAlert == VisualAlert.fcw
@@ -513,7 +372,7 @@ class CarController(CarControllerBase):
         acc_control = self.CCS.acc_control_value(CS.out.cruiseState.available, CS.out.accFaulted, CC.enabled, long_override)
         acc_hold_type, self.acc_hold_ramp_counter = self.CCS.acc_hold_type(
           CS.out.cruiseState.available, CS.out.accFaulted, CC.enabled, starting, stopping,
-          CS.esp_hold_confirmation, CS.out.vEgo, self.acc_hold_type_last, self.acc_hold_ramp_counter)
+          esp_hold, CS.out.vEgo, self.acc_hold_type_last, self.acc_hold_ramp_counter)
         self.acc_hold_type_last = acc_hold_type
         can_sends.extend(self.CCS.create_acc_accel_control(
           self.packer_pt, self.CAN.pt, self.CP, CS.acc_type, CC.enabled,
@@ -521,7 +380,7 @@ class CarController(CarControllerBase):
           self.long_jerk_control.get_jerk_down() if CC.longComfortMode and self.long_jerk_control is not None else 4.0,
           self.long_limit_control.get_upper_limit() if CC.longComfortMode and self.long_limit_control is not None else 0.,
           self.long_limit_control.get_lower_limit() if CC.longComfortMode and self.long_limit_control is not None else 0.,
-          accel, acc_control, acc_hold_type, stopping, starting, CS.esp_hold_confirmation,
+          accel, acc_control, acc_hold_type, stopping, starting, esp_hold,
           CS.out.vEgoRaw * CV.MS_TO_KPH, long_override, CS.travel_assist_available,
         ))
         self.accel_last = accel
@@ -529,16 +388,13 @@ class CarController(CarControllerBase):
         stopping = actuators.longControlState == LongCtrlState.stopping
         starting = actuators.longControlState == LongCtrlState.pid and (CS.esp_hold_confirmation or CS.out.vEgo < 0.25)
         long_active = CC.longActive
-        accel = accel_during_driver_override(actuators.accel, CS.out.gasPressed, self.CP_IQ.longActiveWithGasOverride)
-        esp_starting_override = None
-        esp_stopping_override = None
+        accel = actuators.accel
+        esp_override = None
 
-        if self.CCS == mqbcan and CS.acc_type == 1 and self.standstill_manager is not None:
-          pitch = CC.orientationNED[1] if len(CC.orientationNED) == 3 else 0.0
-          long_active, accel, stopping, starting, esp_starting_override, esp_stopping_override = self.standstill_manager.update(
-            CS, long_active, accel, stopping, starting, float(getattr(actuators, "speed", 0.0)),
-            pitch, CS.tsk_brake_torque,
-          )
+        if self.mqb_long_state is not None:
+          long_active, accel, stopping, starting, esp_override = self.mqb_long_state.update(CS, CC)
+
+        accel = accel_during_driver_override(accel, CS.out.gasPressed, self.CP_IQ.longActiveWithGasOverride)
 
         acc_control = self.CCS.acc_control_value(CS.out.cruiseState.available, long_active, CC.cruiseControl.override, CS.out.accFaulted)
         accel = float(np.clip(accel, self.CCP.ACCEL_MIN, self.CCP.ACCEL_MAX) if (long_active or CC.cruiseControl.override) else 0)
@@ -556,7 +412,7 @@ class CarController(CarControllerBase):
           can_sends.extend(self.CCS.create_acc_accel_control(
             self.packer_pt, self.CAN.pt, CS.acc_type, accel, acc_control, stopping, starting, CS.esp_hold_confirmation,
             self.long_deviation, self.long_jerklimit, eBrakeActive,
-            esp_starting_override=esp_starting_override, esp_stopping_override=esp_stopping_override,
+            esp_override=esp_override,
           ))
         elif self.CCS == mlbcan:
           can_sends.extend(self.CCS.create_acc_accel_control(self.packer_pt, self.CAN.pt, accel, acc_control, stopping))
@@ -609,6 +465,11 @@ class CarController(CarControllerBase):
     if hud_control.leadDistanceBars != self.lead_distance_bars_last:
       self.distance_bar_frame = self.frame
 
+    hud_engaged = CC.enabled and CS.out.cruiseState.available and not CS.out.accFaulted
+    hud_override = hud_engaged and (CC.cruiseControl.override or CS.out.gasPressed)
+    lead_visible, priority_boost = self.acc_hud_state.update(self.frame, hud_engaged, hud_control.leadVisible,
+                                                          hud_control.leadDistanceBars)
+
     if self.frame % self.CCP.ACC_HUD_STEP == 0 and self.CP.openpilotLongitudinalControl:
       fcw_alert = hud_control.visualAlert == VisualAlert.fcw
       d_unresponsive = hud_control.driverUnresponsive
@@ -635,16 +496,17 @@ class CarController(CarControllerBase):
       else:
         # MLB scales the raw lead distance against the set follow gap in the packer, the others clamp to a bar count
         leadDistance = hud_control.leadDistance if self.CCS is mlbcan else \
-          (min(8, hud_control.leadDistance) if hud_control.leadDistance != 0 else 0)
+          (min(15, hud_control.leadDistance) if hud_control.leadDistance != 0 else 0)
         self.leadDistanceBars = min(3, hud_control.leadDistanceBars)
-        acc_hud_status = self.CCS.acc_hud_status_value(CS.out.cruiseState.available, CS.out.accFaulted, CC.longActive,
-                                                       CC.cruiseControl.override or CS.out.gasPressed)
+        acc_hud_status = self.CCS.acc_hud_status_value(CS.out.cruiseState.available, CS.out.accFaulted, CC.longActive and hud_engaged,
+                                                       hud_override)
         set_speed = hud_control.setSpeed * CV.MS_TO_KPH
         decel = dVisual(self.CCS, CS)
         hud_kwargs = {"hud_text": self._mlb_acc_hud_text(hud_control, set_speed),
                       "desired_distance": max(8.0, CS.out.vEgo * hud_control.leadFollowTime)} if self.CCS is mlbcan else {}
+        hud_kwargs["priority_boost"] = priority_boost
         can_sends.append(self.CCS.create_acc_hud_control(self.packer_pt, self.CAN.pt, acc_hud_status, set_speed, leadDistance,
-                                                         self.leadDistanceBars, fcw_alert, hud_control.leadVisible, self.unavailable,
+                                                         self.leadDistanceBars, fcw_alert, lead_visible or fcw_alert, self.unavailable,
                                                          decel, d_unresponsive, **hud_kwargs))
 
     if self.CP.flags & VolkswagenFlags.PQ:
@@ -675,7 +537,8 @@ class CarController(CarControllerBase):
       stock_cancel_pressed = bool(CS.gra_stock_values["GRA_Abbrechen"])
 
     cancel_cmd = stock_cancel_pressed or self._tap_gra_cancel(CC.cruiseControl.cancel, gra_send_ready)
-    resume_cmd = CC.cruiseControl.resume or self._should_spam_mqb_a0_resume(CS, iq_mqb_acc_resume)
+    stalk_resume_allowed = not (self.CP.openpilotLongitudinalControl and self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO))
+    resume_cmd = (CC.cruiseControl.resume and stalk_resume_allowed) or self._should_spam_mqb_a0_resume(CS, iq_mqb_acc_resume)
     if gra_send_ready and (cancel_cmd or resume_cmd):
       stalk_on_powertrain = self.CP.flags & VolkswagenFlags.PQ or self.CP.flags & VolkswagenFlagsIQ.IQ_MLB_NO_ECAN
       bus_send = self.CAN.aux if stalk_on_powertrain else self.CAN.ext

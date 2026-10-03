@@ -48,11 +48,8 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
 
     self._params = Params()
     self._camera_type = camera_type
-    self._candidate_topics = [
-      self.main_camera_to_sock_mapping[camera_type],
-      self.livestream_camera_to_sock_mapping[camera_type],
-    ]
-    self._socks = {topic: messaging.sub_sock(topic, conflate=True) for topic in self._candidate_topics}
+    self._candidate_topics = [self.livestream_camera_to_sock_mapping[camera_type]]
+    self._socks = {topic: messaging.sub_sock(topic, conflate=False) for topic in self._candidate_topics}
     self._active_topic = self._preferred_topics()[0]
     self._pts = 0
     self._t0_ns = time.monotonic_ns()
@@ -61,10 +58,7 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
     self._kf_requested = False  # whether this track counts toward _kf_pending_count
     self._frame_count = 0
     self._last_frame_time = 0.0
-    self._last_preference_refresh = 0.0
-    # Tracks how long the H264 livestream feed has been silent, to gate the last-resort main-feed
-    # fallback (see recv) without flapping between sources frame-by-frame.
-    self._live_silent_since: float | None = None
+    self._previous_frame_id: int | None = None
     # Opt-in glass-to-glass latency telemetry (toggled by the client over the data channel).
     self.timing_sei_enabled = False
     self._logger = logging.getLogger("LiveStreamVideoStreamTrack")
@@ -121,28 +115,18 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
       return
     self._logger.info("[%s] switching camera %s -> %s", self._id, self._camera_type, camera_type)
     self._camera_type = camera_type
-    self._candidate_topics = [
-      self.main_camera_to_sock_mapping[camera_type],
-      self.livestream_camera_to_sock_mapping[camera_type],
-    ]
-    self._socks = {topic: messaging.sub_sock(topic, conflate=True) for topic in self._candidate_topics}
+    self._candidate_topics = [self.livestream_camera_to_sock_mapping[camera_type]]
+    self._socks = {topic: messaging.sub_sock(topic, conflate=False) for topic in self._candidate_topics}
     self._active_topic = self._preferred_topics()[0]
     # Force a fresh keyframe/header before emitting frames from the new source, and ask the encoder
     # for an immediate IDR so the camera switch isn't stalled waiting for the next periodic keyframe.
     self._cached_header = b""
     self._sent_keyframe = False
-    self._last_preference_refresh = 0.0
-    self._live_silent_since = None
+    self._previous_frame_id = None
     self._mark_keyframe_needed()
 
   def _preferred_topics(self) -> list[str]:
-    # WebRTC currently forces H.264. The dedicated livestream topics are the H.264 feeds,
-    # while the main encode topics are the full-resolution HEVC recordings. Prefer the
-    # livestream feeds both onroad and offroad, and keep the main topics only as fallback.
-    return [
-      self.livestream_camera_to_sock_mapping[self._camera_type],
-      self.main_camera_to_sock_mapping[self._camera_type],
-    ]
+    return [self.livestream_camera_to_sock_mapping[self._camera_type]]
 
   def _reset_decoder_state(self, topic: str) -> None:
     if topic == self._active_topic:
@@ -186,64 +170,39 @@ class LiveStreamVideoStreamTrack(TiciVideoStreamTrack):
 
   async def recv(self):
     while True:
-      now = time.monotonic()
-      # Resolve topics each iteration: a camera switch (different async task) can rebuild self._socks
-      # across the await below, so a value cached before the loop would index a stale key (KeyError).
+      await asyncio.sleep(0)
       live_topic = self.livestream_camera_to_sock_mapping[self._camera_type]
-      main_topic = self.main_camera_to_sock_mapping[self._camera_type]
-      # Lock onto the dedicated H264 livestream feed. Onroad the HEVC main feed also publishes at
-      # 20fps; eagerly preferring whichever socket had a frame ready raced frame-by-frame, reset the
-      # decoder every frame, and (the track is negotiated H264) shoved HEVC garbage into the stream —
-      # the onroad choppiness. Only fall back to the main feed as a last resort after a long
-      # livestream silence (e.g. stream_encoderd still spinning up), and snap back when it returns.
       msg = messaging.recv_one_or_none(self._socks[live_topic])
-      if msg is not None:
-        self._reset_decoder_state(live_topic)
-        self._last_frame_time = now
-        self._live_silent_since = None
-        break
-
-      if self._live_silent_since is None:
-        self._live_silent_since = now
-      elif now - self._live_silent_since > 3.0:
-        maybe_msg = messaging.recv_one_or_none(self._socks[main_topic])
-        if maybe_msg is not None:
-          self._reset_decoder_state(main_topic)
-          self._last_frame_time = now
-          msg = maybe_msg
-          break
-
-      await asyncio.sleep(0.005)
-
-    evta = getattr(msg, msg.which())
-
-    header = bytes(evta.header)
-    data = bytes(evta.data)
-    self._frame_count += 1
-
-    # Cache SPS/PPS header when it arrives
-    if header:
-      self._cached_header = header
-      self._logger.debug(f"[{self._id}] cached SPS/PPS header ({len(header)} bytes)")
-
-    # CRITICAL: Cannot decode without SPS/PPS. Wait for it.
-    if not self._cached_header:
-      self._logger.debug(f"[{self._id}] frame {self._frame_count}: no SPS/PPS yet, skipping")
-      return await self.recv()
-
-    is_keyframe = self._is_keyframe(data)
-
-    # Wait for first keyframe before sending any frames
-    # Browser decoder needs IDR to initialize properly
-    if not self._sent_keyframe:
-      if not is_keyframe:
-        self._logger.debug(f"[{self._id}] frame {self._frame_count}: waiting for keyframe")
-        return await self.recv()
-      self._sent_keyframe = True
-      # Got the IDR we asked for — stop nagging the encoder, but only once every
-      # concurrent track has its keyframe (multi-track PiP shares the global param).
-      self._mark_keyframe_received()
-      self._logger.info(f"[{self._id}] first keyframe received, starting stream")
+      if msg is None:
+        await asyncio.sleep(0.005)
+        continue
+      self._last_frame_time = time.monotonic()
+      evta = getattr(msg, msg.which())
+      if str(evta.idx.type) not in ("qcameraH264", "livestreamH264"):
+        continue
+      header = bytes(evta.header)
+      data = bytes(evta.data)
+      self._frame_count += 1
+      frame_id = evta.idx.frameId
+      discontinuity = self._previous_frame_id is not None and frame_id != self._previous_frame_id + 1
+      self._previous_frame_id = frame_id
+      stale = msg.logMonoTime > 0 and time.monotonic_ns() - msg.logMonoTime > 250_000_000
+      if discontinuity or stale:
+        self._sent_keyframe = False
+        if not self._kf_requested:
+          self._mark_keyframe_needed()
+      if header:
+        self._cached_header = header
+      if stale or not self._cached_header:
+        continue
+      is_keyframe = self._is_keyframe(data)
+      if not self._sent_keyframe:
+        if not is_keyframe:
+          continue
+        self._sent_keyframe = True
+        self._mark_keyframe_received()
+        self._logger.info("[%s] first keyframe received, starting stream", self._id)
+      break
 
     # Optional timing SEI NAL, inserted before the slice data (and after SPS/PPS on keyframes).
     sei_nal = self._timing_sei(evta, msg.logMonoTime)

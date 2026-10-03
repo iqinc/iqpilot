@@ -77,6 +77,8 @@ def check_panda_support(panda) -> bool:
 
 
 def main() -> None:
+  os.environ["IQPILOT_PANDA_FW_PATH"] = FW_PATH
+
   # signal pandad to close the relay and exit
   def signal_handler(signum, frame):
     cloudlog.info(f"Caught signal {signum}, exiting")

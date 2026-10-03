@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import sys
+import atexit
+import shutil
+import tempfile
 import math
 import os
 from pathlib import Path
@@ -31,22 +34,35 @@ def chunk_file(path, targets):
   Path(manifest_path).write_text(str(len(chunk_paths)))
   os.remove(path)
 
-def get_existing_chunks(path):
-  if os.path.isfile(path):
-    return [path]
-  if os.path.isfile(manifest := get_manifest_path(path)):
-    num_chunks = int(Path(manifest).read_text().strip())
-    return _chunk_paths(path, num_chunks)
-  raise FileNotFoundError(path)
-
-def read_file_chunked(path):
+def _file_paths(path):
   manifest_path = get_manifest_path(path)
   if os.path.isfile(manifest_path):
     num_chunks = int(Path(manifest_path).read_text().strip())
-    return b''.join(Path(get_chunk_name(path, i, num_chunks)).read_bytes() for i in range(num_chunks))
-  if os.path.isfile(path):
-    return Path(path).read_bytes()
-  raise FileNotFoundError(path)
+    yield from (get_chunk_name(path, i, num_chunks) for i in range(num_chunks))
+  elif os.path.isfile(path):
+    yield path
+  else:
+    raise FileNotFoundError(path)
+
+
+def read_file_chunked(path):
+  return b''.join(Path(filename).read_bytes() for filename in _file_paths(path))
+
+
+def stage_file_chunked(path, directory, prefix=None):
+  target = (tempfile.NamedTemporaryFile(prefix=prefix, dir=directory, delete=False) if prefix is not None
+            else open(os.path.join(directory, os.path.basename(path)), "wb"))
+  try:
+    with target:
+      for filename in _file_paths(path):
+        with open(filename, "rb") as source:
+          shutil.copyfileobj(source, target, length=1024 * 1024)
+  except BaseException:
+    Path(target.name).unlink(missing_ok=True)
+    raise
+  staged_path = target.name
+  atexit.register(lambda: os.path.exists(staged_path) and os.remove(staged_path))
+  return staged_path
 
 
 if __name__ == "__main__":

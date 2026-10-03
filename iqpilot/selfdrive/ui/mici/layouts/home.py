@@ -7,15 +7,22 @@ import time
 from iqpilot.cereal import log
 import pyray as rl
 from collections.abc import Callable
-from iqpilot.system.ui.widgets.label import gui_label, MiciLabel, UnifiedLabel
+from iqpilot.system.ui.widgets.label import MiciLabel, UnifiedLabel
 from iqpilot.system.ui.widgets import Widget
-from iqpilot.system.ui.lib.application import gui_app, FontWeight, DEFAULT_TEXT_COLOR, MousePos
+from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from iqpilot.system.ui.lib.text_measure import measure_text_cached
 from iqpilot.selfdrive.ui.ui_state import ui_state
-from iqpilot.system.ui.text import wrap_text
-from iqpilot.system.version import training_version, RELEASE_IQ_BRANCHES
+from iqpilot.system.version import RELEASE_IQ_BRANCHES
+from iqpilot.ui.onroad.big_model_status import DockStatus, egpu_dock_status
 
-HEAD_BUTTON_FONT_SIZE = 40
+_DOCK_ICON_STATES = {
+  DockStatus.HIDDEN: None,
+  DockStatus.READY: "green",
+  DockStatus.DEGRADED: "grey",
+  DockStatus.SETUP: "compiling",
+  DockStatus.FAULT: "orange",
+}
+
 HOME_PADDING = 8
 HOME_TITLE_MAX_FONT_SIZE = 72
 HOME_TITLE_MIN_FONT_SIZE = 36
@@ -34,57 +41,6 @@ NETWORK_TYPES = {
 }
 
 
-class DeviceStatus(Widget):
-  def __init__(self):
-    super().__init__()
-    self.set_rect(rl.Rectangle(0, 0, 300, 175))
-    self._update_state()
-    self._version_text = self._get_version_text()
-
-    self._do_welcome()
-
-  def _do_welcome(self):
-    ui_state.params.put("CompletedTrainingVersion", training_version)
-
-  def refresh(self):
-    self._update_state()
-    self._version_text = self._get_version_text()
-
-  def _get_version_text(self) -> str:
-    brand = "IQ.Pilot"
-    description = ui_state.params.get("UpdaterCurrentDescription")
-    return f"{brand} {description}" if description else brand
-
-  def _update_state(self):
-    # TODO: refresh function that can be called periodically, not at 60 fps, so we can update version
-    # update system status
-    self._system_status = "SYSTEM READY ✓" if ui_state.panda_type != log.PandaState.PandaType.unknown else "BOOTING UP..."
-
-    # update network status
-    strength = ui_state.sm['deviceState'].networkStrength.raw
-    strength_text = "● " * strength + "○ " * (4 - strength)  # ◌ also works
-    network_type = NETWORK_TYPES[ui_state.sm['deviceState'].networkType.raw]
-    self._network_status = f"{network_type} {strength_text}"
-
-  def _render(self, _):
-    # draw status
-    status_rect = rl.Rectangle(self._rect.x, self._rect.y, self._rect.width, 40)
-    gui_label(status_rect, self._system_status, font_size=HEAD_BUTTON_FONT_SIZE, color=DEFAULT_TEXT_COLOR,
-              font_weight=FontWeight.BOLD, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
-
-    # draw network status
-    network_rect = rl.Rectangle(self._rect.x, self._rect.y + 60, self._rect.width, 40)
-    gui_label(network_rect, self._network_status, font_size=40, color=DEFAULT_TEXT_COLOR,
-              font_weight=FontWeight.MEDIUM, alignment=rl.GuiTextAlignment.TEXT_ALIGN_CENTER)
-
-    # draw version
-    version_font_size = 30
-    version_rect = rl.Rectangle(self._rect.x, self._rect.y + 140, self._rect.width + 20, 40)
-    wrapped_text = '\n'.join(wrap_text(self._version_text, version_font_size, version_rect.width))
-    gui_label(version_rect, wrapped_text, font_size=version_font_size, color=DEFAULT_TEXT_COLOR,
-              font_weight=FontWeight.MEDIUM, alignment=rl.GuiTextAlignment.TEXT_ALIGN_LEFT)
-
-
 class MiciHomeLayout(Widget):
   def __init__(self):
     super().__init__()
@@ -100,10 +56,20 @@ class MiciHomeLayout(Widget):
 
     self._settings_txt = gui_app.texture("icons_mici/settings.png", 48, 48)
     self._experimental_txt = gui_app.texture("icons_mici/experimental_mode_mici.png", 48, 48)
-    self._iqdynamic_txt = gui_app.texture("icons_mici/iqdynamic_mode_mici.png", 48, 48)
-    self._iqstandard_txt = gui_app.texture("icons_mici/iqstandard_mode_mici.png", 48, 48)
+    self._iqdynamic_txt = gui_app.texture("icons_mici/iqdynamic_mode_mici_48.png", 48, 48)
+    self._iqstandard_txt = gui_app.texture("icons_mici/iqstandard_mode_mici_48.png", 48, 48)
     self._mode_txt = None
     self._mic_txt = gui_app.texture("icons_mici/microphone.png", 32, 46)
+    self._egpu_txt = gui_app.texture("icons_mici/egpu.png", 62, 46)
+    self._egpu_green_txt = gui_app.texture("icons_mici/egpu_green.png", 62, 46)
+    self._egpu_orange_txt = gui_app.texture("icons_mici/egpu_orange.png", 78, 46)
+    self._mac_txt = gui_app.texture("icons_mici/mac.png", 62, 46)
+    self._mac_green_txt = gui_app.texture("icons_mici/mac_green.png", 62, 46)
+    self._mac_orange_txt = gui_app.texture("icons_mici/mac_orange.png", 78, 46)
+    self._egpu_state: str | None = None
+    self._mac_state: str | None = None
+    self._egpu_progress = 0.0
+    self._mac_progress = 0.0
 
     self._net_type = NETWORK_TYPES.get(NetworkType.none)
     self._net_strength = 0
@@ -176,6 +142,22 @@ class MiciHomeLayout(Widget):
       self._version_text = self._get_version_text()
       self._last_refresh = rl.get_time()
       self._update_params()
+      self._update_dock_status()
+
+  def _update_dock_status(self):
+    p = ui_state.params
+    status, self._egpu_progress = egpu_dock_status(p, ui_state.sm['deviceState'])
+    self._egpu_state = _DOCK_ICON_STATES[status]
+
+    mac_present = p.get_bool("MacModelPresent") or p.get_bool("MacModelReachable")
+    if not mac_present:
+      self._mac_state = None
+    elif p.get_bool("MacModelFault"):
+      self._mac_state = "orange"
+    elif p.get_bool("MacModelReady") or p.get_bool("MacModelActive"):
+      self._mac_state = "green"
+    else:
+      self._mac_state = "grey"
 
   def _update_network_status(self, device_state):
     self._net_type = device_state.networkType
@@ -329,6 +311,33 @@ class MiciHomeLayout(Widget):
       rl.draw_texture(self._mic_txt, int(last_x),
                       int(self._rect.y + self.rect.height - self._mic_txt.height / 2 - Y_CENTER), rl.Color(255, 255, 255, 255))
       last_x += self._mic_txt.width + ITEM_SPACING
+
+    for state, base, green, orange, progress in (
+      (self._egpu_state, self._egpu_txt, self._egpu_green_txt, self._egpu_orange_txt, self._egpu_progress),
+      (self._mac_state, self._mac_txt, self._mac_green_txt, self._mac_orange_txt, self._mac_progress)):
+      if state is None:
+        continue
+      y_top = int(self._rect.y + self.rect.height - base.height / 2 - Y_CENTER)
+      if state == "compiling":
+        self._draw_compile_gauge(int(last_x), y_top, base, green, progress)
+        last_x += base.width + ITEM_SPACING
+        continue
+      if state == "green":
+        tex, tint = green, rl.Color(255, 255, 255, 255)
+      elif state == "orange":
+        tex, tint = orange, rl.Color(255, 255, 255, 255)
+      else:
+        tex, tint = base, rl.Color(165, 165, 170, 235)
+      rl.draw_texture(tex, int(last_x), y_top, tint)
+      last_x += tex.width + ITEM_SPACING
+
+  def _draw_compile_gauge(self, x: int, y_top: int, base, fill, progress: float):
+    rl.draw_texture(base, x, y_top, rl.Color(165, 165, 170, 235))
+    fill_h = int(base.height * max(0.0, min(1.0, progress)))
+    if fill_h > 0:
+      rl.begin_scissor_mode(x, y_top + base.height - fill_h, base.width, fill_h)
+      rl.draw_texture(fill, x, y_top, rl.Color(255, 255, 255, 255))
+      rl.end_scissor_mode()
 
   def _draw_cellular_cluster(self, start_x: float, spacing: int, y_center: int, connected: bool) -> float:
     draw_net_txt = {0: self._cell_none_txt,

@@ -28,14 +28,12 @@ class DriverCameraDialog(NavWidget):
   def __init__(self, no_escape=False):
     super().__init__()
     self._no_escape = no_escape
-    self._camera_view = DriverCameraView("camerad", VisionStreamType.VISION_STREAM_DRIVER)
+    self._camera_view: DriverCameraView | None = None
+    self._timeout_callback = lambda: gui_app.set_modal_overlay(None)
     self.driver_state_renderer = DriverStateRenderer(lines=True)
     self.driver_state_renderer.set_rect(rl.Rectangle(0, 0, 200, 200))
     self.driver_state_renderer.load_icons()
     self._pm: messaging.PubMaster | None = None
-    if not no_escape:
-      # TODO: this can grow unbounded, should be given some thought
-      device.add_interactive_timeout_callback(lambda: gui_app.set_modal_overlay(None))
     self.set_back_callback(lambda: gui_app.set_modal_overlay(None))
 
     # Load eye icons
@@ -52,16 +50,21 @@ class DriverCameraDialog(NavWidget):
 
   def show_event(self):
     super().show_event()
+    self._ensure_camera_view()
+    if not self._no_escape:
+      device.add_interactive_timeout_callback(self._timeout_callback)
     ui_state.params.put_bool("IsDriverViewEnabled", True)
     self._publish_alert_sound(None)
     device.set_override_interactive_timeout(300)
     ui_state.params.remove("DriverTooDistracted")
-    self._pm = messaging.PubMaster(['selfdriveState'])
+    if self._pm is None:
+      self._pm = messaging.PubMaster(['selfdriveState'])
 
   def hide_event(self):
     super().hide_event()
     ui_state.params.put_bool("IsDriverViewEnabled", False)
     device.set_override_interactive_timeout(None)
+    self.close()
 
   def _handle_mouse_release(self, _):
     ui_state.params.remove("DriverTooDistracted")
@@ -70,18 +73,27 @@ class DriverCameraDialog(NavWidget):
     self.close()
 
   def close(self):
+    device.remove_interactive_timeout_callback(self._timeout_callback)
+    self._pm = None
     if self._camera_view:
       self._camera_view.close()
+      self._camera_view = None
+
+  def _ensure_camera_view(self):
+    if self._camera_view is None:
+      self._camera_view = DriverCameraView("camerad", VisionStreamType.VISION_STREAM_DRIVER)
 
   def _update_state(self):
-    if self._camera_view:
-      self._camera_view._update_state()
+    self._ensure_camera_view()
+    self._camera_view._update_state()
     # Enable driver state renderer to show Dmoji in preview
     self.driver_state_renderer.set_should_draw(True)
     self.driver_state_renderer.set_force_active(True)
     super()._update_state()
 
   def _render(self, rect):
+    if self._camera_view is None:
+      return -1
     rl.begin_scissor_mode(int(rect.x), int(rect.y), int(rect.width), int(rect.height))
     self._camera_view._render(rect)
 

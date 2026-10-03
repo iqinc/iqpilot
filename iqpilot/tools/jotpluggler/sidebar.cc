@@ -73,14 +73,14 @@ void draw_timeline_bar_contents(const AppSession &session, UiState *state, float
     }
   }
 
-  draw_list->AddLine(ImVec2(vp_left, bar_min.y), ImVec2(vp_left, bar_max.y), IM_COL32(60, 70, 80, 200), 1.0f);
-  draw_list->AddLine(ImVec2(vp_right, bar_min.y), ImVec2(vp_right, bar_max.y), IM_COL32(60, 70, 80, 200), 1.0f);
+  draw_list->AddLine(ImVec2(vp_left, bar_min.y), ImVec2(vp_left, bar_max.y), ImGui::GetColorU32(ui_color(60, 70, 80, 200 / 255.0f)), 1.0f);
+  draw_list->AddLine(ImVec2(vp_right, bar_min.y), ImVec2(vp_right, bar_max.y), ImGui::GetColorU32(ui_color(60, 70, 80, 200 / 255.0f)), 1.0f);
   if (state->has_tracker_time) {
     const float cx = timeline_time_to_x(std::clamp(state->tracker_time, route_min, route_max),
                                         route_min, route_max, bar_min.x, bar_max.x);
     draw_list->AddLine(ImVec2(cx, bar_min.y), ImVec2(cx, bar_max.y), IM_COL32(220, 60, 50, 255), 1.5f);
   }
-  draw_list->AddRect(bar_min, bar_max, IM_COL32(170, 178, 186, 255), 0.0f, 0, 1.0f);
+  draw_list->AddRect(bar_min, bar_max, ImGui::GetColorU32(ui_color(170, 178, 186, 255 / 255.0f)), 0.0f, 0, 1.0f);
 
   const float edge_grab = 4.0f;
   const float mouse_x = ImGui::GetIO().MousePos.x;
@@ -148,8 +148,8 @@ void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *st
   ImGui::SetNextWindowPos(ImVec2(ui.content_x, ui.status_bar_y));
   ImGui::SetNextWindowSize(ImVec2(ui.content_w, STATUS_BAR_HEIGHT));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, color_rgb(247, 248, 250));
-  ImGui::PushStyleColor(ImGuiCol_Border, color_rgb(188, 193, 199));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ui_color(247, 248, 250));
+  ImGui::PushStyleColor(ImGuiCol_Border, ui_color(188, 193, 199));
   const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
                                  ImGuiWindowFlags_NoMove |
                                  ImGuiWindowFlags_NoResize |
@@ -174,7 +174,7 @@ void draw_status_bar(const AppSession &session, const UiMetrics &ui, UiState *st
     const char *status_text = state->status_text.empty() ? "Ready" : state->status_text.c_str();
     const float status_x = controls_end_x + 16.0f;
     ImGui::SetCursorPos(ImVec2(status_x, row_y + 2.0f));
-    ImGui::PushStyleColor(ImGuiCol_Text, color_rgb(102, 110, 118));
+    ImGui::PushStyleColor(ImGuiCol_Text, ui_color(102, 110, 118));
     ImGui::TextUnformatted(status_text);
     ImGui::PopStyleColor();
 
@@ -208,7 +208,7 @@ void draw_sidebar_resizer(const UiMetrics &ui, UiState *state) {
     const ImVec2 origin = ImGui::GetWindowPos();
     draw_list->AddLine(ImVec2(origin.x + kHandleWidth * 0.5f, origin.y),
                        ImVec2(origin.x + kHandleWidth * 0.5f, origin.y + std::max(1.0f, ui.height - ui.top_offset)),
-                       IM_COL32(194, 198, 204, 255));
+                       ImGui::GetColorU32(ui_color(194, 198, 204, 255 / 255.0f)));
   }
   ImGui::End();
   ImGui::PopStyleVar();

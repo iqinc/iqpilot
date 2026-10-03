@@ -8,7 +8,7 @@ from iqdbc.car.volkswagen.carcontroller import CarController
 from iqdbc.car.volkswagen.carstate import CarState
 from iqdbc.car.volkswagen.values import (
   CAR, CanBus, DashcamOnlyReason, MLB_ACC_COORDINATOR_MSGS, MLB_GEARBOX_MSGS, MLB_MSG_ACC_10,
-  MLB_MSG_LH_EPS_03, NetworkLocation, RADAR_DISABLE_STATE, TransmissionType,
+  MLB_MSG_GATEWAY_05, MLB_MSG_LH_EPS_03, NetworkLocation, RADAR_DISABLE_STATE, TransmissionType,
   VolkswagenFlags, VolkswagenSafetyFlags, VolkswagenFlagsIQ, get_longitudinal_stopping_speed_override,
 )
 from iqdbc.car.volkswagen.radar_interface import RadarInterface
@@ -115,7 +115,11 @@ class CarInterface(CarInterfaceBase):
       if fingerprinted and MLB_MSG_LH_EPS_03 not in pt_msgs:
         ret.flags |= VolkswagenFlagsIQ.IQ_MLB_NO_HCA_EPS.value
 
-      if fingerprinted and not any(msg in pt_msgs for msg in MLB_GEARBOX_MSGS):
+      all_msgs = ecan_msgs | fingerprint[1]
+      gearbox_seen = any(msg in all_msgs for msg in MLB_GEARBOX_MSGS)
+      transmission_ecu = any(fw.ecu == structs.CarParams.Ecu.transmission for fw in car_fw)
+      reverse_switch_seen = MLB_MSG_GATEWAY_05 in fingerprint[1]
+      if fingerprinted and not gearbox_seen and not transmission_ecu and reverse_switch_seen:
         ret.transmissionType = TransmissionType.manual
 
     elif ret.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO):

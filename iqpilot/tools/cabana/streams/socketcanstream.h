@@ -1,17 +1,14 @@
 #pragma once
 
-#include <QComboBox>
-
 #include "tools/cabana/streams/livestream.h"
 
 struct SocketCanStreamConfig {
-  std::string device = ""; // TODO: support multiple devices/buses at once
+  std::string device = "";
 };
 
 class SocketCanStream : public LiveStream {
-  Q_OBJECT
 public:
-  SocketCanStream(QObject *parent, SocketCanStreamConfig config_ = {});
+  SocketCanStream(SocketCanStreamConfig config_ = {});
   ~SocketCanStream();
   static bool available();
 
@@ -25,18 +22,4 @@ protected:
 
   SocketCanStreamConfig config = {};
   int sock_fd = -1;
-};
-
-class OpenSocketCanWidget : public AbstractOpenStreamWidget {
-  Q_OBJECT
-
-public:
-  OpenSocketCanWidget(QWidget *parent = nullptr);
-  AbstractStream *open() override;
-
-private:
-  void refreshDevices();
-
-  QComboBox *device_edit;
-  SocketCanStreamConfig config = {};
 };

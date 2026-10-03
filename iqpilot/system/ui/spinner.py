@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import math
 import pyray as rl
 import select
 import sys

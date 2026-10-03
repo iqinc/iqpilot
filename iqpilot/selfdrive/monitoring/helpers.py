@@ -164,6 +164,7 @@ class DriverMonitoring:
     self.driver_distraction_filter = FirstOrderFilter(0., self.settings._DISTRACTED_FILTER_TS, self.settings._DT_DMON)
     self.wheel_on_right = False
     self.wheel_on_right_last = None
+    self.wheel_on_right_last_calibrated = False
     self.wheel_on_right_default = rhd_saved
     self.face_detected = False
     self.terminal_alert_cnt = 0
@@ -281,8 +282,10 @@ class DriverMonitoring:
       self.wheel_on_right = self.wheelpos.prob_offseter.filtered_stat.M > self.settings._WHEELPOS_THRESHOLD
     else:
       self.wheel_on_right = self.wheel_on_right_default # use default/saved if calibration is unfinished
-    # make sure no switching when engaged
-    if not self.force_rhd and op_engaged and self.wheel_on_right_last is not None and self.wheel_on_right_last != self.wheel_on_right and not demo_mode:
+    # make sure no switching when engaged, but the uncalibrated default is not worth latching:
+    # on an RHD car with nothing saved it would pin the wrong seat for the whole engaged drive.
+    if (not self.force_rhd and op_engaged and self.wheel_on_right_last is not None and
+        self.wheel_on_right_last_calibrated and self.wheel_on_right_last != self.wheel_on_right and not demo_mode):
       self.wheel_on_right = self.wheel_on_right_last
     driver_data = driver_state.rightDriverData if self.wheel_on_right else driver_state.leftDriverData
     if not all(len(x) > 0 for x in (driver_data.faceOrientation, driver_data.facePosition,
@@ -294,6 +297,7 @@ class DriverMonitoring:
     if self.wheel_on_right:
       self.pose.yaw *= -1
     self.wheel_on_right_last = self.wheel_on_right
+    self.wheel_on_right_last_calibrated = self.wheelpos.prob_calibrated or demo_mode
     self.pose.pitch_std = driver_data.faceOrientationStd[0]
     self.pose.yaw_std = driver_data.faceOrientationStd[1]
     model_std_max = max(self.pose.pitch_std, self.pose.yaw_std)

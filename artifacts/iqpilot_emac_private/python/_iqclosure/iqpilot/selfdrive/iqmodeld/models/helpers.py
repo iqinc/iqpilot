@@ -3,6 +3,7 @@
 Copyright (c) IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
 import json
+import hashlib
 import os
 import shutil
 from pathlib import Path
@@ -165,7 +166,7 @@ def _find_runtime_upgrade(bundle, params: Params, available_bundles=None):
 
 
 def bundle_files_ready(bundle) -> bool:
-  if bundle is None:
+  if bundle is None or not _bundle_models(bundle):
     return False
 
   for model in _bundle_models(bundle):
@@ -207,16 +208,31 @@ def ensure_default_model_files(bundle_dict: dict = None) -> None:
   except OSError as e:
     cloudlog.exception(f"default_model: cannot create model root: {e}")
     return
+  hashes = {artifact["fileName"]: artifact.get("downloadUri", {}).get("sha256", "")
+            for model in bundle_dict.get("models", [])
+            for artifact in (model.get("metadata"), model.get("artifact")) if artifact and artifact.get("fileName")}
   for file_name in _default_bundle_filenames(bundle_dict):
     src = _DEFAULT_MODEL_DIR / file_name
     dst = _MODEL_ROOT / file_name
     if not src.is_file():
       cloudlog.error(f"default_model: shipped asset missing {src}")
       continue
-    if dst.is_file() and dst.stat().st_size == src.stat().st_size:
-      continue
     try:
-      shutil.copy2(src, dst)
+      expected = hashes.get(file_name, "")
+      if dst.is_file() and dst.stat().st_size == src.stat().st_size:
+        if not expected:
+          continue
+        with dst.open("rb") as stream:
+          if hashlib.file_digest(stream, "sha256").hexdigest() == expected.lower():
+            continue
+      if expected:
+        with src.open("rb") as stream:
+          if hashlib.file_digest(stream, "sha256").hexdigest() != expected.lower():
+            cloudlog.error(f"default_model: shipped asset hash mismatch {src}")
+            continue
+      staged = dst.with_name(dst.name + ".staging")
+      shutil.copy2(src, staged)
+      os.replace(staged, dst)
       cloudlog.warning(f"default_model: staged {file_name} into model root")
     except OSError as e:
       cloudlog.exception(f"default_model: failed staging {file_name}: {e}")
@@ -228,6 +244,7 @@ def select_default_model(params: Params = None) -> None:
   ensure_default_model_files(bundle_dict)
   params.remove(_DOWNLOAD_INDEX_KEY)
   params.remove(_PENDING_INDEX_KEY)
+  _mark_default_files_cached(bundle_dict)
   params.put(_ACTIVE_BUNDLE_KEY, bundle_dict)
   params.remove(_RUNNER_CACHE_KEY)
   params.put(_RUNNER_CACHE_KEY, _TINYGRAD_RUNNER)
@@ -238,15 +255,46 @@ def select_default_model(params: Params = None) -> None:
     pass
 
 
+def _mark_default_files_cached(bundle_dict: dict) -> None:
+  ready = bool(bundle_dict.get("models"))
+  for model in bundle_dict.get("models", []):
+    for artifact in (model.get("metadata"), model.get("artifact")):
+      if not artifact or not artifact.get("fileName"):
+        continue
+      path = _MODEL_ROOT / artifact["fileName"]
+      if path.is_file() and path.stat().st_size > 0:
+        artifact["downloadProgress"] = {"status": "cached", "progress": 100, "eta": 0}
+      else:
+        ready = False
+  if ready:
+    bundle_dict["status"] = "cached"
+
+
+def initialize_active_model(params: Params) -> None:
+  """Prepare the shipped runtime before processes start, preserving custom selection/queues."""
+  stored = params.get(_ACTIVE_BUNDLE_KEY)
+  if not stored:
+    seed_default_bundle_if_unset(params)
+  elif isinstance(stored, dict) and stored.get("ref") == _DEFAULT_BUNDLE_REF:
+    bundle_dict = _load_default_bundle_dict()
+    ensure_default_model_files(bundle_dict)
+    _mark_default_files_cached(bundle_dict)
+    params.put(_ACTIVE_BUNDLE_KEY, bundle_dict)
+  # Cache is derived from the saved bundle, never authoritative across updates/selections.
+  params.remove(_RUNNER_CACHE_KEY)
+  get_active_model_runner(params, force_check=True)
+
+
 def seed_default_bundle_if_unset(params: Params = None) -> None:
   params = Params() if params is None else params
   if params.get(_ACTIVE_BUNDLE_KEY):
     return
-  queued_download = params.get(_DOWNLOAD_INDEX_KEY)
   try:
-    select_default_model(params)
-    if queued_download is not None:
-      params.put(_DOWNLOAD_INDEX_KEY, queued_download)
+    bundle_dict = _load_default_bundle_dict()
+    ensure_default_model_files(bundle_dict)
+    _mark_default_files_cached(bundle_dict)
+    params.put(_ACTIVE_BUNDLE_KEY, bundle_dict)
+    params.remove(_RUNNER_CACHE_KEY)
     cloudlog.warning("default_model: seeded Default (CD210) as active bundle")
   except Exception as e:
     cloudlog.exception(f"default_model: failed to seed default bundle: {e}")
@@ -292,9 +340,6 @@ def get_active_model_runner(params: Params = None, force_check=False):
       return _TINYGRAD_RUNNER
 
   cached_runner_type = params.get(_RUNNER_CACHE_KEY)
-  if cached_runner_type and not force_check and isinstance(cached_runner_type, str) and cached_runner_type.isdigit():
-    return int(cached_runner_type)
-
   runner_type = _coerce_runner_value(active_bundle.runner)
   if runner_type == _SNPE_RUNNER:
     replacement = _find_runtime_upgrade(active_bundle, params)
@@ -311,3 +356,31 @@ def get_active_model_runner(params: Params = None, force_check=False):
     params.put(_RUNNER_CACHE_KEY, int(runner_type))
 
   return runner_type
+
+
+def get_selected_model_name(params: Params = None) -> str:
+  params = Params() if params is None else params
+  try:
+    stored = params.get(_ACTIVE_BUNDLE_KEY)
+    if not stored:
+      return "Default (CD210)"
+    if not isinstance(stored, dict) or not stored.get("ref"):
+      return "Model unavailable"
+    if stored["ref"] == _DEFAULT_BUNDLE_REF:
+      return stored.get("displayName") or "Default (CD210)"
+    return stored.get("internalName") or stored.get("displayName") or "Model unavailable"
+  except Exception:
+    return "Model unavailable"
+
+
+def get_cached_model_bundles(params: Params = None) -> list:
+  params = Params() if params is None else params
+  try:
+    allow_superuser = bool(params.get_bool("Konn3ktOwnerSuperuser"))
+  except Exception:
+    allow_superuser = False
+  try:
+    return [bundle for bundle in _load_cached_manifest_bundles(params)
+            if getattr(bundle, "environment", "") != "superuser" or allow_superuser]
+  except Exception:
+    return []

@@ -9,7 +9,6 @@ from iqdbc.car.interfaces import RadarInterfaceBase
 from iqdbc.car.hyundai.values import DBC, HyundaiFlags, HyundaiExtFlags
 from iqpilot.common.params import Params
 from iqdbc.car.hyundai.hyundaicanfd import CanBus
-from iqpilot.common.filter_simple import MyMovingAverage
 
 SCC_TID = 0
 RADAR_START_ADDR = 0x500

@@ -9,7 +9,8 @@ from collections.abc import Callable
 from iqpilot.system.ui.widgets.scroller import Scroller, draw_scroller_edge_fades, draw_scroller_page_slider
 from iqpilot.selfdrive.ui.mici.layouts.settings.network.wifi_ui import WifiUIMici
 from iqpilot.selfdrive.ui.mici.layouts.settings.network.esim_ui import EsimUIMici
-from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl, BigMultiToggle
+from iqpilot.selfdrive.ui.mici.layouts.settings.network.speed_test_ui import SpeedTestMici
+from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl, BigMultiToggle, BigToggle
 from iqpilot.selfdrive.ui.mici.widgets.stock_dialog import BigInputDialog
 from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.ui.lib.application import gui_app
@@ -17,6 +18,9 @@ from iqpilot.system.ui.widgets.nav_widget import NavWidget
 from iqpilot.system.ui.lib.wifi_manager import WifiManager, Network, MeteredType
 from iqpilot.system.hardware.tici.esim_manager import get_esim_manager
 from iqpilot.system.ui.lib.multilang import tr
+from iqpilot.system.ui.lib.cellular_info import CellularInfoPoller
+from iqpilot.system.ui.lib.speed_test import compact_text, shared_speed_test
+from iqpilot.system.wireguard import tunnel as wireguard
 
 
 class NetworkPanelType(IntEnum):
@@ -72,6 +76,22 @@ class NetworkLayoutMici(NavWidget):
     # ******** IP Address ********
     self._ip_address_btn = BigButton(tr("IP Address"), tr("Not connected"))
 
+    self._cellular = CellularInfoPoller()
+    self._carrier_btn = BigButton(tr("carrier"), tr("no modem"))
+    self._cell_ip_btn = BigButton(tr("cellular IP"), tr("not connected"))
+    self._cell_ipv6_btn = BigButton(tr("cellular IPv6"), "")
+    self._cell_ipv6_btn.set_visible(lambda: bool(self._cellular.info.ipv6))
+
+    self._speed_test = shared_speed_test()
+    self._speed_test_ui = SpeedTestMici(self._speed_test)
+    self._speed_test_btn = BigButton(tr("speed test"), tr("tap to run"))
+    self._speed_test_btn.set_click_callback(lambda: gui_app.push_widget(self._speed_test_ui))
+
+    self._wireguard_btn = BigToggle(tr("wireguard"), "", initial_state=wireguard.enabled(),
+                                    toggle_callback=lambda on: wireguard.set_enabled(on))
+    self._wireguard_installed = wireguard.installed()
+    self._wireguard_btn.set_visible(lambda: self._wireguard_installed)
+
     # ******** Network Metered ********
     self._metered_options = [tr("default"), tr("metered"), tr("unmetered")]
 
@@ -110,6 +130,8 @@ class NetworkLayoutMici(NavWidget):
     self._scroller = Scroller([
       wifi_button,
       self._esim_button,
+      self._speed_test_btn,
+      self._wireguard_btn,
       self._network_metered_btn,
       self._tethering_toggle_btn,
       self._tethering_password_btn,
@@ -119,6 +141,9 @@ class NetworkLayoutMici(NavWidget):
       self._cellular_metered_btn,
       # */
       self._ip_address_btn,
+      self._carrier_btn,
+      self._cell_ip_btn,
+      self._cell_ipv6_btn,
     ], snap_items=False)
 
     # Set initial config
@@ -143,6 +168,8 @@ class NetworkLayoutMici(NavWidget):
     self._apn_btn.set_visible(show_cell_settings)
     self._cellular_metered_btn.set_visible(show_cell_settings)
 
+    self._update_status_cards()
+
     self._esim_profile_frame += 1
     if self._esim_profile_frame % 30 == 0:
       esim_profiles = (self._esim_manager.get_state().profiles or []) if self._esim_manager.is_supported() else []
@@ -150,6 +177,23 @@ class NetworkLayoutMici(NavWidget):
       if count != self._esim_profile_count:
         self._esim_profile_count = count
         self._esim_button.set_value(count)
+
+  @staticmethod
+  def _set_value(button: BigButton, value: str) -> None:
+    if button.get_value() != value:
+      button.set_value(value)
+
+  def _update_status_cards(self):
+    info = self._cellular.poll()
+    self._set_value(self._carrier_btn, info.carrier_text or tr("no modem"))
+    self._set_value(self._cell_ip_btn, info.ipv4 or tr("not connected"))
+    self._set_value(self._cell_ipv6_btn, info.ipv6)
+    self._set_value(self._speed_test_btn, compact_text(self._speed_test.state) or tr("tap to run"))
+    if self._esim_profile_frame % 30 == 0:
+      self._wireguard_installed = wireguard.installed()
+    if self._esim_profile_frame % 30 == 0 and self._wireguard_installed:
+      self._wireguard_btn.set_checked(wireguard.enabled())
+      self._set_value(self._wireguard_btn, wireguard.describe_compact(wireguard.read_status()))
 
   def show_event(self):
     super().show_event()

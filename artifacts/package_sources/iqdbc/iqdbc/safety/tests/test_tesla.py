@@ -35,6 +35,7 @@ def round_angle(apply_angle, can_offset=0):
 class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, common.LongitudinalAccelSafetyTest):
   SAFETY_PARAM = 0
   STEER_TYPE_SHIFT = 0  # legacy firmware uses a 2-bit field, one bit up from the 3-bit signal
+  HW4_GEN2 = False
 
   RELAY_MALFUNCTION_ADDRS = {0: (MSG_DAS_steeringControl, MSG_APS_eacMonitor)}
   FWD_BLACKLISTED_ADDRS = {2: [MSG_DAS_steeringControl, MSG_APS_eacMonitor]}
@@ -143,6 +144,38 @@ class TestTeslaSafetyBase(common.CarSafetyTest, common.AngleSteeringSafetyTest, 
   def _accel_msg(self, accel: float):
     # For common.LongitudinalAccelSafetyTest
     return self._long_control_msg(10, accel_limits=(accel, max(accel, 0)))
+
+  def _ui_warning_msg(self):
+    return self.packer.make_can_msg_safety("UI_warning", 0, {})
+
+  def _rx_check_msgs(self):
+    return [
+      self._long_control_msg(0, bus=2),
+      self._angle_cmd_msg(0, False, increment_timer=False, bus=2),
+      self._speed_msg(0),
+      self._speed_msg_2(0),
+      self._angle_meas_msg(0),
+      self._user_gas_msg(0),
+      self._user_brake_msg(False),
+      self._pcm_status_msg(False),
+    ]
+
+  def test_ui_warning_rx_check(self):
+    # HW4 gen2 never sends UI_warning, so it's the only config that stays valid without it
+    for ui_warning in (False, True):
+      with self.subTest(ui_warning=ui_warning):
+        self.safety.init_tests()
+        self.safety.set_timer(0)
+        msgs = self._rx_check_msgs()
+        if ui_warning:
+          msgs.append(self._ui_warning_msg())
+        for msg in msgs:
+          self.assertTrue(self._rx(msg))
+
+        # well inside the 1s lag threshold of every check
+        self.safety.set_timer(int(5e5))
+        self.safety.safety_tick_current_safety_config()
+        self.assertEqual(self.safety.safety_config_valid(), self.HW4_GEN2 or ui_warning)
 
   def test_rx_hook(self):
     # counter check
@@ -425,6 +458,11 @@ class TestTeslaLegacyDasSteeringStockSafety(TestTeslaStockSafety):
   STEER_TYPE_SHIFT = 1
 
 
+class TestTeslaHW4Gen2StockSafety(TestTeslaStockSafety):
+  SAFETY_PARAM = TeslaSafetyFlags.HW4_GEN2
+  HW4_GEN2 = True
+
+
 class TestTeslaLongitudinalSafety(TestTeslaSafetyBase):
   SAFETY_PARAM = TeslaSafetyFlags.LONG_CONTROL
 
@@ -478,6 +516,11 @@ class TestTeslaLegacyDasSteeringLongitudinalSafety(TestTeslaLongitudinalSafety):
   STEER_TYPE_SHIFT = 1
 
 
+class TestTeslaHW4Gen2LongitudinalSafety(TestTeslaLongitudinalSafety):
+  SAFETY_PARAM = TeslaSafetyFlags.LONG_CONTROL | TeslaSafetyFlags.HW4_GEN2
+  HW4_GEN2 = True
+
+
 class TestTeslaVehicleBusSafety(TestTeslaSafetyBase):
 
   LONGITUDINAL = False
@@ -490,12 +533,22 @@ class TestTeslaVehicleBusSafety(TestTeslaSafetyBase):
     self.safety = libsafety_py.libsafety
     self.packer_adas = CANPackerSafety("tesla_model3_vehicle")
     self.safety.set_current_safety_param_iq(TeslaSafetyFlagsIQ.HAS_VEHICLE_BUS)
-    self.safety.set_safety_hooks(CarParams.SafetyModel.tesla, 0)
+    self.safety.set_safety_hooks(CarParams.SafetyModel.tesla, self.SAFETY_PARAM)
     self.safety.init_tests()
 
   def _lkas_button_msg(self, enabled):
     values = {"UI_activeTouchPoints": 3 if enabled else 0}
     return self.packer_adas.make_can_msg_safety("UI_status2", CANBUS.vehicle, values)
+
+  def _rx_check_msgs(self):
+    return [*super()._rx_check_msgs(), self._lkas_button_msg(False)]
+
+
+class TestTeslaHW4Gen2VehicleBusSafety(TestTeslaVehicleBusSafety):
+  # HW4 gen2 drops UI_warning whether or not the VEHICLE bus is tapped, but the
+  # vehicle bus button check has to survive
+  SAFETY_PARAM = TeslaSafetyFlags.HW4_GEN2
+  HW4_GEN2 = True
 
 
 if __name__ == "__main__":

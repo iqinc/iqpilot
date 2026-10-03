@@ -13,6 +13,7 @@ from iqpilot.common.swaglog import cloudlog
 from iqpilot.common.simple_kalman import KF1D
 
 from iqdbc.car import structs
+from iqdbc.car.honda.values import HONDA_RADAR_SCAN_CAPABLE
 from iqdbc.car.hyundai.values import HyundaiFlags, HyundaiFlagsIQ
 from iqpilot.selfdrive.controls.lib.custom_stop_distance import CustomStopDistance
 
@@ -28,6 +29,19 @@ V_EGO_STATIONARY = 4.   # no stationary object flag below this speed
 
 RADAR_TO_CENTER = 2.7   # (deprecated) RADAR is ~ 2.7m ahead from center of car
 RADAR_TO_CAMERA = 1.52  # RADAR is ~ 1.5m ahead from center of mesh frame
+
+# Honda radar object scan: 15Hz sweeps consumed at the 20Hz model rate, so measurement absorption is
+# gated on fresh sweep data and lead selection carries continuity/staleness evidence
+SCAN_SWEEP_DT = 1.0 / 15
+SCAN_LEAD_PROB = 0.35
+SCAN_LEAD_MIN_CYCLES = 3
+SCAN_CHALLENGER_STALE_CYCLES = 2
+SCAN_DISTANCE_STALE_CYCLES = 3
+SCAN_DISTANCE_STALE_M = 25.0
+
+
+def uses_scan_radar(CP) -> bool:
+  return CP.brand == "honda" and CP.carFingerprint in HONDA_RADAR_SCAN_CAPABLE and not CP.radarUnavailable
 
 
 class KalmanParams:
@@ -62,7 +76,8 @@ class Track:
     self.K_K = kalman_params.K
     self.kf = KF1D([[v_lead], [0.0]], self.K_A, self.K_C, self.K_K)
 
-  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float):
+  def update(self, d_rel: float, y_rel: float, v_rel: float, v_lead: float, measured: float,
+             absorb_measurement: bool = True):
     # relative values, copy
     self.dRel = d_rel   # LONG_DIST
     self.yRel = y_rel   # -LAT_DIST
@@ -70,25 +85,26 @@ class Track:
     self.vLead = v_lead
     self.measured = measured   # measured or estimate
 
-    # computed velocity and accelerations
-    if self.cnt > 0:
+    # a repeated scan payload between 15Hz sweeps must not be absorbed as a second measurement
+    if absorb_measurement and self.cnt > 0:
       self.kf.update(self.vLead)
 
     self.vLeadK = float(self.kf.x[SPEED][0])
     self.aLeadK = float(self.kf.x[ACCEL][0])
 
-    # Learn if constant acceleration
-    if abs(self.aLeadK) < 0.5:
-      self.aLeadTau.x = _LEAD_ACCEL_TAU
-    else:
-      self.aLeadTau.update(0.0)
+    if absorb_measurement:
+      # Learn if constant acceleration
+      if abs(self.aLeadK) < 0.5:
+        self.aLeadTau.x = _LEAD_ACCEL_TAU
+      else:
+        self.aLeadTau.update(0.0)
 
     self.cnt += 1
 
-  def get_RadarState(self, model_prob: float = 0.0):
+  def get_RadarState(self, model_prob: float = 0.0, *, model_y: float | None = None):
     return {
       "dRel": float(self.dRel),
-      "yRel": float(self.yRel),
+      "yRel": float(self.yRel if model_y is None else -model_y),
       "vRel": float(self.vRel),
       "vLead": float(self.vLead),
       "vLeadK": float(self.vLeadK),
@@ -119,18 +135,35 @@ def laplacian_pdf(x: float, mu: float, b: float):
   return math.exp(-abs(x-mu)/b)
 
 
+def model_association_score(track: Track, lead: capnp._DynamicStructReader, v_ego: float) -> float:
+  offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
+  prob_d = laplacian_pdf(track.dRel, offset_vision_dist, lead.xStd[0])
+  prob_y = laplacian_pdf(track.yRel, -lead.y[0], lead.yStd[0])
+  prob_v = laplacian_pdf(track.vRel + v_ego, lead.v[0], lead.vStd[0])
+
+  # This isn't exactly right, but it's a good heuristic
+  return prob_d * prob_y * prob_v
+
+
+def track_agrees_with_model(track: Track, lead: capnp._DynamicStructReader, v_ego: float, strict: bool) -> bool:
+  dist_scale, dist_floor, vel_limit, y_std_scale, y_floor = \
+    (0.25, 5.0, 10.0, 1.0, 1.0) if strict else (0.40, 8.0, 13.0, 2.0, 1.5)
+  vision_dist = lead.x[0] - RADAR_TO_CAMERA
+  dist_ok = abs(track.dRel - vision_dist) < max(abs(vision_dist) * dist_scale, dist_floor)
+  vel_ok = (abs(track.vRel + v_ego - lead.v[0]) < vel_limit) or (v_ego + track.vRel > 3)
+  lat_ok = abs(track.yRel + lead.y[0]) < max(y_floor, y_std_scale * max(float(lead.yStd[0]), 0.2))
+  return dist_ok and vel_ok and lat_ok
+
+
+def scan_low_speed_candidate(track: Track, v_ego: float) -> bool:
+  # require a few real cycles before a radar-only low-speed takeover
+  return track.cnt >= SCAN_LEAD_MIN_CYCLES and track.potential_low_speed_lead(v_ego)
+
+
 def match_vision_to_track(v_ego: float, lead: capnp._DynamicStructReader, tracks: dict[int, Track]):
   offset_vision_dist = lead.x[0] - RADAR_TO_CAMERA
 
-  def prob(c):
-    prob_d = laplacian_pdf(c.dRel, offset_vision_dist, lead.xStd[0])
-    prob_y = laplacian_pdf(c.yRel, -lead.y[0], lead.yStd[0])
-    prob_v = laplacian_pdf(c.vRel + v_ego, lead.v[0], lead.vStd[0])
-
-    # This isn't exactly right, but it's a good heuristic
-    return prob_d * prob_y * prob_v
-
-  track = max(tracks.values(), key=prob)
+  track = max(tracks.values(), key=lambda c: model_association_score(c, lead, v_ego))
 
   # if no 'sane' match is found return -1
   # stationary radar points can be false positives
@@ -161,22 +194,60 @@ def get_RadarState_from_vision(lead_msg: capnp._DynamicStructReader, v_ego: floa
 
 
 def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capnp._DynamicStructReader,
-             model_v_ego: float, CP: structs.CarParams, CP_IQ: structs.IQCarParams, low_speed_override: bool = True) -> dict[str, Any]:
+             model_v_ego: float, low_speed_override: bool = True,
+             scan_radar: bool = False, filtered_prob: float | None = None, held_track_id: int = -1,
+             model_lateral: bool = False) -> dict[str, Any]:
+  lead_prob = float(lead_msg.prob if filtered_prob is None else filtered_prob)
+  prob_threshold = SCAN_LEAD_PROB if scan_radar else .5
+
   # Determine leads, this is where the essential logic happens
-  if len(tracks) > 0 and ready and lead_msg.prob > .5:
+  if len(tracks) > 0 and ready and lead_prob > prob_threshold:
     track = match_vision_to_track(v_ego, lead_msg, tracks)
   else:
     track = None
 
   lead_dict = {'status': False}
   if track is not None:
-    lead_dict = track.get_RadarState(lead_msg.prob)
-    lead_dict = get_custom_yrel(CP, CP_IQ, lead_dict, lead_msg)
-  elif (track is None) and ready and (lead_msg.prob > .5):
+    lead_dict = track.get_RadarState(lead_prob, model_y=lead_msg.y[0] if model_lateral else None)
+  elif (track is None) and ready and (lead_prob > prob_threshold):
     lead_dict = get_RadarState_from_vision(lead_msg, v_ego, model_v_ego)
 
   if low_speed_override:
-    low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
+    if scan_radar:
+      low_speed_tracks = [c for c in tracks.values() if scan_low_speed_candidate(c, v_ego)]
+    else:
+      low_speed_tracks = [c for c in tracks.values() if c.potential_low_speed_lead(v_ego)]
+
+    model_lead_available = ready and lead_prob > prob_threshold
+
+    if scan_radar:
+      # Keep the held radar lead through ordinary model-probability fluctuations while it stays
+      # coherent. With a valid model lead it must still agree with it; without one, a mature radar
+      # track remains eligible for continuity
+      held = tracks.get(held_track_id)
+      if held is not None and scan_low_speed_candidate(held, v_ego):
+        held_matches_model = (not model_lead_available or
+                              track_agrees_with_model(held, lead_msg, v_ego, strict=True))
+        held_is_current = (not lead_dict.get('status', False) or
+                           lead_dict.get('radarTrackId', -1) == held_track_id or
+                           (lead_dict.get('status', False) and not lead_dict.get('radar', False)))
+        if held_is_current and held_matches_model:
+          lead_dict = held.get_RadarState(lead_prob)
+
+      def candidate_established(candidate: Track) -> bool:
+        if candidate.cnt < SCAN_LEAD_MIN_CYCLES:
+          return False
+        if not lead_dict.get('status', False):
+          # a mature centered scan point may provide the radar-only low-speed lead
+          return True
+        if lead_dict.get('radarTrackId', -1) == candidate.identifier:
+          return True
+        # never replace an established lead with an unrelated closer point without model evidence
+        # to arbitrate them
+        return model_lead_available and track_agrees_with_model(candidate, lead_msg, v_ego, strict=True)
+
+      low_speed_tracks = [c for c in low_speed_tracks if candidate_established(c)]
+
     if len(low_speed_tracks) > 0:
       closest_track = min(low_speed_tracks, key=lambda c: c.dRel)
 
@@ -187,24 +258,26 @@ def get_lead(v_ego: float, ready: bool, tracks: dict[int, Track], lead_msg: capn
   return lead_dict
 
 
-def get_custom_yrel(CP: structs.CarParams, CP_IQ: structs.IQCarParams, lead_dict: dict[str, Any],
-                    lead_msg: capnp._DynamicStructReader) -> dict[str, Any]:
-  if CP.brand == "hyundai" and (CP_IQ.flags & HyundaiFlagsIQ.ENHANCED_SCC or
-                                CP.flags & (HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.CAMERA_SCC)):
-    lead_dict['yRel'] = float(-lead_msg.y[0])
-
-  return lead_dict
-
-
 class RadarD:
-  def __init__(self, CP: structs.CarParams, CP_IQ: structs.CarParams, delay: float = 0.0):
-    self.CP = CP
-    self.CP_IQ = CP_IQ
+  def __init__(self, CP: structs.CarParams, CP_IQ: structs.IQCarParams, delay: float = 0.0):
+    self.model_lateral = False
+    if CP.brand == "hyundai":
+      camera_scc = HyundaiFlags.CANFD_CAMERA_SCC | HyundaiFlags.CAMERA_SCC
+      self.model_lateral = bool(CP.flags & camera_scc or CP_IQ.flags & HyundaiFlagsIQ.ENHANCED_SCC)
 
     self.current_time = 0.0
 
     self.tracks: dict[int, Track] = {}
-    self.kalman_params = KalmanParams(DT_MDL)
+    self.scan_radar = uses_scan_radar(CP)
+    # the lead KF absorbs scan measurements at the physical 15Hz sweep cadence; lead probability
+    # filtering stays on model-loop timing
+    self.kalman_params = KalmanParams(SCAN_SWEEP_DT if self.scan_radar else DT_MDL)
+    self.lead_prob_filters = [FirstOrderFilter(0.0, 0.2, DT_MDL) for _ in range(2)]
+    self.held_lead_ids = [-1, -1]
+    self._held_evidence_ids = [-1, -1]
+    self._challenger_stale_counts = [0, 0]
+    self._distance_stale_counts = [0, 0]
+    self._last_tracks_frame = -1
 
     self.v_ego = 0.0
     self.v_ego_hist = deque([0.0], maxlen=int(round(delay / DT_MDL))+1)
@@ -217,6 +290,53 @@ class RadarD:
 
     self.custom_stop_distance = CustomStopDistance()
 
+  def _refresh_held_lead_evidence(self, lead_index: int, lead: capnp._DynamicStructReader,
+                                  lead_prob: float) -> None:
+    held_id = self.held_lead_ids[lead_index]
+    if self._held_evidence_ids[lead_index] != held_id:
+      self._reset_held_evidence(lead_index, held_id)
+
+    held = self.tracks.get(held_id)
+    if held_id < 0 or held is None or not self.ready or lead_prob <= SCAN_LEAD_PROB:
+      self._reset_held_evidence(lead_index, held_id)
+      return
+
+    strict_match = track_agrees_with_model(held, lead, self.v_ego, strict=True)
+    relaxed_match = track_agrees_with_model(held, lead, self.v_ego, strict=False)
+
+    # evidence arm 1: another live track scores better against the model while the held one no
+    # longer passes even relaxed continuity. Releasing the hold never selects that challenger; the
+    # strict-match path in get_lead stays the only way it becomes the radar lead
+    if relaxed_match:
+      self._challenger_stale_counts[lead_index] = 0
+    else:
+      best = max(self.tracks.values(), key=lambda c: model_association_score(c, lead, self.v_ego))
+      if best.identifier != held_id and \
+          model_association_score(best, lead, self.v_ego) > model_association_score(held, lead, self.v_ego):
+        self._challenger_stale_counts[lead_index] += 1
+      else:
+        self._challenger_stale_counts[lead_index] = 0
+
+    # evidence arm 2: gross absolute range disagreement, with a strict match staying authoritative
+    # even when model uncertainty would permit the error
+    distance_mismatch = abs(held.dRel - (lead.x[0] - RADAR_TO_CAMERA))
+    if strict_match:
+      self._distance_stale_counts[lead_index] = 0
+    elif distance_mismatch > SCAN_DISTANCE_STALE_M:
+      self._distance_stale_counts[lead_index] += 1
+    else:
+      self._distance_stale_counts[lead_index] = 0
+
+    if (self._challenger_stale_counts[lead_index] >= SCAN_CHALLENGER_STALE_CYCLES or
+        self._distance_stale_counts[lead_index] >= SCAN_DISTANCE_STALE_CYCLES):
+      self.held_lead_ids[lead_index] = -1
+      self._reset_held_evidence(lead_index)
+
+  def _reset_held_evidence(self, lead_index: int, held_id: int = -1) -> None:
+    self._held_evidence_ids[lead_index] = held_id
+    self._challenger_stale_counts[lead_index] = 0
+    self._distance_stale_counts[lead_index] = 0
+
   def update(self, sm: messaging.SubMaster, rr: car.RadarData):
     self.ready = sm.seen['modelV2']
     self.current_time = 1e-9*max(sm.logMonoTime.values())
@@ -226,6 +346,11 @@ class RadarD:
       self.v_ego = sm['carState'].vEgo
       self.v_ego_hist.append(self.v_ego)
       self.last_v_ego_frame = sm.recv_frame['carState']
+
+    sweep_fresh = True
+    if self.scan_radar:
+      sweep_fresh = sm.recv_frame['radarTracks'] != self._last_tracks_frame
+      self._last_tracks_frame = sm.recv_frame['radarTracks']
 
     ar_pts = {pt.trackId: [pt.dRel, pt.yRel, pt.vRel, pt.measured] for pt in rr.points}
 
@@ -244,7 +369,11 @@ class RadarD:
       # create the track if it doesn't exist or it's a new track
       if ids not in self.tracks:
         self.tracks[ids] = Track(ids, v_lead, self.kalman_params)
-      self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3])
+      if self.scan_radar:
+        measured = bool(rpt[3] and sweep_fresh)
+        self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, measured, absorb_measurement=measured)
+      else:
+        self.tracks[ids].update(rpt[0], rpt[1], rpt[2], v_lead, rpt[3])
 
     # *** publish radarState ***
     self.radar_state_valid = sm.all_checks()
@@ -259,8 +388,34 @@ class RadarD:
       model_v_ego = self.v_ego
     leads_v3 = sm['modelV2'].leadsV3
     if len(leads_v3) > 1:
-      lead_one = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, self.CP, self.CP_IQ, low_speed_override=True)
-      lead_two = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, self.CP, self.CP_IQ, low_speed_override=False)
+      if self.scan_radar:
+        for i in range(2):
+          lead_prob = float(leads_v3[i].prob)
+          # probability rises instantly, decays filtered: a one-cycle model dip must not drop the lead
+          if lead_prob > self.lead_prob_filters[i].x:
+            self.lead_prob_filters[i].x = lead_prob
+          else:
+            self.lead_prob_filters[i].update(lead_prob)
+          self._refresh_held_lead_evidence(i, leads_v3[i], self.lead_prob_filters[i].x)
+
+        lead_one = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, model_lateral=self.model_lateral,
+                            low_speed_override=True, scan_radar=True, filtered_prob=self.lead_prob_filters[0].x,
+                            held_track_id=self.held_lead_ids[0])
+        lead_two = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, model_lateral=self.model_lateral,
+                            low_speed_override=False, scan_radar=True, filtered_prob=self.lead_prob_filters[1].x,
+                            held_track_id=self.held_lead_ids[1])
+
+        for i, lead in enumerate((lead_one, lead_two)):
+          if lead.get('status', False) and lead.get('radar', False):
+            track_id = int(lead.get('radarTrackId', -1))
+            if track_id != self.held_lead_ids[i]:
+              self._reset_held_evidence(i, track_id)
+            self.held_lead_ids[i] = track_id
+          elif (not lead.get('status', False)) or (self.held_lead_ids[i] not in self.tracks):
+            self.held_lead_ids[i] = -1
+      else:
+        lead_one = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[0], model_v_ego, model_lateral=self.model_lateral, low_speed_override=True)
+        lead_two = get_lead(self.v_ego, self.ready, self.tracks, leads_v3[1], model_v_ego, model_lateral=self.model_lateral, low_speed_override=False)
       self.radar_state.leadOne = self.custom_stop_distance.apply_lead(lead_one)
       self.radar_state.leadTwo = self.custom_stop_distance.apply_lead(lead_two)
 

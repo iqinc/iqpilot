@@ -75,9 +75,9 @@ def create_acc_accel_control(packer, bus, accel, acc_control, stopping):
 
 
 def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance, distanceBars, fcw_alert, leadVisible,
-                           unavailable, decel, d_unresponsive, hud_text=0, desired_distance=8.0):
+                           unavailable, decel, d_unresponsive, hud_text=0, desired_distance=8.0, *, priority_boost=False):
   engaged = acc_hud_status in (3, 4)
-  priodisp = 0 if fcw_alert else 1 if (acc_hud_status == 4 or decel or leadVisible) else 2 if (acc_hud_status in (3, 2)) else 0
+  priodisp = 0 if (fcw_alert or acc_hud_status in (6, 7)) else 1 if (priority_boost or decel or d_unresponsive) else 2 if engaged else 3
 
   # The cluster renders the lead as a position on a fixed scale rather than a raw distance, with the
   # set follow gap sitting at mid scale. The scale spans out to 1.5x the gap before it saturates.

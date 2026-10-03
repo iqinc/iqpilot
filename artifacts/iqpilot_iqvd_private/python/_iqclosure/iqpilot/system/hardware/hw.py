@@ -29,6 +29,12 @@ class Paths:
     return os.path.join(str(Path.home()), ".comma" + os.environ.get("OPENPILOT_PREFIX", ""))
 
   @staticmethod
+  def params() -> str:
+    if os.environ.get("PARAMS_ROOT"):
+      return os.environ["PARAMS_ROOT"]
+    return os.path.join(Paths.comma_home(), "params") if PC else "/data/params"
+
+  @staticmethod
   def log_root() -> str:
     if os.environ.get('LOG_ROOT', False):
       return os.environ['LOG_ROOT']
@@ -36,10 +42,6 @@ class Paths:
       return str(Path(Paths.comma_home()) / "media" / "0" / "realdata")
     else:
       return '/data/media/0/realdata/'
-
-  @staticmethod
-  def log_root_external() -> str:
-    return '/mnt/external_realdata/'
 
   @staticmethod
   def swaglog_root() -> str:
@@ -81,13 +83,6 @@ class Paths:
       return str(Path(Paths.comma_home()) / "stats")
     else:
       return "/data/stats/"
-
-  @staticmethod
-  def stats_iq_root() -> str:
-    if PC:
-      return str(Path(Paths.comma_home()) / "stats")
-    else:
-      return "/data/stats_iq/"
 
   @staticmethod
   def config_root() -> str:

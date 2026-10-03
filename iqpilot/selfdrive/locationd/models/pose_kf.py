@@ -5,7 +5,7 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 import numpy as np
 
 from iqpilot.common.transformations.orientation import euler_from_rot, rot_from_euler
-from iqpilot.selfdrive.locationd.models.constants import ObservationKind
+from iqpilot.selfdrive.iqlocd.models.constants import ObservationKind
 from iqpilot.selfdrive.state_estimation import EstimatorModel, ModelDefinition, StateEstimator
 try:
   from iqpilot.selfdrive.state_estimation.native_binding_pyx import pose_predict, pose_update

@@ -98,9 +98,12 @@ def test_canfd_camera_scc_single_owner_forwarding(safety):
   assert safety.safety_fwd_hook(2, 0x12A) == -1
   assert safety.safety_fwd_hook(2, 0x1E0) == -1
   assert safety.safety_fwd_hook(2, 0x1A0) == 0
-  assert safety.safety_fwd_hook(0, 0xEA) == 2
-  assert not safety.safety_tx_hook(packet(0xEA, 2, 24))
-  assert not safety.safety_tx_hook(packet(0x2AF, 2, 8))
+  assert safety.safety_fwd_hook(0, 0xEA) == -1
+  assert safety.safety_fwd_hook(0, 0x2AF) == -1
+  assert safety.safety_tx_hook(packet(0xEA, 2, 24))
+  assert safety.safety_tx_hook(packet(0x2AF, 2, 8))
+  assert not safety.safety_tx_hook(packet(0xEA, 0, 24))
+  assert not safety.safety_tx_hook(packet(0x2AF, 0, 8))
 
 
 def test_canfd_camera_scc_longitudinal_single_owner_forwarding(safety):
@@ -112,7 +115,46 @@ def test_canfd_camera_scc_longitudinal_single_owner_forwarding(safety):
   assert safety.safety_fwd_hook(2, 0x12A) == -1
   assert safety.safety_fwd_hook(2, 0x1A0) == -1
   assert safety.safety_fwd_hook(0, 0x175) == -1
+  assert safety.safety_fwd_hook(0, 0xEA) == -1
+  assert safety.safety_fwd_hook(0, 0x2AF) == -1
+  assert safety.safety_tx_hook(packet(0xEA, 2, 24))
+  assert safety.safety_tx_hook(packet(0x2AF, 2, 8))
+
+
+def test_canfd_camera_scc_forwards_every_frame_openpilot_does_not_replace(safety):
+  param = HyundaiSafetyFlags.CAMERA_SCC | HyundaiSafetyFlags.LONG
+  safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, param)
+  safety.init_tests()
+  safety.set_timer(1_000_000)
+
+  # openpilot sends these, so the stock frames must stay off the destination bus
+  for addr in (0x12A, 0x1A0, 0x1E0):
+    assert safety.safety_fwd_hook(2, addr) == -1
+  for addr in (0x175, 0x1CF):
+    assert safety.safety_fwd_hook(0, addr) == -1
+
+  # openpilot doctors these for the camera, so the stock frame must not also reach it
+  assert safety.safety_fwd_hook(0, 0xEA) == -1
+  assert safety.safety_fwd_hook(0, 0x2AF) == -1
+
+  # openpilot never sends these on a camera-SCC car, so blocking them strands the ECUs
+  assert safety.safety_fwd_hook(2, 0x160) == 0
+  assert safety.safety_fwd_hook(0, 0x1AA) == 2
+  assert safety.safety_fwd_hook(2, 0x11A) == 0
+  assert safety.safety_fwd_hook(2, 0x1B5) == 0
+  assert safety.safety_fwd_hook(2, 0x1FA) == 0
+  assert safety.safety_fwd_hook(2, 0x2BA) == 0
+
+
+def test_canfd_radar_scc_keeps_stock_camera_feedback(safety):
+  safety.set_safety_hooks(CarParams.SafetyModel.hyundaiCanfd, 0)
+  safety.init_tests()
+  safety.set_timer(1_000_000)
+
   assert safety.safety_fwd_hook(0, 0xEA) == 2
+  assert safety.safety_fwd_hook(0, 0x2AF) == 2
+  assert not safety.safety_tx_hook(packet(0xEA, 2, 24))
+  assert not safety.safety_tx_hook(packet(0x2AF, 2, 8))
 
 
 def test_canfd_stock_longitudinal_only_allows_cancel(safety):

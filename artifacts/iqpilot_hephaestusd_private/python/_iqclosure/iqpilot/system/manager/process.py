@@ -2,7 +2,6 @@ import importlib
 import os
 import signal
 import time
-import subprocess
 from pathlib import Path
 from collections.abc import Callable, ValuesView
 from abc import ABC, abstractmethod
@@ -221,7 +220,6 @@ class BundleProcess(NativeProcess):
   def __init__(self, name, bundle, entry, should_run, enabled=True, sigkill=False, restart_if_crash=False):
     self.bundle = bundle
     self.entry = entry
-    self.restart_if_crash = restart_if_crash
     runner_path = preferred_runner_path()
     runner_cmd = str(runner_path) if runner_path.is_absolute() else "./iqpilot_bundle_runner"
     runner_cwd = ".iqpilot/runtime_root" if runner_path.is_absolute() else "system/proprietary_runtime"
@@ -238,6 +236,7 @@ class BundleProcess(NativeProcess):
       should_run=should_run,
       enabled=enabled,
       sigkill=sigkill,
+      restart_if_crash=restart_if_crash,
     )
 
   def start(self) -> None:
@@ -276,52 +275,6 @@ class PythonProcess(ManagerProcess):
     self.proc = Process(name=self.name, target=self.launcher, args=(self.module, self.name))
     self.proc.start()
     self.shutting_down = False
-
-
-class DaemonProcess(ManagerProcess):
-  """Python process that has to stay running across manager restart.
-  This is used for athena so you don't lose SSH access when restarting manager."""
-  def __init__(self, name, module, param_name, enabled=True):
-    self.name = name
-    self.module = module
-    self.param_name = param_name
-    self.enabled = enabled
-    self.params = None
-
-  @staticmethod
-  def should_run(started, params, CP):
-    return True
-
-  def prepare(self) -> None:
-    pass
-
-  def start(self) -> None:
-    if self.params is None:
-      self.params = Params()
-
-    pid = self.params.get(self.param_name)
-    if pid is not None:
-      try:
-        os.kill(int(pid), 0)
-        with open(f'/proc/{pid}/cmdline') as f:
-          if self.module in f.read():
-            # daemon is running
-            return
-      except (OSError, FileNotFoundError):
-        # process is dead
-        pass
-
-    cloudlog.info(f"starting daemon {self.name}")
-    proc = subprocess.Popen(['python', '-m', self.module],
-                               stdin=open('/dev/null'),
-                               stdout=open('/dev/null', 'w'),
-                               stderr=open('/dev/null', 'w'),
-                               preexec_fn=os.setpgrp)
-
-    self.params.put(self.param_name, proc.pid)
-
-  def stop(self, retry=True, block=True, sig=None) -> None:
-    pass
 
 
 def ensure_running(procs: ValuesView[ManagerProcess], started: bool, params=None, CP: car.CarParams=None,

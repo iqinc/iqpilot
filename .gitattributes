@@ -32,8 +32,8 @@ iqpilot/selfdrive/assets/images/spinner_comma.png -filter -diff -merge -text
 iqpilot/selfdrive/assets/images/k3_spinner.png -filter -diff -merge -text
 iqpilot/selfdrive/assets/icons/camera.png -filter -diff -merge -text
 iqpilot/selfdrive/assets/fonts/Syncopate-Regular.ttf -filter -diff -merge -text
-iqpilot/selfdrive/assets/fonts/Tektur-Variable.ttf -filter -diff -merge -text
 iqpilot/tools/jotpluggler/assets/bootstrap-icons.ttf -filter -diff -merge -text
+artifacts/iqpilot_monrovia_ui_private/runtime/font.ttf -filter -diff -merge -text
 
 # mici UI icons stored as plain PNG — gitlab LFS server lacks these objects
 iqpilot/selfdrive/assets/icons_mici/buttons/button_circle_pressed.png -filter -diff -merge -text
@@ -51,3 +51,5 @@ iqpilot/selfdrive/assets/icons_mici/speedometer.png -filter -diff -merge -text
 
 iqpilot/selfdrive/assets/icons/iq/*.png -filter -diff -merge -text
 artifacts/runtime_wheels/*.whl -filter -diff -merge -text
+
+iqpilot/third_party/wireguard-go/larch64/wireguard-go binary

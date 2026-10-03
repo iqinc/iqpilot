@@ -4,6 +4,7 @@
 #include "imgui.h"
 #include "tools/jotpluggler/dbc.h"
 #include "tools/jotpluggler/util.h"
+#include "tools/jotpluggler/route_picker.h"
 
 #include <algorithm>
 #include <array>
@@ -208,14 +209,6 @@ struct CanFrameSample {
   std::string data;
 };
 
-struct LiveCanFrame {
-  double mono_time = 0.0;
-  uint8_t bus = 0;
-  uint32_t address = 0;
-  uint16_t bus_time = 0;
-  std::string data;
-};
-
 struct CanMessageData {
   CanMessageId id;
   std::vector<CanFrameSample> samples;
@@ -274,10 +267,6 @@ struct RouteIdentifier {
 
   std::string canonical() const {
     return empty() ? std::string() : dongle_id + "/" + log_id;
-  }
-
-  std::string onebox() const {
-    return empty() ? std::string() : dongle_id + "|" + log_id;
   }
 
   std::string display_slice() const {
@@ -388,13 +377,10 @@ public:
   StreamAccumulator(const StreamAccumulator &) = delete;
   StreamAccumulator &operator=(const StreamAccumulator &) = delete;
 
-  void setDbcName(const std::string &dbc_name);
   void appendEvent(kj::ArrayPtr<const capnp::word> data);
-  void appendCanFrames(CanServiceKind service, const std::vector<LiveCanFrame> &frames);
   StreamExtractBatch takeBatch();
   const std::string &carFingerprint() const;
   const std::string &dbc_name() const;
-  std::optional<double> timeOffset() const;
 
 private:
   struct Impl;
@@ -420,23 +406,18 @@ void rebuild_gps_trace(RouteData *route_data);
 // *****
 
 namespace icon {
-constexpr const char ARROW_DOWN_UP[]         = "\xef\x84\xa7";
-constexpr const char ARROW_LEFT_RIGHT[]      = "\xef\x84\xab";
 constexpr const char BAR_CHART[]             = "\xef\x85\xbe";
 constexpr const char BOX_ARROW_UP_RIGHT[]    = "\xef\x87\x85";
 constexpr const char CLIPBOARD[]             = "\xef\x8a\x90";
-constexpr const char CLIPBOARD2[]            = "\xef\x9c\xb3";
 constexpr const char DISTRIBUTE_HORIZONTAL[] = "\xef\x8c\x83";
 constexpr const char DISTRIBUTE_VERTICAL[]   = "\xef\x8c\x84";
 constexpr const char FILE_EARMARK_IMAGE[]    = "\xef\x8d\xad";
-constexpr const char FILES[]                 = "\xef\x8f\x82";
 constexpr const char INFO_CIRCLE[]           = "\xef\x90\xb1";
 constexpr const char PALETTE[]               = "\xef\x92\xb1";
 constexpr const char PLUS_SLASH_MINUS[]       = "\xef\x9a\xaa";
 constexpr const char SAVE[]                  = "\xef\x94\xa5";
 constexpr const char SLIDERS[]               = "\xef\x95\xab";
 constexpr const char TRASH[]                 = "\xef\x97\x9e";
-constexpr const char X_SQUARE[]              = "\xef\x98\xa9";
 constexpr const char ZOOM_OUT[]              = "\xef\x98\xad";
 }  // namespace icon
 
@@ -640,6 +621,7 @@ struct UndoStack {
 };
 
 struct UiState {
+  RoutePicker route_picker;
   bool open_open_route = false;
   bool open_stream = false;
   bool open_load_layout = false;

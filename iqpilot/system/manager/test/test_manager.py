@@ -67,6 +67,11 @@ class TestManager:
     assert manager.update_modeld_watchdog(deadline, True, False, proc, 16.0) is None
     proc.restart.assert_not_called()
 
+  def test_bundle_process_keeps_restart_if_crash(self):
+    proc = BundleProcess("test", "bundle", "entry", lambda *_: True, restart_if_crash=True)
+    assert proc.restart_if_crash is True
+    assert BundleProcess("test", "bundle", "entry", lambda *_: True).restart_if_crash is False
+
   def test_bundle_process_stops_with_sigterm(self, mocker):
     proc = BundleProcess("test", "bundle", "entry", lambda *_: True)
     proc.proc = mocker.Mock(exitcode=None, pid=123)

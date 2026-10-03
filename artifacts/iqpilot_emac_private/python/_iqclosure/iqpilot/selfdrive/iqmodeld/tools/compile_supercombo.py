@@ -4,12 +4,9 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 """
 
 import argparse
-import atexit
 import math
 import os
 import pickle
-import re
-import tempfile
 import time
 from functools import partial
 from collections import namedtuple
@@ -36,6 +33,8 @@ from tinygrad.tensor import Tensor
 from tinygrad.helpers import Context
 from tinygrad.device import Device
 from tinygrad.engine.jit import TinyJit
+
+from iqpilot.selfdrive.iqmodeld.temporal_state import packed_policy_layout, packed_input_casts, spec_from_meta, supercombo_metadata
 
 
 NV12Frame = namedtuple("NV12Frame", ['width', 'height', 'stride', 'y_height', 'uv_height', 'size'])
@@ -135,11 +134,7 @@ def make_warp_input_queues(vision_input_shapes, frame_skip, device):
 
 
 def get_policy_npy_shapes(input_shapes):
-  dp = input_shapes['desire_pulse']  # (1, 25, 8)
-  tc = input_shapes['traffic_convention']  # (1, 2)
-  at = input_shapes['action_t']  # (1, 2)
-  fb = input_shapes['features_buffer']  # (1, 24, 512)
-  shapes = {'desire': (dp[2],), 'traffic_convention': tuple(tc), 'action_t': tuple(at), 'prev_feat': (fb[0], fb[2])}
+  shapes = packed_policy_layout(input_shapes)
   return shapes, [math.prod(s) for s in shapes.values()]
 
 
@@ -192,6 +187,8 @@ def make_run_policy(model_runner, model_metadata, frame_skip):
   sample_desire_fn = partial(sample_desire, frame_skip=frame_skip)
   sample_skip_fn = partial(sample_skip, frame_skip=frame_skip)
   npy_shapes, npy_sizes = get_policy_npy_shapes(model_metadata['input_shapes'])
+  input_casts = packed_input_casts(model_metadata)
+  input_spec = spec_from_meta(model_metadata) if (model_metadata.get('cot_decode') or '').startswith('rh-cot-wire-') else None
 
   def run_policy(warped, img_q, big_img_q, feat_q, desire_q, packed_npy_inputs):
     packed_npy_inputs = packed_npy_inputs.to(Device.DEFAULT)
@@ -201,19 +198,25 @@ def make_run_policy(model_runner, model_metadata, frame_skip):
     img = shift_and_sample(img_q, warped[0:1], sample_skip_fn)
     big_img = shift_and_sample(big_img_q, warped[1:2], sample_skip_fn)
 
-    desire, traffic_convention, action_t, prev_feat = (t.reshape(s) for t, s in zip(packed_npy_inputs.split(npy_sizes), npy_shapes.values(), strict=True))
-    desire_buf = shift_and_sample(desire_q, desire.reshape(1, 1, -1), sample_desire_fn)
-    feat_buf = shift_and_sample(feat_q, prev_feat.reshape(1, 1, -1), sample_skip_fn)
+    unpacked = {name: t.reshape(s) for (name, s), t in zip(npy_shapes.items(), packed_npy_inputs.split(npy_sizes), strict=True)}
+    for name, dtype in input_casts.items():
+      unpacked[name] = unpacked[name].cast(dtype)
+    desire_buf = shift_and_sample(desire_q, unpacked.pop('desire').reshape(1, 1, -1), sample_desire_fn)
+    feat_buf = shift_and_sample(feat_q, unpacked.pop('prev_feat').reshape(1, 1, -1), sample_skip_fn)
 
     inputs = {
       'img': img,
       'big_img': big_img,
       'features_buffer': feat_buf,
       'desire_pulse': desire_buf,
-      'traffic_convention': traffic_convention,
-      'action_t': action_t,
+      **unpacked,
     }
-    out = next(iter(model_runner(inputs).values())).cast('float32')
+    if input_spec is not None:
+      inputs = {name: value.cast(input_spec[name][1]) for name, value in inputs.items()}
+    outputs = model_runner(inputs)
+    out = next(iter(outputs.values())).cast('float32')
+    for name in model_metadata.get('packed_output_names', ()):
+      out = out.cat(outputs[name].cast('float32').reshape(1, -1), dim=1)
     return out,
   return run_policy
 
@@ -365,13 +368,9 @@ def _parse_size(s):
 
 
 def read_file_chunked_to_shm(path):
-  from iqpilot.common.file_chunker import read_file_chunked
+  from iqpilot.common.file_chunker import stage_file_chunked
   from iqpilot.system.hardware.hw import Paths
-  with tempfile.NamedTemporaryFile(prefix='compile_modeld_', dir=Paths.shm_path(), delete=False) as f:
-    f.write(read_file_chunked(path))
-    tmp_path = f.name
-  atexit.register(lambda: os.path.exists(tmp_path) and os.remove(tmp_path))
-  return tmp_path
+  return stage_file_chunked(path, Paths.shm_path(), prefix="compile_modeld_")
 
 
 if __name__ == "__main__":
@@ -393,7 +392,7 @@ if __name__ == "__main__":
 
   model_runner = OnnxRunner(model_path)
   out = {
-    'metadata': build_metadata_record(model_path),
+    'metadata': supercombo_metadata(build_metadata_record(model_path)),
     'frame_skip': args.frame_skip,
   }
 

@@ -6,7 +6,6 @@ from collections.abc import Callable
 from iqpilot.system.ui.widgets import Widget
 from iqpilot.common.filter_simple import BounceFilter, FirstOrderFilter
 from iqpilot.system.ui.lib.application import gui_app, MousePos, MouseEvent
-from iqpilot.selfdrive.ui.ui_state import device
 
 SWIPE_AWAY_THRESHOLD = 80  # px to dismiss after releasing
 START_DISMISSING_THRESHOLD = 40  # px to start dismissing while dragging
@@ -18,6 +17,15 @@ NAV_BAR_HEIGHT = 8
 
 DISMISS_PUSH_OFFSET = NAV_BAR_MARGIN + NAV_BAR_HEIGHT + 50  # px extra to push down when dismissing
 DISMISS_ANIMATION_RC = 0.2  # slightly slower for non-user triggered dismiss animation
+
+
+# ui_state drags in msgq/cereal/params_pyx, none of which the pure-Python setup zipapp can load.
+def _set_override_interactive_timeout(timeout):
+  try:
+    from iqpilot.selfdrive.ui.ui_state import device
+  except Exception:
+    return
+  device.set_override_interactive_timeout(timeout)
 
 
 class NavBar(Widget):
@@ -251,10 +259,10 @@ class NavWidget(Widget, abc.ABC):
 
     self._nav_bar_y_filter.x = -NAV_BAR_MARGIN - NAV_BAR_HEIGHT
     self._nav_bar_show_time = rl.get_time()
-    device.set_override_interactive_timeout(300)
+    _set_override_interactive_timeout(300)
 
   def hide_event(self):
     super().hide_event()
     active = gui_app.get_active_widget()
     if not isinstance(active, NavWidget):
-      device.set_override_interactive_timeout(None)
+      _set_override_interactive_timeout(None)

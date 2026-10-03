@@ -68,7 +68,6 @@ class CarState(CarStateBase):
     self.grade = 0.0
     self.rolling_backward = False
     self.rolling_forward = False
-    self.sum_wegimpulse = 0
     self.speed_limit_mgr = SpeedLimitManager(CP)
     self.enable_predicative_speed_limit = False
     self.enable_speed_limit_predicative = False
@@ -79,7 +78,6 @@ class CarState(CarStateBase):
     self.grade = 0.0
     self.rolling_backward = False
     self.rolling_forward = False
-    self.sum_wegimpulse = 0
     self.travel_assist_available = False
     self.left_blinker_active = False
     self.right_blinker_active = False
@@ -199,12 +197,6 @@ class CarState(CarStateBase):
         pt_cp.vl["ESP_10"]["ESP_HL_Fahrtrichtung"] == 0 or
         pt_cp.vl["ESP_10"]["ESP_VR_Fahrtrichtung"] == 0 or
         pt_cp.vl["ESP_10"]["ESP_VL_Fahrtrichtung"] == 0
-      )
-      self.sum_wegimpulse = int(
-        pt_cp.vl["ESP_10"]["ESP_Wegimpuls_VL"] +
-        pt_cp.vl["ESP_10"]["ESP_Wegimpuls_VR"] +
-        pt_cp.vl["ESP_10"]["ESP_Wegimpuls_HL"] +
-        pt_cp.vl["ESP_10"]["ESP_Wegimpuls_HR"]
       )
 
       if self.CP.flags & VolkswagenFlags.STOCK_HCA_PRESENT:
@@ -679,7 +671,7 @@ class CarState(CarStateBase):
     if self.CP.carFingerprint == CAR.PORSCHE_MACAN_MK1:
       ret.gearShifter = self.parse_gear_shifter(self.CCP.shifter_values.get(pt_cp.vl["Getriebe_03"]["GE_Waehlhebel"], None))
     elif self.CP.transmissionType == TransmissionType.manual:
-      reverse = bool(pt_cp.vl["Gateway_05"]["BCM1_Rueckfahrlicht_Schalter"])
+      reverse = bool(br_cp.vl["Gateway_05"]["BCM1_Rueckfahrlicht_Schalter"])
       ret.gearShifter = GearShifter.reverse if reverse else GearShifter.drive
     else:
       ret.gearShifter = GearShifter.drive
@@ -703,7 +695,8 @@ class CarState(CarStateBase):
 
     ret.cruiseState.nonAdaptive = bool(pt_cp.vl["LS_01"]["LS_Limiter"])
     if not self.CP.pcmCruise:
-      self.acc_stock_counters["ACC_01"] = int(ext_cp.vl["ACC_01"]["COUNTER"])
+      if ext_cp.ts_nanos["ACC_01"]["COUNTER"]:
+        self.acc_stock_counters["ACC_01"] = int(ext_cp.vl["ACC_01"]["COUNTER"])
       self.acc_stock_counters["ACC_02"] = int(ext_cp.vl["ACC_02"]["COUNTER"])
       self.esp_hold_confirmation = bool(pt_cp.vl["ESP_02"]["ESP_Stillstandsflag"])
 
@@ -776,6 +769,10 @@ class CarState(CarStateBase):
       ret.steerFaultTemporary, ret.steerFaultPermanent = False, True
       return
 
+    if self.CP.flags & VolkswagenFlags.MLB:
+      # MLB LWS zero is vehicle-specific (measured 2.5 deg off centre on an 8R); the EPS angle is what the rack closes its own loop on
+      ret.steeringAngleDeg = pt_cp.vl["LH_EPS_03"]["EPS_Berechneter_LW"] * (1, -1)[int(pt_cp.vl["LH_EPS_03"]["EPS_VZ_BLW"])]
+
     ret.steeringTorque = pt_cp.vl["LH_EPS_03"]["EPS_Lenkmoment"] * (1, -1)[int(pt_cp.vl["LH_EPS_03"]["EPS_VZ_Lenkmoment"])]
     ret.steeringPressed = abs(ret.steeringTorque) > self.CCP.STEER_DRIVER_ALLOWANCE
 
@@ -841,6 +838,7 @@ class CarState(CarStateBase):
       pt_messages += [
         ("Blinkmodi_01", math.nan),  # From J519 BCM (is inactive when no lights active, 50Hz when active)
         ("Kombi_02", math.nan),  # Auxiliary-bus cluster odometer
+        ("LH_EPS_01", math.nan),  # ALC key slot, absent on MLB racks that never send 0x32A
       ]
     else:
       pt_messages += [("Kombi_02", math.nan)]  # Auxiliary-bus cluster odometer
@@ -849,6 +847,12 @@ class CarState(CarStateBase):
     if CP.flags & VolkswagenFlags.STOCK_HCA_PRESENT:
       cam_messages += [
         ("HCA_01", 1),  # From R242 Driver assistance camera, 50Hz if steering/1Hz if not
+      ]
+
+    if CP.flags & VolkswagenFlags.MLB and CP.openpilotLongitudinalControl:
+      ext_messages = pt_messages if CP.networkLocation == NetworkLocation.fwdCamera else cam_messages
+      ext_messages += [
+        ("ACC_01", math.nan),  # Macan ACC never sends it; read only to seed our replacement's counter
       ]
 
     pt_bus = CanBus(CP).aux if CP.flags & VolkswagenFlagsIQ.IQ_MLB_NO_ECAN else CanBus(CP).pt

@@ -15,7 +15,7 @@ from iqpilot.system.ui.lib.text_measure import measure_text_cached
 from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
 from iqpilot.system.ui.widgets.slider import RedBigSlider, BigSlider
 from iqpilot.common.filter_simple import FirstOrderFilter
-from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigCircleButton, BigButton, GreyBigButton
+from iqpilot.selfdrive.ui.mici.widgets.stock_button import GreyBigButton
 
 DEBUG = False
 
@@ -238,27 +238,3 @@ class BigInputDialog(BigDialogBase):
     elif rl.check_collision_point_rec(mouse_pos, self._top_left_button_rect) and self._enter_img_alpha.x > 254:
       # handle enter icon click
       self._confirm_callback()
-
-
-class BigDialogButton(BigButton):
-  def __init__(self, text: str, value: str = "", icon: Union[str, rl.Texture] = "", description: str = ""):
-    super().__init__(text, value, icon)
-    self._description = description
-
-  def _handle_mouse_release(self, mouse_pos: MousePos):
-    super()._handle_mouse_release(mouse_pos)
-
-    dlg = BigDialog(self.text, self._description)
-    gui_app.push_widget(dlg)
-
-
-class BigConfirmationCircleButton(BigCircleButton):
-  def __init__(self, title: str, icon: rl.Texture, confirm_callback: Callable[[], None], exit_on_confirm: bool = True,
-               red: bool = False, icon_offset: tuple[int, int] = (0, 0)):
-    super().__init__(icon, red, icon_offset)
-
-    def show_confirm_dialog():
-      gui_app.push_widget(BigConfirmationDialog(title, icon, confirm_callback,
-                                                exit_on_confirm=exit_on_confirm, red=red))
-
-    self.set_click_callback(show_confirm_dialog)

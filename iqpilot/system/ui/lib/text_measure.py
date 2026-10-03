@@ -1,8 +1,11 @@
+from collections import OrderedDict
+
 import pyray as rl
 from iqpilot.system.ui.lib.application import FONT_SCALE, font_fallback
 from iqpilot.system.ui.lib.emoji import find_emoji
 
-_cache: dict[int, rl.Vector2] = {}
+MAX_CACHE_ENTRIES = 4096
+_cache: OrderedDict[int, rl.Vector2] = OrderedDict()
 
 
 def measure_text_cached(font: rl.Font, text: str, font_size: int, spacing: float = 0) -> rl.Vector2:
@@ -11,6 +14,7 @@ def measure_text_cached(font: rl.Font, text: str, font_size: int, spacing: float
   spacing = round(spacing, 4)
   key = hash((font.texture.id, text, font_size, spacing))
   if key in _cache:
+    _cache.move_to_end(key)
     return _cache[key]
 
   # Measure normal characters without emojis, then add standard width for each found emoji
@@ -33,4 +37,6 @@ def measure_text_cached(font: rl.Font, text: str, font_size: int, spacing: float
       result.y = font_size * FONT_SCALE
 
   _cache[key] = result
+  if len(_cache) > MAX_CACHE_ENTRIES:
+    _cache.popitem(last=False)
   return result

@@ -1,5 +1,7 @@
 from iqpilot.cereal import log
 from iqpilot.common.params import Params, UnknownKeyName
+from iqpilot.common.ui_settings import LONGITUDINAL_MODE_VALUES
+from iqpilot.selfdrive.longitudinal_settings import apply_longitudinal_mode
 from iqpilot.system.ui.widgets import Widget
 from iqpilot.system.ui.widgets.list_view import multiple_button_item, toggle_item
 from iqpilot.system.ui.widgets.scroller_tici import Scroller
@@ -12,7 +14,6 @@ from iqpilot.selfdrive.ui.ui_state import ui_state
 if gui_app.iqpilot_ui():
   from iqpilot.system.ui.iqwidgets.widgets.list_view import toggle_item
   from iqpilot.system.ui.iqwidgets.widgets.list_view import multiple_button_item
-  from iqpilot.ui.layouts.settings.iq_dynamic import IQDynamicLayout
 
 PERSONALITY_TO_INT = log.LongitudinalPersonality.schema.enumerants
 PERSONALITY_DISPLAY_TO_PARAM = [PERSONALITY_TO_INT["relaxed"], PERSONALITY_TO_INT["standard"], PERSONALITY_TO_INT["aggressive"]]
@@ -24,15 +25,12 @@ DESCRIPTIONS = {
     "Use the IQ.Pilot system for adaptive cruise control and lane keep driver assistance. " +
     "Your attention is required at all times to use this feature."
   ),
-  "DisengageOnAccelerator": tr_noop("When enabled, pressing the accelerator pedal will disengage IQ.Pilot."),
   "LongitudinalPersonality": tr_noop(
     "Standard is recommended. In aggressive mode, IQ.Pilot will follow lead cars closer and be more aggressive with the gas and brake. " +
     "In relaxed mode IQ.Pilot will stay further away from lead cars. On supported cars, you can cycle through these personalities with " +
     "your steering wheel distance button."
   ),
-  "IQSpeedAssistMode": tr_noop(
-    "Controls IQ.Pilot speed limit behavior. Off disables speed limit features, Information only displays limits, Warning highlights overspeed, and Control adjusts set speed using detected limits."
-  ),
+  "IQSpeedAssistMode": tr_noop("Visual displays detected limits. Control also adjusts the set speed to follow them."),
   "IsLdwEnabled": tr_noop(
     "Receive alerts to steer back into the lane when your vehicle drifts over a detected lane line " +
     "without a turn signal activated while driving over 31 mph (50 km/h)."
@@ -48,8 +46,11 @@ DESCRIPTIONS = {
   "RecordAudio": tr_noop("Record and store microphone audio while driving. The audio will be included in the dashcam video in Konn3kt."),
   "LongitudinalControlMode": tr_noop(
     "Choose longitudinal behavior: IQ.Pilot (IQ longitudinal + end-to-end), "
-    "IQ.Dynamic (IQ longitudinal + dynamic mode), IQ.Chill (IQ longitudinal + relaxed personality), "
-    "or Stock ACC."
+    "IQ.Chill (IQ longitudinal + relaxed personality), or Stock ACC."
+  ),
+  "IQTelemetryEnabled": tr_noop(
+    "Once a day, sends settings, versions, car model and coarse usage counts under a random install ID. " +
+    "Never sends your dongle ID, VIN, serials, location, routes or anything you typed."
   ),
 }
 
@@ -58,28 +59,14 @@ class TogglesLayout(Widget):
   def __init__(self):
     super().__init__()
     self._params = Params()
-    # Keep IQ.Pilot enabled by default; the UI no longer exposes this toggle.
-    self._params.put_bool("OpenpilotEnabledToggle", True)
 
     # param, title, desc, icon, needs_restart
     self._toggle_defs = {
-      "DisengageOnAccelerator": (
-        lambda: tr("Disengage on Accelerator Pedal"),
-        DESCRIPTIONS["DisengageOnAccelerator"],
-        "disengage_on_accelerator.png",
-        False,
-      ),
       "IsLdwEnabled": (
         lambda: tr("Enable Lane Departure Warnings"),
         DESCRIPTIONS["IsLdwEnabled"],
         "warning.png",
         False,
-      ),
-      "DashcamEnabled": (
-        lambda: tr("Enable Dashcam"),
-        DESCRIPTIONS["DashcamEnabled"],
-        "camera.png",
-        True,
       ),
       "RecordFront": (
         lambda: tr("Record and Upload Driver Camera"),
@@ -93,16 +80,23 @@ class TogglesLayout(Widget):
         "microphone.png",
         True,
       ),
+      "IQGasOverrideBoost": (
+        lambda: tr("Gas Override Boost"),
+        tr_noop("Off by default. Holding the gas above 10 mph while engaged slowly raises IQ.Pilot's acceleration by up to " +
+                "1.0 m/s², kept until you disengage; it bleeds off below 10 mph. Takes effect on the next drive."),
+        "disengage_on_accelerator.png",
+        False,
+      ),
       "IsMetric": (
-        lambda: tr("Use Metric System"),
+        lambda: tr("Force Metric Units"),
         DESCRIPTIONS["IsMetric"],
         "metric.png",
         False,
       ),
-      "IQAutoUnits": (
-        lambda: tr("Set Units From Location"),
-        DESCRIPTIONS["IQAutoUnits"],
-        "metric.png",
+      "IQTelemetryEnabled": (
+        lambda: tr("Share Anonymous Usage Statistics"),
+        DESCRIPTIONS["IQTelemetryEnabled"],
+        "network.png",
         False,
       ),
     }
@@ -111,7 +105,7 @@ class TogglesLayout(Widget):
       lambda: tr("Driving Personality"),
       lambda: tr(DESCRIPTIONS["LongitudinalPersonality"]),
       buttons=[lambda: tr("Relaxed"), lambda: tr("Standard"), lambda: tr("Aggressive")],
-      button_width=300,
+      button_width=280,
       callback=self._set_longitudinal_personality,
       selected_index=PERSONALITY_PARAM_TO_DISPLAY.get(self._params.get("LongitudinalPersonality", return_default=True), 1),
       icon="speed_limit.png"
@@ -119,17 +113,17 @@ class TogglesLayout(Widget):
     self._speed_limit_mode_setting = multiple_button_item(
       lambda: tr("Speed Limit"),
       lambda: tr(DESCRIPTIONS["IQSpeedAssistMode"]),
-      buttons=[lambda: tr("Off"), lambda: tr("Info"), lambda: tr("Warning"), lambda: tr("Control")],
-      button_width=220,
+      buttons=[lambda: tr("Visual"), lambda: tr("Control")],
+      button_width=280,
       callback=self._set_speed_limit_mode,
-      selected_index=self._params.get("IQSpeedAssistMode", return_default=True),
+      selected_index=1 if self._params.get("IQSpeedAssistMode", return_default=True) == 3 else 0,
       icon="speed_limit.png",
     )
     self._longitudinal_control_mode_setting = multiple_button_item(
       lambda: tr("Longitudinal Control"),
       lambda: tr(DESCRIPTIONS["LongitudinalControlMode"]),
-      buttons=[lambda: tr("Stock ACC"), lambda: tr("IQ.Chill"), lambda: tr("IQ.Dynamic"), lambda: tr("IQ.Pilot")],
-      button_width=250,
+      buttons=[lambda: tr("Stock ACC"), lambda: tr("IQ.Chill"), lambda: tr("IQ.Pilot")],
+      button_width=280,
       callback=self._set_longitudinal_control_mode,
       selected_index=self._get_longitudinal_control_mode_index(),
       icon="experimental_white.png",
@@ -171,11 +165,6 @@ class TogglesLayout(Widget):
 
     self._scroller = Scroller(list(self._toggles.values()), line_separator=True, spacing=0)
 
-    self._iq_dynamic_panel: "IQDynamicLayout | None" = None
-    self._show_iq_dynamic = False
-    if gui_app.iqpilot_ui():
-      self._iq_dynamic_panel = IQDynamicLayout(self._close_iq_dynamic_panel)
-
     ui_state.add_engaged_transition_callback(self._update_toggles)
 
   def _update_state(self):
@@ -184,19 +173,9 @@ class TogglesLayout(Widget):
       if personality != ui_state.personality and ui_state.started:
         self._long_personality_setting.action_item.set_selected_button(PERSONALITY_PARAM_TO_DISPLAY.get(personality, 1))
       ui_state.personality = personality
-    self._speed_limit_mode_setting.action_item.set_selected_button(self._params.get("IQSpeedAssistMode", return_default=True))
-
-  def _close_iq_dynamic_panel(self):
-    self._show_iq_dynamic = False
-
-  def set_cruise_panel_callback(self, callback: "Callable") -> None:
-    """Register callback invoked on double-click of IQ.Dynamic (button index 2)."""
-    action = self._longitudinal_control_mode_setting.action_item
-    if hasattr(action, 'set_double_click_callback'):
-      action.set_double_click_callback(2, callback)
+    self._speed_limit_mode_setting.action_item.set_selected_button(1 if self._params.get("IQSpeedAssistMode", return_default=True) == 3 else 0)
 
   def show_event(self):
-    self._show_iq_dynamic = False
     self._scroller.show_event()
     self._update_toggles()
 
@@ -210,8 +189,6 @@ class TogglesLayout(Widget):
       "Let the driving model control the gas and brakes. IQ.Pilot will drive as it thinks a human would, including stopping for red lights and stop signs. " +
       "Since the driving model decides the speed to drive, the set speed will only act as an upper bound. This feature is still being improved; " +
       "mistakes should be expected.<br>" +
-      "<h4>IQ.Dynamic</h4><br>" +
-      "Dynamically blends between adaptive cruise behavior and end-to-end behavior based on scene/context.<br>" +
       "<h4>IQ.Chill</h4><br>" +
       "Uses standard traffic-aware cruise behavior for longitudinal control.<br>" +
       "<h4>New Driving Visualization</h4><br>" +
@@ -242,14 +219,14 @@ class TogglesLayout(Widget):
     longitudinal_control_item = self._toggles["LongitudinalControlMode"]
     longitudinal_control_item.action_item.set_selected_button(mode_index)
     longitudinal_control_item.action_item.set_enabled(not ui_state.engaged)
-    longitudinal_control_item.action_item.set_enabled_buttons([True, iq_modes_selectable, iq_modes_selectable, iq_modes_selectable])
+    longitudinal_control_item.action_item.set_enabled_buttons([True, iq_modes_selectable, iq_modes_selectable])
 
     description = tr(DESCRIPTIONS["LongitudinalControlMode"]) + "<br><br>" + e2e_description
     if availability_note:
       description += "<br><br><i>" + availability_note + "</i>"
     longitudinal_control_item.set_description(description)
 
-    personality_enabled = iq_modes_selectable and mode_index in (2, 3)
+    personality_enabled = iq_modes_selectable and mode_index == 2
     self._long_personality_setting.action_item.set_enabled(personality_enabled)
 
     # TODO: make a param control list item so we don't need to manage internal state as much here
@@ -263,40 +240,21 @@ class TogglesLayout(Widget):
         self._toggles[toggle_def].action_item.set_enabled(not ui_state.engaged)
 
   def _render(self, rect):
-    if self._show_iq_dynamic and self._iq_dynamic_panel is not None:
-      self._iq_dynamic_panel.render(rect)
-    else:
-      self._scroller.render(rect)
+    self._scroller.render(rect)
 
   def _get_longitudinal_control_mode_index(self) -> int:
     if not self._params.get_bool("AlphaLongitudinalEnabled"):
       return 0  # Stock ACC
     if not self._params.get_bool("ExperimentalMode"):
       return 1  # IQ.Chill
-    return 2 if self._params.get_bool("IQDynamicMode") else 3  # IQ.Dynamic / IQ.Pilot
+    return 2
 
   def _apply_longitudinal_control_mode(self, button_index: int):
-    # 0 = Stock ACC, 1 = IQ.Chill, 2 = IQ.Dynamic, 3 = IQ.Pilot
+    # 0 = Stock ACC, 1 = IQ.Chill, 2 = IQ.Pilot
     previous_alpha = self._params.get_bool("AlphaLongitudinalEnabled")
     previous_toyota_stock_long = self._params.get_bool("IQToyotaFactoryLong")
 
-    if button_index == 0:
-      self._params.put_bool("AlphaLongitudinalEnabled", False)
-      self._params.put_bool("ExperimentalMode", False)
-      self._params.put_bool("IQDynamicMode", False)
-    elif button_index == 1:
-      self._params.put_bool("AlphaLongitudinalEnabled", True)
-      self._params.put_bool("ExperimentalMode", False)
-      self._params.put_bool("IQDynamicMode", False)
-      self._params.put("LongitudinalPersonality", PERSONALITY_TO_INT["relaxed"])
-    elif button_index == 2:
-      self._params.put_bool("AlphaLongitudinalEnabled", True)
-      self._params.put_bool("ExperimentalMode", True)
-      self._params.put_bool("IQDynamicMode", True)
-    else:
-      self._params.put_bool("AlphaLongitudinalEnabled", True)
-      self._params.put_bool("ExperimentalMode", True)
-      self._params.put_bool("IQDynamicMode", False)
+    apply_longitudinal_mode(self._params, LONGITUDINAL_MODE_VALUES[button_index])
 
     if button_index != 0 and previous_toyota_stock_long:
       self._params.put_bool("IQToyotaFactoryLong", False)
@@ -315,17 +273,14 @@ class TogglesLayout(Widget):
     self._params.put("LongitudinalPersonality", PERSONALITY_DISPLAY_TO_PARAM[button_index])
 
   def _set_speed_limit_mode(self, button_index: int):
-    self._params.put("IQSpeedAssistMode", button_index)
+    self._params.put("IQSpeedAssistMode", 3 if button_index else 1)
 
   def _set_longitudinal_control_mode(self, button_index: int):
-    # 0 = Stock ACC, 1 = IQ.Chill, 2 = IQ.Dynamic, 3 = IQ.Pilot
+    # 0 = Stock ACC, 1 = IQ.Chill, 2 = IQ.Pilot
     if button_index == self._get_longitudinal_control_mode_index():
-      if button_index == 2 and self._iq_dynamic_panel is not None:
-        self._show_iq_dynamic = True
       return
 
-    # IQ.Pilot and IQ.Dynamic both require ExperimentalMode confirmation.
-    if button_index in (2, 3) and not self._params.get_bool("ExperimentalModeConfirmed"):
+    if button_index == 2 and not self._params.get_bool("ExperimentalModeConfirmed"):
       def confirm_callback(result: int):
         if result == DialogResult.CONFIRM:
           self._apply_longitudinal_control_mode(button_index)

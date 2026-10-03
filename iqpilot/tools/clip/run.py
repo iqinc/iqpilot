@@ -3,16 +3,15 @@ import os
 import sys
 import time
 import logging
-import subprocess
+import av
 import threading
 import queue
 import multiprocessing
 import itertools
-import numpy as np
 import tqdm
 from argparse import ArgumentParser
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import closing
 
 from iqpilot.tools.lib.route import Route
 from iqpilot.tools.lib.logreader import LogReader
@@ -78,13 +77,10 @@ def setup_env(output_path: str, big: bool = False, speed: int = 1, target_mb: fl
     os.environ["BIG"] = "0"
 
 
-def _download_segment(path: str) -> bytes:
-  with FileReader(path) as f:
-    return bytes(f.read())
-
-
 def _parse_and_chunk_segment(args: tuple) -> list[dict]:
-  raw_data, fps = args
+  path, fps = args
+  with FileReader(path) as f:
+    raw_data = f.read()
   from iqpilot.tools.lib.logreader import _LogFileReader
   messages = migrate_all(list(_LogFileReader("", dat=raw_data, sort_by_time=True)))
   if not messages:
@@ -101,15 +97,9 @@ def _parse_and_chunk_segment(args: tuple) -> list[dict]:
 
 def load_logs_parallel(log_paths: list[str], fps: int = 20) -> list[dict]:
   num_workers = min(16, len(log_paths), (multiprocessing.cpu_count() or 1))
-  logger.info(f"Downloading {len(log_paths)} segments with {num_workers} workers...")
-
-  with ThreadPoolExecutor(max_workers=num_workers) as pool:
-    futures = {pool.submit(_download_segment, path): idx for idx, path in enumerate(log_paths)}
-    raw_data = {futures[f]: f.result() for f in as_completed(futures)}
-
-  logger.info("Parsing and chunking segments...")
+  logger.info(f"Loading and parsing {len(log_paths)} segments with {num_workers} workers...")
   with multiprocessing.Pool(num_workers) as pool:
-    return list(itertools.chain.from_iterable(pool.map(_parse_and_chunk_segment, [(raw_data[i], fps) for i in range(len(log_paths))])))
+    return list(itertools.chain.from_iterable(pool.imap(_parse_and_chunk_segment, ((path, fps) for path in log_paths))))
 
 
 def patch_submaster(message_chunks, ui_state):
@@ -132,43 +122,49 @@ def patch_submaster(message_chunks, ui_state):
 
 def get_frame_dimensions(camera_path: str) -> tuple[int, int]:
   """Get frame dimensions from a video file using ffprobe."""
-  probe = ffprobe(camera_path)
-  stream = probe["streams"][0]
-  return stream["width"], stream["height"]
+  if is_raw_hevc(camera_path):
+    stream = ffprobe(camera_path)["streams"][0]
+    return stream["width"], stream["height"]
+  with FileReader(camera_path) as f, av.open(f) as container:
+    codec = container.streams.video[0].codec_context
+    return codec.width, codec.height
+
+
+def is_raw_hevc(camera_path: str) -> bool:
+  # konn3kt 307-redirects fcamera/ecamera.hevc to an H.264 mp4 once the segment has been recompressed
+  with FileReader(camera_path) as f:
+    return f.read(4) == b"\x00\x00\x00\x01"
 
 
 def iter_segment_frames(camera_paths, start_time, end_time, fps=20, use_qcam=False,
                         frame_size: tuple[int, int] | None = None, on_segment_open=None):
   frames_per_seg = fps * 60
   start_frame, end_frame = int(start_time * fps), int(end_time * fps)
-  current_seg: int = -1
-  seg_frames: FrameReader | np.ndarray | None = None
-
-  for global_idx in range(start_frame, end_frame):
-    seg_idx, local_idx = global_idx // frames_per_seg, global_idx % frames_per_seg
-
-    if seg_idx != current_seg:
-      current_seg = seg_idx
-      path = camera_paths[seg_idx] if seg_idx < len(camera_paths) else None
-      if not path:
-        raise RuntimeError(f"No camera file for segment {seg_idx}")
-      if on_segment_open is not None:
-        on_segment_open(seg_idx, path)
-
-      if use_qcam:
-        w, h = frame_size or get_frame_dimensions(path)
-        with FileReader(path) as f:
-          result = subprocess.run(["ffmpeg", "-v", "quiet", "-i", "-", "-f", "rawvideo", "-pix_fmt", "nv12", "-"],
-                                  input=f.read(), capture_output=True)
-        if result.returncode != 0:
-          raise RuntimeError(f"ffmpeg failed: {result.stderr.decode()}")
-        seg_frames = np.frombuffer(result.stdout, dtype=np.uint8).reshape(-1, w * h * 3 // 2)
-      else:
-        seg_frames = FrameReader(path, pix_fmt="nv12")
-
-    assert seg_frames is not None
-    frame = seg_frames[local_idx] if use_qcam else seg_frames.get(local_idx)  # type: ignore[index, union-attr]
-    yield global_idx, frame
+  if start_frame >= end_frame:
+    return
+  for seg_idx in range(start_frame // frames_per_seg, (end_frame - 1) // frames_per_seg + 1):
+    path = camera_paths[seg_idx] if seg_idx < len(camera_paths) else None
+    if not path:
+      raise RuntimeError(f"No camera file for segment {seg_idx}")
+    if on_segment_open is not None:
+      on_segment_open(seg_idx, path)
+    first = max(start_frame, seg_idx * frames_per_seg)
+    stop = min(end_frame, (seg_idx + 1) * frames_per_seg)
+    if use_qcam or not is_raw_hevc(path):
+      with FileReader(path) as f, av.open(f) as container:
+        frames = itertools.islice(container.decode(video=0), first % frames_per_seg, None)
+        for global_idx in range(first, stop):
+          try:
+            frame = next(frames)
+          except StopIteration:
+            raise IndexError(f"Missing camera frame {global_idx} in segment {seg_idx}") from None
+          if frame_size is not None and (frame.width, frame.height) != frame_size:
+            raise ValueError(f"camera dimensions {(frame.width, frame.height)} do not match {frame_size}")
+          yield global_idx, frame.to_ndarray(format="nv12").reshape(-1)
+    else:
+      reader = FrameReader(path, pix_fmt="nv12")
+      for global_idx in range(first, stop):
+        yield global_idx, reader.get(global_idx % frames_per_seg)
 
 
 class FrameQueue:
@@ -195,10 +191,11 @@ class FrameQueue:
 
   def _worker(self, camera_paths, start_time, end_time, fps, use_qcam, frame_size):
     try:
-      for idx, data in iter_segment_frames(camera_paths, start_time, end_time, fps, use_qcam, frame_size, self._set_current_source):
-        if self._stop.is_set():
-          break
-        self._queue.put((idx, data.tobytes()))
+      with closing(iter_segment_frames(camera_paths, start_time, end_time, fps, use_qcam, frame_size, self._set_current_source)) as frames:
+        for idx, data in frames:
+          if self._stop.is_set():
+            break
+          self._queue.put((idx, data.tobytes()))
     except Exception as e:
       logger.exception("Decode error")
       self._error = e
@@ -252,9 +249,13 @@ class FrameQueue:
     self._thread.join(timeout=2.0)
 
 
+def first_log_path(route):
+  return next(p for p in (*route.log_paths(), *route.qlog_paths()) if p)
+
+
 def load_route_metadata(route):
   from iqpilot.common.params import Params, UnknownKeyName
-  lr = LogReader(route.log_paths()[0])
+  lr = LogReader(first_log_path(route))
   init_data, car_params = lr.first('initData'), lr.first('carParams')
 
   params = Params()
@@ -280,7 +281,7 @@ def load_route_metadata(route):
 
 def detect_big_ui(route: Route) -> bool:
   try:
-    init_data = LogReader(route.log_paths()[0]).first('initData')
+    init_data = LogReader(first_log_path(route)).first('initData')
     git_branch = (init_data.gitBranch or "").lower()
     device_type = str(init_data.deviceType).lower()
     if device_type in ("mici", "tizi", "tici"):

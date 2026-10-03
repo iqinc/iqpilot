@@ -151,6 +151,14 @@ def font_fallback(font: rl.Font) -> rl.Font:
   return font
 
 
+def _release_font_cpu_images(font: rl.Font) -> None:
+  if font.texture.id == rl.get_font_default().texture.id:
+    return
+  for index in range(font.glyphCount):
+    rl.unload_image(font.glyphs[index].image)
+    font.glyphs[index].image = rl.Image()
+
+
 @dataclass
 class ModalOverlay:
   overlay: object = None
@@ -252,6 +260,7 @@ class GuiApplication(IQAppHooks):
     self._scaled_height += self._scaled_height % 2
 
     self._render_texture: rl.RenderTexture | None = None
+    self._render_jobs: dict[object, Callable[[], None]] = {}
     self._screen_recorder: ScreenRecorder | None = None
     self._burn_in_shader: rl.Shader | None = None
     self._ffmpeg_proc: subprocess.Popen | None = None
@@ -705,12 +714,18 @@ class GuiApplication(IQAppHooks):
         self._ffmpeg_proc.wait()
 
   def close(self):
+    self._render_jobs.clear()
     if not rl.is_window_ready():
       return
 
     if self._screen_recorder is not None:
       self._screen_recorder.close()
       self._screen_recorder = None
+
+    from iqpilot.system.ui.lib import emoji, text_measure, wrap_text
+    emoji.clear_cache()
+    text_measure._cache.clear()
+    wrap_text._cache.clear()
 
     for texture in self._textures.values():
       rl.unload_texture(texture)
@@ -743,6 +758,18 @@ class GuiApplication(IQAppHooks):
   def last_mouse_event(self) -> MouseEvent:
     return self._last_mouse_event
 
+  def queue_render_job(self, owner: object, callback: Callable[[], None]) -> None:
+    self._render_jobs[owner] = callback
+
+  def cancel_render_job(self, owner: object) -> None:
+    self._render_jobs.pop(owner, None)
+
+  def _run_render_jobs(self) -> None:
+    jobs = tuple(self._render_jobs.values())
+    self._render_jobs.clear()
+    for job in jobs:
+      job()
+
   def render(self):
     try:
       if self._profile_render_frames > 0:
@@ -752,6 +779,7 @@ class GuiApplication(IQAppHooks):
         self._render_profiler.enable()
 
       while not (self._window_close_requested or rl.window_should_close()):
+        multilang.refresh()
         if PC:
           # Thread is not used on PC, need to manually add mouse events
           self._mouse._handle_mouse_event()
@@ -783,6 +811,7 @@ class GuiApplication(IQAppHooks):
         if frame_rt is None and capture_now:
           frame_rt = self._screen_recorder.render_texture
 
+        self._run_render_jobs()
         if frame_rt:
           rl.begin_texture_mode(frame_rt)
           rl.clear_background(rl.BLACK)
@@ -880,6 +909,8 @@ class GuiApplication(IQAppHooks):
       pass
 
   def font(self, font_weight: FontWeight = FontWeight.NORMAL) -> rl.Font:
+    if font_weight not in self._fonts and self._fonts:
+      self._fonts[font_weight] = self._load_font(font_weight)
     return self._fonts[font_weight]
 
   @property
@@ -919,21 +950,26 @@ class GuiApplication(IQAppHooks):
       self._modal_overlay_shown = False
       return False
 
-  def _load_fonts(self):
+  def _load_font(self, font_weight: FontWeight) -> rl.Font:
     with as_file(FONT_DIR) as fspath:
-      for font_weight_file in FontWeight:
-        fnt_path = fspath / font_weight_file
-        if fnt_path.is_file():
-          font = rl.load_font(fnt_path.as_posix())
-        else:
-          source_name = FONT_SOURCE_FILES[font_weight_file]
-          source_path = fspath / source_name
-          cloudlog.warning(f"font atlas missing for {font_weight_file}, loading source font {source_name}")
-          font = rl.load_font_ex(source_path.as_posix(), 120, None, 0)
-        if font_weight_file != FontWeight.UNIFONT:
-          rl.gen_texture_mipmaps(font.texture)
-          rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
-        self._fonts[font_weight_file] = font
+      fnt_path = fspath / font_weight
+      if fnt_path.is_file():
+        font = rl.load_font(fnt_path.as_posix())
+      else:
+        source_name = FONT_SOURCE_FILES[font_weight]
+        source_path = fspath / source_name
+        cloudlog.warning(f"font atlas missing for {font_weight}, loading source font {source_name}")
+        font = rl.load_font_ex(source_path.as_posix(), 120, None, 0)
+      _release_font_cpu_images(font)
+      if font_weight != FontWeight.UNIFONT:
+        rl.gen_texture_mipmaps(font.texture)
+        rl.set_texture_filter(font.texture, rl.TextureFilter.TEXTURE_FILTER_TRILINEAR)
+      return font
+
+  def _load_fonts(self):
+    for font_weight in FontWeight:
+      if font_weight not in (FontWeight.LIGHT, FontWeight.AUDIOWIDE):
+        self._fonts[font_weight] = self._load_font(font_weight)
     rl.gui_set_font(self._fonts[FontWeight.NORMAL])
 
   def _set_styles(self):

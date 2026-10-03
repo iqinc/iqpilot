@@ -90,6 +90,44 @@ class TestCanChecksums:
       assert parser.vl['LKAS_HUD']['CHECKSUM'] == std
       assert parser.vl['LKAS_HUD_A']['CHECKSUM'] == ext
 
+  def test_honda_checksum_high_extended(self):
+    """Extended CAN ids above 0x100000 use a +10 checksum constant instead of +3"""
+    dbc_file = "honda_common_canfd_generated"
+    msgs = [("LANE_PATH", 0), ("RADAR_LEAD", 0)]
+    parser = CANParser(dbc_file, msgs, 0)
+    packer = CANPacker(dbc_file)
+
+    lane_path_values = {
+      'MUX': 1,
+      'PATH_OFFSET_1': 0,
+      'PATH_OFFSET_2': 0,
+      'PATH_OFFSET_3': 2047,
+      'PATH_OFFSET_4': 2047,
+    }
+    radar_lead_values = {
+      'CNTR_REF': 2,
+      'SET_ME_X01': 1,
+      'TARGET_SPEED_MAYBE': 140,
+      'LEFT_LANE': 3,
+      'RIGHT_LANE': 3,
+      'LANE_PATH_LENGTH': 6,
+    }
+
+    # known correct checksums according to the above values
+    checksum_lane_path = [14, 13, 12, 11]
+    checksum_radar_lead = [4, 3, 2, 1]
+
+    for lane_path, radar_lead in zip(checksum_lane_path, checksum_radar_lead, strict=True):
+      msgs = [
+        packer.make_can_msg("LANE_PATH", 0, lane_path_values),
+        packer.make_can_msg("RADAR_LEAD", 0, radar_lead_values),
+      ]
+      parser.update([0, msgs])
+
+      assert parser.vl['LANE_PATH']['CHECKSUM'] == lane_path
+      assert parser.vl['RADAR_LEAD']['CHECKSUM'] == radar_lead
+    assert parser.can_valid
+
   def verify_volkswagen_mqb_crc(self, subtests, msg_name: str, msg_addr: int, test_messages: list[bytes], counter_field: str = 'COUNTER'):
     """Test AUTOSAR E2E Profile 2 CRCs"""
     assert len(test_messages) == 16  # All counter values must be tested

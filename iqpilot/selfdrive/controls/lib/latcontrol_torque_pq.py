@@ -1,3 +1,6 @@
+"""
+Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
+"""
 import math
 import numpy as np
 from collections import deque
@@ -43,6 +46,8 @@ def _assist_comp(v_ego_ms):
 
 
 class LatControlTorquePQ(LatControl):
+  supports_legacy_curvature_lookahead = True
+
   def __init__(self, CP, CP_IQ, CI, dt):
     super().__init__(CP, CP_IQ, CI, dt)
     self.torque_params = CP.lateralTuning.torque.as_builder()
@@ -59,7 +64,6 @@ class LatControlTorquePQ(LatControl):
     self.lookahead_frames = int(JERK_LOOKAHEAD_SECONDS / self.dt)
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
     self.lateral_acceleration_slew_limiter = LateralAccelerationSlewLimiter(Params().get_bool("IQLateralAccelSlew"))
-    self.curvature_lookahead_enabled = Params().get_bool("IQLateralCurvatureLookahead")
 
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     if FREEZE_LIVE_TORQUE_PARAMS:
@@ -73,15 +77,12 @@ class LatControlTorquePQ(LatControl):
     self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
                         self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
-  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay,
-             lookahead_curvature=None):
+  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
     measured_curvature = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)
     measurement = measured_curvature * CS.vEgo ** 2
     target_curvature = desired_curvature
-    if self.curvature_lookahead_enabled and lookahead_curvature is not None:
-      target_curvature = lookahead_curvature
     if not active and self.lateral_acceleration_slew_limiter.enabled:
       self.lateral_acceleration_slew_limiter.reset(target_curvature * CS.vEgo ** 2)
     limited_curvature = self.lateral_acceleration_slew_limiter.update(target_curvature, CS.vEgo, self.dt)

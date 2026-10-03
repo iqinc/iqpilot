@@ -14,7 +14,7 @@ int numDecimals(double value) {
 }
 }
 
-// cabana::Msg
+
 
 cabana::Msg::~Msg() {
   for (auto s : sigs) {
@@ -77,7 +77,7 @@ int cabana::Msg::indexOf(const cabana::Signal *sig) const {
 
 std::string cabana::Msg::newSignalName() {
   std::string new_name;
-  for (int i = 1; /**/; ++i) {
+  for (int i = 1;  ; ++i) {
     new_name = "NEW_SIGNAL_" + std::to_string(i);
     if (sig(new_name) == nullptr) break;
   }
@@ -91,7 +91,7 @@ void cabana::Msg::update() {
   mask.assign(size, 0x00);
   multiplexor = nullptr;
 
-  // sort signals
+
   std::sort(sigs.begin(), sigs.end(), [](auto l, auto r) {
     return std::tie(r->type, l->multiplex_value, l->start_bit, l->name) <
            std::tie(l->type, r->multiplex_value, r->start_bit, r->name);
@@ -103,7 +103,7 @@ void cabana::Msg::update() {
     }
     sig->update();
 
-    // update mask
+
     int i = sig->msb / 8;
     int bits = sig->size;
     while (i >= 0 && i < size && bits > 0) {
@@ -131,7 +131,7 @@ void cabana::Msg::update() {
   }
 }
 
-// cabana::Signal
+
 
 void cabana::Signal::update() {
   updateMsbLsb(*this);
@@ -150,7 +150,7 @@ void cabana::Signal::update() {
 }
 
 std::string cabana::Signal::formatValue(double value, bool with_unit) const {
-  // Show enum string
+
   int64_t raw_value = round((value - offset) / factor);
   for (const auto &[val, desc] : val_desc) {
     if (std::abs(raw_value - val) < 1e-6) {
@@ -185,7 +185,7 @@ bool cabana::Signal::operator==(const cabana::Signal &other) const {
          multiplex_value == other.multiplex_value && type == other.type && receiver_name == other.receiver_name;
 }
 
-// helper functions
+
 
 double get_raw_value(const uint8_t *data, size_t data_size, const cabana::Signal &sig) {
   const int msb_byte = sig.msb / 8;
@@ -194,11 +194,11 @@ double get_raw_value(const uint8_t *data, size_t data_size, const cabana::Signal
   const int lsb_byte = sig.lsb / 8;
   uint64_t val = 0;
 
-  // Fast path: signal fits in a single byte
+
   if (msb_byte == lsb_byte) {
     val = (data[msb_byte] >> (sig.lsb & 7)) & ((1ULL << sig.size) - 1);
   } else {
-    // Multi-byte case: signal spans across multiple bytes
+
     int bits = sig.size;
     int i = msb_byte;
     const int step = sig.is_little_endian ? -1 : 1;
@@ -212,7 +212,7 @@ double get_raw_value(const uint8_t *data, size_t data_size, const cabana::Signal
     }
   }
 
-  // Sign extension (if needed)
+
   if (sig.is_signed && (val & (1ULL << (sig.size - 1)))) {
     val |= ~((1ULL << sig.size) - 1);
   }

@@ -1,6 +1,7 @@
 from iqpilot.cereal import car
 
-from iqpilot.selfdrive.selfdrived.selfdrived import _cleanup_startup_params, get_sanitize_int_param
+from iqpilot.selfdrive.longitudinal_settings import get_valid_personality
+from iqpilot.selfdrive.selfdrived.selfdrived import _cleanup_startup_params
 
 
 class DummyParams:
@@ -36,5 +37,5 @@ class TestLongitudinalPrefPersistence:
         self.value = value
 
     params = ParamsWithInvalidPersonality()
-    assert get_sanitize_int_param("LongitudinalPersonality", 0, 2, params) == 2
+    assert get_valid_personality(params) == 2
     assert params.value == 2

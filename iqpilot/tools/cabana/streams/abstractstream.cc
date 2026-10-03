@@ -1,26 +1,51 @@
 #include "tools/cabana/streams/abstractstream.h"
-#include "tools/cabana/dbc/dbcqt.h"
 
+#include <cassert>
 #include <limits>
 #include <utility>
 
-#include <QApplication>
 #include "common/timing.h"
 #include "tools/cabana/settings.h"
 
-static const int EVENT_NEXT_BUFFER_SIZE = 6 * 1024 * 1024;  // 6MB
+static const int EVENT_NEXT_BUFFER_SIZE = 6 * 1024 * 1024;
 
 AbstractStream *can = nullptr;
 
-AbstractStream::AbstractStream(QObject *parent) : QObject(parent) {
-  assert(parent != nullptr);
+AbstractStream::AbstractStream() {
   event_buffer_ = std::make_unique<MonotonicBuffer>(EVENT_NEXT_BUFFER_SIZE);
 
-  QObject::connect(this, &AbstractStream::privateUpdateLastMsgsSignal, this, &AbstractStream::updateLastMessages, Qt::QueuedConnection);
-  QObject::connect(this, &AbstractStream::seekedTo, this, &AbstractStream::updateLastMsgsTo);
-  QObject::connect(this, &AbstractStream::seeking, this, [this](double sec) { current_sec_ = sec; });
-  QObject::connect(dbcNotifier(), &QtDBCNotifier::DBCFileChanged, this, &AbstractStream::updateMasks);
-  QObject::connect(dbcNotifier(), &QtDBCNotifier::maskUpdated, this, &AbstractStream::updateMasks);
+
+  connections_.push_back(seekedTo.connect([this](double sec) { updateLastMsgsTo(sec); }));
+  connections_.push_back(seeking.connect([this](double sec) { current_sec_ = sec; }));
+  connections_.push_back(dbc()->fileChanged.connect([this]() { updateMasks(); }));
+  connections_.push_back(dbc()->maskUpdated.connect([this]() { updateMasks(); }));
+}
+
+void AbstractStream::postToMainThread(std::function<void()> fn) {
+  utils::runOnMainThread([alive = std::weak_ptr<bool>(alive_), fn = std::move(fn)]() {
+    if (!alive.expired()) fn();
+  });
+}
+
+void AbstractStream::postToMainThreadAndWait(std::function<void()> fn) {
+  assert(!utils::isMainThread());
+  std::unique_lock lock(mutex_);
+  if (exiting_) return;
+  auto done = std::make_shared<bool>(false);
+  postToMainThread([this, alive = std::weak_ptr<bool>(alive_), done, fn = std::move(fn)]() {
+    fn();
+    if (alive.expired()) return;
+    std::lock_guard lk(mutex_);
+    *done = true;
+    wait_cv_.notify_all();
+  });
+  wait_cv_.wait(lock, [&]() { return *done || exiting_; });
+}
+
+void AbstractStream::cancelWaits() {
+  std::lock_guard lk(mutex_);
+  exiting_ = true;
+  wait_cv_.notify_all();
 }
 
 void AbstractStream::updateMasks() {
@@ -34,7 +59,7 @@ void AbstractStream::updateMasks() {
       masks_[{.source = (uint8_t)s, .address = address}] = m.mask;
     }
   }
-  // clear bit change counts
+
   for (auto &[id, m] : messages_) {
     auto &mask = masks_[id];
     const int size = std::min(mask.size(), m.last_changes.size());
@@ -97,9 +122,8 @@ void AbstractStream::updateLastMessages() {
 
   if (sources.size() != prev_src_size) {
     updateMasks();
-    emit sourcesUpdated(sources);
   }
-  emit msgsReceived(&msgs, prev_msg_size != last_msgs.size());
+  msgsReceived(&msgs, prev_msg_size != last_msgs.size());
 }
 
 void AbstractStream::setTimeRange(const std::optional<std::pair<double, double>> &range) {
@@ -107,7 +131,7 @@ void AbstractStream::setTimeRange(const std::optional<std::pair<double, double>>
   if (time_range_ && (current_sec_ < time_range_->first || current_sec_ >= time_range_->second)) {
     seekTo(time_range_->first);
   }
-  emit timeRangeChanged(time_range_);
+  timeRangeChanged(time_range_);
 }
 
 void AbstractStream::updateEvent(const MessageId &id, double sec, const uint8_t *data, uint8_t size) {
@@ -132,7 +156,7 @@ bool AbstractStream::isMessageActive(const MessageId &id) const {
   if (id.source == INVALID_SOURCE) {
     return false;
   }
-  // Check if the message is active based on time difference and frequency
+
   const auto &m = lastMessage(id);
   float delta = currentSec() - m.ts;
 
@@ -140,7 +164,7 @@ bool AbstractStream::isMessageActive(const MessageId &id) const {
     return delta < 1.5;
   }
 
-  return delta < (5.0 / m.freq) + (1.0 / settings.fps);
+  return delta < (5.0 / m.freq) + (1.0 / STREAM_UPDATE_FPS);
 }
 
 void AbstractStream::updateLastMsgsTo(double sec) {
@@ -154,7 +178,7 @@ void AbstractStream::updateLastMsgsTo(double sec) {
     if (it != ev.begin()) {
       auto &m = msgs[id];
       double freq = 0;
-      // Keep suppressed bits.
+
       if (auto old_m = messages_.find(id); old_m != messages_.end()) {
         freq = old_m->second.freq;
         m.last_changes.reserve(old_m->second.last_changes.size());
@@ -175,16 +199,16 @@ void AbstractStream::updateLastMsgsTo(double sec) {
                     std::any_of(messages_.cbegin(), messages_.cend(),
                                 [this](const auto &m) { return !last_msgs.count(m.first); });
   last_msgs = messages_;
-  emit msgsReceived(nullptr, id_changed);
+  msgsReceived(nullptr, id_changed);
 
   std::lock_guard lk(mutex_);
   seek_finished_ = true;
-  seek_finished_cv_.notify_one();
+  wait_cv_.notify_all();
 }
 
 void AbstractStream::waitForSeekFinshed() {
   std::unique_lock lock(mutex_);
-  seek_finished_cv_.wait(lock, [this]() { return seek_finished_; });
+  wait_cv_.wait(lock, [this]() { return seek_finished_ || exiting_; });
   seek_finished_ = false;
 }
 
@@ -203,11 +227,15 @@ void AbstractStream::mergeEvents(const std::vector<const CanEvent *> &events) {
   static MessageEventsMap msg_events;
   std::for_each(msg_events.begin(), msg_events.end(), [](auto &e) { e.second.clear(); });
 
-  // Group events by message ID
+
   for (auto e : events) {
     msg_events[{.source = e->src, .address = e->address}].push_back(e);
   }
 
+  insertEvents(events, msg_events);
+}
+
+void AbstractStream::insertEvents(const std::vector<const CanEvent *> &events, const MessageEventsMap &msg_events) {
   if (!events.empty()) {
     for (const auto &[id, new_e] : msg_events) {
       if (!new_e.empty()) {
@@ -218,16 +246,16 @@ void AbstractStream::mergeEvents(const std::vector<const CanEvent *> &events) {
     }
     auto pos = std::upper_bound(all_events_.cbegin(), all_events_.cend(), events.front()->mono_time, CompareCanEvent());
     all_events_.insert(pos, events.cbegin(), events.cend());
-    emit eventsMerged(msg_events);
+    eventsMerged(msg_events);
   }
 }
 
 std::pair<CanEventIter, CanEventIter> AbstractStream::eventsInRange(const MessageId &id, std::optional<std::pair<double, double>> time_range) const {
-  const auto &events = can->events(id);
+  const auto &events = this->events(id);
   if (!time_range) return {events.begin(), events.end()};
 
-  auto first = std::lower_bound(events.begin(), events.end(), can->toMonoTime(time_range->first), CompareCanEvent());
-  auto last = std::upper_bound(first, events.end(), can->toMonoTime(time_range->second), CompareCanEvent());
+  auto first = std::lower_bound(events.begin(), events.end(), toMonoTime(time_range->first), CompareCanEvent());
+  auto last = std::upper_bound(first, events.end(), toMonoTime(time_range->second), CompareCanEvent());
   return {first, last};
 }
 
@@ -248,7 +276,7 @@ inline CabanaColor blend(const CabanaColor &a, const CabanaColor &b) {
   return CabanaColor((a.red() + b.red()) / 2, (a.green() + b.green()) / 2, (a.blue() + b.blue()) / 2, (a.alpha() + b.alpha()) / 2);
 }
 
-// Calculate the frequency from the past one minute data
+
 double calc_freq(const MessageId &msg_id, double current_sec) {
   auto [first, last] = can->eventsInRange(msg_id, std::make_pair(current_sec - 59, current_sec));
   int count = std::distance(first, last);
@@ -258,7 +286,7 @@ double calc_freq(const MessageId &msg_id, double current_sec) {
   return duration > std::numeric_limits<double>::epsilon() ? (count - 1) / duration : 0.0;
 }
 
-}  // namespace
+}
 
 void CanData::compute(const MessageId &msg_id, const uint8_t *can_data, const int size, double current_sec,
                       double playback_speed, const std::vector<uint8_t> &mask, double in_freq) {
@@ -291,21 +319,21 @@ void CanData::compute(const MessageId &msg_id, const uint8_t *can_data, const in
       const uint8_t cur = can_data[i] & mask_byte;
       if (last != cur) {
         const int delta = cur - last;
-        // Keep track if signal is changing randomly, or mostly moving in the same direction
+
         last_change.same_delta_counter += std::signbit(delta) == std::signbit(last_change.delta) ? 1 : -4;
         last_change.same_delta_counter = std::clamp(last_change.same_delta_counter, 0, 16);
 
         const double delta_t = ts - last_change.ts;
-        // Mostly moves in the same direction, color based on delta up/down
+
         if (delta_t * freq > periodic_threshold || last_change.same_delta_counter > 8) {
-          // Last change was while ago, choose color based on delta up or down
+
           colors[i] = getColor(cur > last ? CYAN : RED);
         } else {
-          // Periodic changes
+
           colors[i] = blend(colors[i], getColor(GREYISH_BLUE));
         }
 
-        // Track bit level changes
+
         auto &row_bit_flips = bit_flip_counts[i];
         const uint8_t diff = (cur ^ last);
         for (int bit = 0; bit < 8; bit++) {
@@ -317,7 +345,7 @@ void CanData::compute(const MessageId &msg_id, const uint8_t *can_data, const in
         last_change.ts = ts;
         last_change.delta = delta;
       } else {
-        // Fade out
+
         colors[i].setAlphaF(std::max(0.0f, colors[i].alphaF() - alpha_delta));
       }
     }

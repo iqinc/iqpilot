@@ -301,7 +301,9 @@ def main() -> NoReturn:
   gpio_init(GPIO.GNSS_PWR_EN, True)
   gpio_set(GPIO.GNSS_PWR_EN, True)
 
-  pm = messaging.PubMaster(['qcomGnss', 'gpsLocation'])
+  from iqpilot.system.phonegps.bridge import gps_publish_service
+  gps_service = gps_publish_service('gpsLocation')
+  pm = messaging.PubMaster(['qcomGnss', gps_service])
 
   while 1:
     if os.path.exists(ASSIST_DATA_FILE) and want_assistance:
@@ -407,7 +409,7 @@ def main() -> NoReturn:
       if gps.hasFix:
         want_assistance = False
         stop_download_event.set()
-      pm.send('gpsLocation', msg)
+      pm.send(gps_service, msg)
 
     elif log_type == LOG_GNSS_OEMDRE_SVPOLY_REPORT:
       msg = messaging.new_message('qcomGnss', valid=True)

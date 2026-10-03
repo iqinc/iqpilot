@@ -5,8 +5,13 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 from datetime import datetime
 from types import SimpleNamespace
 
+import pytest
+
+from iqpilot.cereal import car, custom
 from iqpilot.common.constants import CV
 from iqpilot.common.slc_variables import OFFSET_MAP_IMPERIAL
+from iqpilot.selfdrive.car.cruise import VCruiseHelper
+from iqpilot.selfdrive.controls.lib.iq_longitudinal_planner import LongitudinalPlannerIQ
 from iqpilot.selfdrive.controls.lib.slc_vcruise import SLCVCruise, CRUISING_SPEED
 from iqpilot.selfdrive.controls.lib.speed_limit_controller import SpeedLimitController, POLICY_MAP_DATA_PRIORITY, POLICY_COMBINED
 
@@ -60,6 +65,9 @@ class _FakeSLC:
 
   def update_override(self, *_args, **_kwargs):
     self.update_override_calls += 1
+
+  def reset_override(self, _sm):
+    self.overridden_speed = 0.0
 
   def get_offset(self, _is_metric):
     return self._offset
@@ -259,6 +267,200 @@ def test_slc_vcruise_does_not_auto_raise_when_higher_confirmation_enabled():
   out = slc.update(apply_enabled=True, now=None, time_validated=True, v_cruise=v_cruise, v_ego=13.5, sm=sm)
 
   assert out == v_cruise
+
+
+@pytest.fixture(params=[True, False], ids=["metric", "imperial"])
+def set_speed_slc(request, monkeypatch):
+  monkeypatch.setattr("iqpilot.selfdrive.controls.lib.slc_vcruise.Params", FakeParams)
+  slc = SLCVCruise()
+  slc._maybe_log_debug = lambda *_args: None
+  slc.slc.update_gps = lambda _sm: None
+  slc.slc._resolver.update_map_data = lambda *_args: None
+  params = _base_slc_params_controller() | {
+    "speed_limit_controller": True,
+    "speed_limit_mode": 3,
+    "show_speed_limits": False,
+    "is_metric": request.param,
+    "slc_online_filler": False,
+    "slc_fallback_experimental_mode": False,
+    "speed_limit_controller_override_manual": False,
+    "speed_limit_controller_override_set_speed": True,
+  }
+  slc._get_slc_params = lambda: params
+  unit = CV.KPH_TO_MS if request.param else CV.MPH_TO_MS
+  slc.slc._resolver.map_speed_limit = 50 * unit
+  sm = _FakeSM(_build_sm(v_ego_cluster=50 * unit))
+  sm["iqCarState"].slcSetSpeedRequestId = 0
+  sm["iqCarState"].slcSetSpeedGestureId = 0
+  sm["iqCarState"].slcSetSpeedRequestKph = 0.0
+
+  def step(speed, increase=False, new_gesture=False):
+    sm["carState"].vCruiseCluster = speed * unit * CV.MS_TO_KPH
+    if new_gesture:
+      sm["iqCarState"].slcSetSpeedGestureId += 1
+    if increase:
+      sm["iqCarState"].slcSetSpeedRequestId += 1
+      sm["iqCarState"].slcSetSpeedRequestKph = sm["carState"].vCruiseCluster
+    target = slc.update(sm["selfdriveState"].enabled, None, True, speed * unit, 50 * unit, sm)
+    return min(speed * unit, target) / unit
+
+  step(50)
+  return SimpleNamespace(slc=slc, params=params, sm=sm, unit=unit, step=step)
+
+
+@pytest.mark.parametrize("confirm_higher", [False, True])
+def test_set_speed_override_tracks_driver_adjustments(set_speed_slc, confirm_higher):
+  system = set_speed_slc
+  system.params["speed_limit_confirmation_higher"] = confirm_higher
+  assert system.step(50, new_gesture=True) == pytest.approx(50)
+  assert system.step(55, increase=True) == pytest.approx(55)
+  assert system.step(60, increase=True) == pytest.approx(60)
+  assert system.step(60) == pytest.approx(60)
+  assert system.step(55) == pytest.approx(55)
+  assert system.step(50) == pytest.approx(50)
+  assert not system.slc.slc.override_slc
+  assert system.step(45) == pytest.approx(45)
+  assert system.step(60) == pytest.approx(50)
+  assert system.step(61, increase=True, new_gesture=True) == pytest.approx(61)
+
+
+def test_set_speed_override_ignores_automatic_speed_changes(set_speed_slc):
+  system = set_speed_slc
+  assert system.step(80) == pytest.approx(50)
+  system.slc.slc._resolver.map_speed_limit = 60 * system.unit
+  assert system.step(60) == pytest.approx(60)
+  assert system.step(80) == pytest.approx(60)
+  assert system.slc.slc.overridden_speed == 0
+
+
+@pytest.mark.parametrize("limit", [40, 55])
+def test_set_speed_override_resets_on_accepted_limit(set_speed_slc, limit):
+  system = set_speed_slc
+  assert system.step(60, increase=True, new_gesture=True) == pytest.approx(60)
+  system.slc.slc._resolver.map_speed_limit = limit * system.unit
+  assert system.step(65, increase=True) == pytest.approx(limit)
+  assert system.step(70, increase=True) == pytest.approx(limit)
+  assert system.step(71, increase=True, new_gesture=True) == pytest.approx(71)
+
+
+@pytest.mark.parametrize("limit,button", [(40, "decelCruise"), (55, "accelCruise")])
+def test_set_speed_override_does_not_reuse_confirmation_gesture(set_speed_slc, limit, button):
+  system = set_speed_slc
+  system.params["speed_limit_confirmation_higher"] = True
+  system.params["speed_limit_confirmation_lower"] = True
+  system.slc.slc._resolver.map_speed_limit = limit * system.unit
+  system.step(50, new_gesture=True)
+  assert system.slc.assist_state == custom.IQPlan.SpeedLimit.AssistState.preActive
+  assert system.step(60, increase=True) == pytest.approx(50)
+  system.sm["carState"].buttonEvents = [car.CarState.ButtonEvent(type=button, pressed=False)]
+  assert system.step(61, increase=True) == pytest.approx(limit)
+  system.sm["carState"].buttonEvents = []
+  assert system.step(65, increase=True) == pytest.approx(limit)
+  assert system.step(66, increase=True, new_gesture=True) == pytest.approx(66)
+
+
+@pytest.mark.parametrize("reset", ["disengage", "information", "off", "missing_limit"])
+def test_set_speed_override_cannot_survive_reset(set_speed_slc, reset):
+  system = set_speed_slc
+  assert system.step(60, increase=True, new_gesture=True) == pytest.approx(60)
+  if reset == "disengage":
+    system.sm["selfdriveState"].enabled = False
+  elif reset in ("information", "off"):
+    system.params["speed_limit_controller"] = False
+    system.params["show_speed_limits"] = reset == "information"
+  else:
+    system.slc.slc._resolver.map_speed_limit = 0
+  system.step(60)
+  assert system.slc.slc.overridden_speed == 0
+  system.sm["selfdriveState"].enabled = True
+  system.params["speed_limit_controller"] = True
+  system.slc.slc._resolver.map_speed_limit = 50 * system.unit
+  assert system.step(60) == pytest.approx(50)
+  assert system.step(65, increase=True) == pytest.approx(50)
+  assert system.step(66, increase=True, new_gesture=True) == pytest.approx(66)
+
+
+def test_set_speed_override_respects_offset(set_speed_slc):
+  system = set_speed_slc
+  system.slc.slc.params.put("speed_limit_offset1", 10)
+  system.slc.slc.params.put("speed_limit_offset2", 10)
+  system.slc.slc.params.put("speed_limit_offset3", 10)
+  system.slc.slc._offset_cache.clear()
+  system.step(50, new_gesture=True)
+  assert system.step(52, increase=True) == pytest.approx(52)
+  assert not system.slc.slc.override_slc
+  assert system.step(56, increase=True) == pytest.approx(56)
+  assert system.step(55) == pytest.approx(55)
+  assert not system.slc.slc.override_slc
+
+
+def test_manual_override_still_requires_accelerator(set_speed_slc):
+  system = set_speed_slc
+  system.params["speed_limit_controller_override_set_speed"] = False
+  system.params["speed_limit_controller_override_manual"] = True
+  assert system.step(60, increase=True, new_gesture=True) == pytest.approx(50)
+  system.sm["carState"].gasPressed = True
+  system.sm["carState"].vEgoCluster = 55 * system.unit
+  system.slc.slc.update_override(60 * system.unit, 0, 55 * system.unit, 0, system.sm, system.params, system.params["is_metric"])
+  assert system.slc.slc.overridden_speed == pytest.approx(55 * system.unit)
+  system.sm["carState"].gasPressed = False
+  system.slc.slc.update_override(60 * system.unit, 0, 55 * system.unit, 0, system.sm, system.params, system.params["is_metric"])
+  assert system.slc.slc.overridden_speed == pytest.approx(55 * system.unit)
+
+
+@pytest.mark.parametrize("pcm_cruise", [False, True])
+def test_driver_increase_reaches_slc_without_transient_button_events(set_speed_slc, pcm_cruise):
+  system = set_speed_slc
+  helper = VCruiseHelper(car.CarParams(pcmCruise=pcm_cruise), custom.IQCarParams(pcmCruiseSpeed=True))
+  helper.set_speed_to_limit = False
+  helper.v_cruise_kph = helper.v_cruise_cluster_kph = 50 * system.unit * CV.MS_TO_KPH
+  state = car.CarState(cruiseState={"available": True, "speed": 50 * system.unit, "speedCluster": 50 * system.unit})
+  helper.update_v_cruise(state, True, system.params["is_metric"])
+  state.buttonEvents = [car.CarState.ButtonEvent(type="accelCruise", pressed=True)]
+  helper.update_v_cruise(state, True, system.params["is_metric"])
+  state.buttonEvents = [car.CarState.ButtonEvent(type="accelCruise", pressed=False)]
+  if pcm_cruise:
+    state.cruiseState.speed = state.cruiseState.speedCluster = 51 * system.unit
+  helper.update_v_cruise(state, True, system.params["is_metric"])
+  state.buttonEvents = []
+  for _ in range(5):
+    helper.update_v_cruise(state, True, system.params["is_metric"])
+  system.sm["iqCarState"] = custom.IQCarState.new_message(
+    slcSetSpeedRequestId=helper.slc_set_speed_request_id,
+    slcSetSpeedGestureId=helper.slc_set_speed_gesture_id,
+    slcSetSpeedRequestKph=helper.slc_set_speed_request_kph,
+  )
+  requested = helper.v_cruise_kph * CV.KPH_TO_MS / system.unit
+  assert requested > 50
+  assert system.step(requested) == pytest.approx(requested)
+
+
+def test_set_speed_override_keeps_navigation_constraint(set_speed_slc):
+  system = set_speed_slc
+  assert system.step(60, increase=True, new_gesture=True) == pytest.approx(60)
+  planner = LongitudinalPlannerIQ.__new__(LongitudinalPlannerIQ)
+  planner.slimit = system.slc
+  planner.iq_dynamic = SimpleNamespace(
+    set_slc_experimental_mode=lambda _mode: None, update=lambda _sm: None, force_stop_requested=lambda: False)
+  planner.force_stop_timer = 0.0
+  planner.override_force_stop_timer = 0.0
+  planner.override_force_stop = False
+  system.sm["iqNavState"] = SimpleNamespace(longitudinalEngaged=False, valid=False)
+  assert planner.update_targets(system.sm, 50 * system.unit, 60 * system.unit) == pytest.approx(60 * system.unit)
+  system.sm["iqNavState"] = SimpleNamespace(longitudinalEngaged=True, valid=True, speedTarget=40 * system.unit)
+  assert planner.update_targets(system.sm, 50 * system.unit, 60 * system.unit) == pytest.approx(40 * system.unit)
+
+
+def test_set_speed_override_cannot_bypass_construction_zone(set_speed_slc):
+  system = set_speed_slc
+  assert system.step(60, increase=True, new_gesture=True) == pytest.approx(60)
+  system.params["construction_zone_assist"] = True
+  system.params["construction_zone_speed"] = 40
+  system.sm["iqConstructionZone"] = SimpleNamespace(active=True)
+  system.sm.alive["iqConstructionZone"] = True
+  assert system.step(60) == pytest.approx(40)
+  assert system.step(65, increase=True, new_gesture=True) == pytest.approx(40)
+  assert not system.slc.slc.override_slc
 
 
 class _FakeSM(dict):
@@ -461,3 +663,88 @@ def test_construction_zone_fires_event_once_per_zone_entry():
   assert event not in controller.pending_events
   controller.update_limits(0.0, None, True, 33.0, 30.0, _construction_sm(), slc_params)
   assert event in controller.pending_events
+
+
+@pytest.mark.parametrize("alive,valid,limit_valid,limit", [
+  (False, True, True, 25.0), (True, False, True, 25.0), (True, True, False, 25.0),
+  (True, True, True, 0.0), (True, True, True, float("nan")), (True, True, True, float("inf")),
+])
+def test_navigation_mapbox_limit_requires_fresh_valid_data(alive, valid, limit_valid, limit):
+  controller = _construction_controller()
+  controller.get_tomtom_speed_limit = lambda *_args: None
+  controller.mapbox_limit = 20.0
+  sm = _FakeSM(_build_sm())
+  sm["iqNavState"] = custom.IQNavState.new_message(mapboxSpeedLimit=limit, mapboxSpeedLimitValid=limit_valid)
+  sm.alive["iqNavState"] = alive
+  sm.valid = {"iqNavState": valid}
+  controller.update_limits(0, datetime.now(), True, 30, 20, sm, _base_slc_params_controller())
+  assert controller.target == pytest.approx(20.0)
+  assert controller.source == "Mapbox"
+
+
+@pytest.mark.parametrize("policy,expected", [(0, 0.0), (1, 25.0), (2, 25.0)])
+@pytest.mark.parametrize("online_filler", [False, True])
+def test_navigation_mapbox_only_limit_obeys_slc_policy(policy, expected, online_filler):
+  controller = _construction_controller()
+  controller.get_tomtom_speed_limit = lambda *_args: None
+  sm = _FakeSM(_build_sm())
+  sm["iqNavState"] = custom.IQNavState.new_message(mapboxSpeedLimit=25.0, mapboxSpeedLimitValid=True)
+  sm.alive["iqNavState"] = True
+  sm.valid = {"iqNavState": True}
+  params = _base_slc_params_controller() | {"slc_policy": policy, "slc_online_filler": online_filler}
+  controller.update_limits(0, datetime.now(), True, 30, 20, sm, params)
+  assert controller.target == pytest.approx(expected)
+
+
+def test_navigation_mapbox_limit_requires_confirmation_before_override(set_speed_slc):
+  system = set_speed_slc
+  system.params["speed_limit_confirmation_higher"] = True
+  system.slc.slc._resolver.map_speed_limit = 0
+  system.sm["iqNavState"] = custom.IQNavState.new_message(mapboxSpeedLimit=60 * system.unit, mapboxSpeedLimitValid=True)
+  system.sm.alive["iqNavState"] = True
+  system.sm.valid = {"iqNavState": True}
+  system.step(50, new_gesture=True)
+  assert system.slc.assist_state == custom.IQPlan.SpeedLimit.AssistState.preActive
+  assert system.step(70, increase=True) == pytest.approx(50)
+  system.sm["carState"].buttonEvents = [car.CarState.ButtonEvent(type="accelCruise", pressed=False)]
+  assert system.step(71, increase=True) == pytest.approx(60)
+  system.sm["carState"].buttonEvents = []
+  assert system.step(72, increase=True) == pytest.approx(60)
+  assert system.step(73, increase=True, new_gesture=True) == pytest.approx(73)
+
+
+@pytest.mark.parametrize("status, minimum_backoff", [(401, 3000.0), (None, 15.0)])
+def test_mapbox_failure_backs_off_instead_of_retrying_every_second(monkeypatch, status, minimum_backoff):
+  import iqpilot.selfdrive.controls.lib.speed_limit_controller as slc_module
+
+  class InlineExecutor:
+    def submit(self, fn):
+      result = fn()
+      return SimpleNamespace(result=lambda: result, add_done_callback=lambda callback: callback(SimpleNamespace(result=lambda: result)))
+
+  calls = []
+
+  def get(*_args, **_kwargs):
+    calls.append(1)
+    error = slc_module.requests.HTTPError("rejected") if status else slc_module.requests.ConnectionError("down")
+    error.response = SimpleNamespace(status_code=status) if status else None
+    raise error
+
+  monkeypatch.setattr(slc_module, "is_url_pingable", lambda _url: True)
+  controller = SpeedLimitController(FakeParams())
+  controller.executor = InlineExecutor()
+  controller.session = SimpleNamespace(get=get)
+  controller.gps_valid = True
+  controller.mapbox_token = "token"
+  controller.gps_position = {"latitude": 40.0, "longitude": -73.0, "bearing": 0.0}
+  sm = {"carState": SimpleNamespace(steeringAngleDeg=0.0), "vehicleParameters": SimpleNamespace(angleOffsetDeg=0.0)}
+
+  for _ in range(200):
+    controller.get_mapbox_speed_limit(datetime(2026, 9, 20), False, 25.0, sm)
+  assert len(calls) == 1
+  assert controller.mapbox_backoff_until - slc_module.time.monotonic() > minimum_backoff
+
+  controller.mapbox_token = "replacement"
+  controller.segment_distance = 0.0
+  controller.get_mapbox_speed_limit(datetime(2026, 9, 20), False, 25.0, sm)
+  assert len(calls) == 2

@@ -50,7 +50,7 @@ public:
   int precision = 0;
   CabanaColor color;
 
-  // Multiplexed
+
   int multiplex_value = 0;
   Signal *multiplexor = nullptr;
 };
@@ -81,9 +81,9 @@ public:
   cabana::Signal *multiplexor = nullptr;
 };
 
-}  // namespace cabana
+}
 
-// Helper functions
+
 double get_raw_value(const uint8_t *data, size_t data_size, const cabana::Signal &sig);
 void updateMsbLsb(cabana::Signal &s);
 inline int flipBitPos(int start_bit) { return 8 * (start_bit / 8) + 7 - start_bit % 8; }

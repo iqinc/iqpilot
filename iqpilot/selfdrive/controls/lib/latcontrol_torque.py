@@ -8,9 +8,10 @@ from importlib.resources import files
 
 import numpy as np
 
-from iqpilot.cereal import log, custom  # noqa: F401  (custom kept available for downstream imports)
+from iqpilot.cereal import log, custom
 from iqdbc.car import structs
 from iqdbc.car.lateral import FRICTION_THRESHOLD, get_friction
+from iqdbc.car.toyota.values import ToyotaFlags
 from iqdbc.lvbs.car.interfaces import LatControlInputs
 from iqdbc.lvbs.car.iq_lateral import get_friction as get_friction_in_torque_space
 from iqpilot.common.basedir import BASEDIR
@@ -26,15 +27,12 @@ from iqpilot.selfdrive.iqmodeld.parser import safe_exp
 from iqpilot.selfdrive.controls.lib.helpers.nav_torque_pulse import NavTorquePulseBrain
 
 
-# ===== locator =====
 
 TORQUE_NN_MODEL_PATH = os.path.join(BASEDIR, "iqpilot", "iqpilot_iq_nnff_models", "neural_network_lateral_control")
 TORQUE_NN_MODEL_SUBSTITUTE_PATH = files("iqdbc").joinpath("car", "torque_data", "substitute.toml")
 MOCK_MODEL_PATH = os.path.join(TORQUE_NN_MODEL_PATH, "MOCK.json")
 
-# A candidate must reach this score for the fingerprint(+fw) match to count as exact.
 _EXACT_THRESHOLD = 0.99
-# Below this, we fall back to the next candidate ladder rung.
 _ACCEPT_THRESHOLD = 0.9
 
 
@@ -43,7 +41,6 @@ def _score(a: str, b: str) -> float:
 
 
 def _best_model_for(candidate: str) -> tuple[str | None, float]:
-  """Highest-scoring model file for a candidate string; (path, score)."""
   best_path, best_score = None, -1.0
   if not os.path.isdir(TORQUE_NN_MODEL_PATH):
     return best_path, best_score
@@ -68,43 +65,24 @@ def _eps_suffix(CP: structs.CarParams) -> str:
 
 
 def get_nn_model_path(CP: structs.CarParams) -> tuple[str, str, bool]:
-  """Pick the closest NNFF model for this car.
-
-  Angle-steered cars always get MOCK. Otherwise walk a candidate ladder —
-  fingerprint+eps-fw, then fingerprint, then the substitute mapping — accepting
-  the first rung that clears the match threshold; the top rung landing at ~1.0
-  marks an exact (non-fuzzy) match.
-  """
   if CP.steerControlType == structs.CarParams.SteerControlType.angle:
     return MOCK_MODEL_PATH, "MOCK", False
 
   fingerprint = CP.carFingerprint
   suffix = _eps_suffix(CP)
-
-  # rung 1: fingerprint + eps fw (when we have a usable fw string)
   if suffix:
     path, score = _best_model_for(f"{fingerprint} {suffix}")
     if path is not None and fingerprint in path and score >= _ACCEPT_THRESHOLD:
       name = os.path.splitext(os.path.basename(path))[0]
       return path, name, score >= _EXACT_THRESHOLD
-
-  # rung 2: fingerprint alone
   path, score = _best_model_for(fingerprint)
   if path is not None and fingerprint in path and score >= _ACCEPT_THRESHOLD:
     name = os.path.splitext(os.path.basename(path))[0]
     return path, name, score >= _EXACT_THRESHOLD
-
-  # rung 3: substitute mapping — never exact
   path, _ = _best_model_for(_substitute_for(fingerprint))
   name = os.path.splitext(os.path.basename(path))[0] if path else "MOCK"
   return (path or MOCK_MODEL_PATH), name, False
 
-# ===== network =====
-
-# The JSON model format (Twilsonco NNFF) is external: unicode 'σ' names the
-# sigmoid activation, weights/biases live under keys suffixed _W/_b, and the
-# input normalisation is (x - mean) / std. We translate names through a registry
-# and keep the mean/std transposed once at load.
 _MIN_INPUT_LEN = 2
 _FRICTION_PROBE = (10.0, 0.0, 0.2)
 _FRICTION_THRESHOLD = 0.1
@@ -172,7 +150,6 @@ class NNTorqueModel:
     x = (np.array(input_array, dtype=np.float32) - self.input_mean) / self.input_std
     return float(self.forward(x)[0, 0])
 
-  # names kept for callers/tests that introspected the old implementation
   @staticmethod
   def sigmoid(x):
     return _sigmoid(x)
@@ -181,17 +158,17 @@ class NNTorqueModel:
   def identity(x):
     return _identity(x)
 
-# ===== brain =====
-
 PLAN_SAMPLE_START = 5
 LAG_EXTRA_S = 0.0
+JERK_AHEAD_TAU_S = 0.15
+JERK_PARAM_REFRESH = 100
 
 BASE_P = 0.8
 BASE_I = 0.15
 PID_SPEED_BP = [1, 1.5, 2.0, 3.0, 5, 7.5, 10, 15, 30]
 PID_P_GAIN = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, BASE_P]
 
-_JERK_FALLBACK_IDX = 16   # T_IDXS index used when nothing exceeds the lookahead horizon
+_JERK_FALLBACK_IDX = 16
 
 
 def sign(value: float) -> float:
@@ -206,7 +183,6 @@ polarity = sign
 
 
 def _pointwise_jerk(accel_trace, dt_trace) -> list:
-  """Finite-difference jerk from an acceleration trace over per-step dt."""
   delta = np.diff(accel_trace)
   span = min(len(delta), len(dt_trace))
   if span <= 0:
@@ -215,8 +191,6 @@ def _pointwise_jerk(accel_trace, dt_trace) -> list:
 
 
 def sign_locked_min(future_vals, seed_val):
-  """Smallest-magnitude jerk over the horizon, but only if the whole horizon
-  agrees in sign with the seed; a sign disagreement collapses to 0."""
   if not future_vals:
     return seed_val
   agreeing = [v for v in future_vals if sign(v) == sign(seed_val)]
@@ -226,8 +200,6 @@ def sign_locked_min(future_vals, seed_val):
 
 
 class PilotLateralBrain:
-  """Shared lateral-control scaffolding: PID core, model snapshot, and the
-  forward-looking jerk/friction estimates the feed-forward controllers build on."""
 
   def __init__(self, torque_ctrl, cp, cp_iq, car_if):
     del cp_iq
@@ -241,8 +213,6 @@ class PilotLateralBrain:
     self.jerk_goal = 0.0
     self.jerk_obs = 0.0
     self.jerk_ahead = 0.0
-
-    # per-cycle control snapshot
     self._ff = 0.0
     self._pid = PIDController([PID_SPEED_BP, PID_P_GAIN], BASE_I)
     self._pid_log = None
@@ -257,12 +227,15 @@ class PilotLateralBrain:
     self._grav_la = 0.0
     self._capped = False
     self._out_tq = 0.0
-
-    # friction-lookahead tuning
     self.friction_look_ahead_v = [1.4, 2.0]
     self.friction_look_ahead_bp = [9.0, 30.0]
     self.lat_jerk_friction_factor = 0.4
     self.lat_accel_friction_factor = 0.7
+    self._jerk_lp = FirstOrderFilter(0.0, JERK_AHEAD_TAU_S, 0.01)
+    self._jerk_gain = 1.0
+    self._jerk_param_frame = 0
+    self._jerk_param_ok = True
+    self._params = Params()
 
     self.t_diffs = np.diff(ModelConstants.T_IDXS)
     self.desired_lat_jerk_time = cp.steerActuatorDelay + LAG_EXTRA_S
@@ -293,6 +266,16 @@ class PilotLateralBrain:
     self.jerk_ahead = 0.0
 
   def update_calculations(self, car_state, vehicle_model, desired_lat_accel):
+    self._jerk_param_frame += 1
+    if self._jerk_param_ok and self._jerk_param_frame % JERK_PARAM_REFRESH == 0:
+      try:
+        raw = self._params.get("IQLatJerkGain")
+        self._jerk_gain = float(raw) if raw not in (None, b"", "") else 1.0
+      except (ValueError, TypeError):
+        self._jerk_gain = 1.0
+      except Exception:
+        self._jerk_param_ok = False
+        self._jerk_gain = 1.0
     self._reset_jerk_estimates(car_state, vehicle_model)
     if not self.model_valid:
       return
@@ -304,6 +287,7 @@ class PilotLateralBrain:
     forecast = _pointwise_jerk(accel_y, self.t_diffs)
     window = forecast[PLAN_SAMPLE_START:self._horizon_index(car_state.vEgo)]
     self.jerk_ahead = sign_locked_min(window, desired_jerk)
+    self.jerk_ahead = self._jerk_lp.update(self.jerk_ahead) * self._jerk_gain
 
     if self.jerk_ahead == 0.0:
       self.jerk_now = 0.0
@@ -314,14 +298,8 @@ class PilotLateralBrain:
 
 
 TorqueBrainCore = PilotLateralBrain
-
-# ===== nnff =====
-
 LOW_SPEED_X = [0, 10, 20, 30]
 LOW_SPEED_Y = [12, 3, 1, 0]
-
-# NNFF input layout expected by the trained models (dictated by the model data):
-# 4 scalars (v_ego, target, jerk, roll) + past/future target repeats + past/future rolls.
 _ERROR_BLEND_BP = [1.0, 2.0]
 _ERROR_BLEND_V = [0.0, 1.0]
 
@@ -331,8 +309,6 @@ def roll_pitch_adjust(roll, pitch):
 
 
 class _HistoryWindow:
-  """Rolling past/future sample windows the NNFF vector is assembled from."""
-
   def __init__(self, past_times, future_times, jerk_time):
     self.past_times = past_times
     self.future_times = future_times
@@ -369,9 +345,6 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     super().__init__(lac_torque, CP, CP_IQ, CI)
     self.params = Params()
     self.enabled = self.params.get_bool("NeuralNetworkFeedForward")
-    # NNFF applies only when a real trained model for this car is present on disk.
-    # No models shipped (or no match / MOCK) -> skip NNFF entirely and fall back to
-    # the stock torque feed-forward. Models are re-added as they are retrained.
     self.has_nn_model = (CP_IQ.iqLateralNet.model.path != MOCK_MODEL_PATH
                          and os.path.isfile(CP_IQ.iqLateralNet.model.path))
     self.model = NNTorqueModel(CP_IQ.iqLateralNet.model.path) if self.has_nn_model else None
@@ -382,7 +355,6 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     self._window = _HistoryWindow([-0.3, -0.2, -0.1], self.future_times, self.desired_lat_jerk_time)
     self.nav_torque_pulse = NavTorquePulseBrain(lac_torque)
 
-  # -- back-compat views onto the history window -------------------------------
   @property
   def nn_future_times(self):
     return self._window.nn_future_times
@@ -404,7 +376,6 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     super().update_lateral_lag(lag)
     self._window.refresh_lag(self.desired_lat_jerk_time)
 
-  # -- torque-space feedforward (non-NN path used for error scaling) -----------
   def _torque_space(self, lateral_accel, CS, gravity_adjusted):
     return self.torque_from_lateral_accel_in_torque_space(
       LatControlInputs(lateral_accel, self._roll_g, CS.vEgo, CS.aEgo),
@@ -424,7 +395,6 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     self._out_tq = self._pid.update(self._pid_log.error, feedforward=self._ff,
                                            speed=CS.vEgo, freeze_integrator=freeze_integrator)
 
-  # -- NN input assembly -------------------------------------------------------
   def _effective_roll(self, params, calibrated_pose):
     roll = params.roll
     if calibrated_pose is not None:
@@ -442,8 +412,6 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     return [np.interp(t, ModelConstants.T_IDXS, self.model_v2.acceleration.y) for t in adjusted_future_times]
 
   def _query(self, lead_scalar, jerk_scalar, tail):
-    """Build one model input from its 4 leading scalars + the shared tail, then
-    run the interpreter. `tail` is (repeat_value_or_None, extra_pairs...)."""
     head = [self._v, lead_scalar, jerk_scalar, self._roll]
     return self.model.evaluate(head + tail)
 
@@ -456,7 +424,6 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     self._accel_goal = self._want_la + creep * self._want_cv
     self._accel_obs = self._have_la + creep * self._have_cv
 
-    # cache per-cycle scalars the query builder reads
     self._v = CS.vEgo
     self._roll = self._effective_roll(params, calibrated_pose)
     self._window.push(self._roll, self._want_la)
@@ -482,14 +449,12 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     blend = float(np.interp(abs(self._want_la), _ERROR_BLEND_BP, _ERROR_BLEND_V))
     if blend <= 0.0:
       return
-    # error query carries a 0.0 roll slot (not the live roll), so build it directly
     from_error = self.model.evaluate([self._v, self._accel_goal - self._accel_obs,
                                       self.jerk_goal - self.jerk_obs, 0.0])
     live = self._pid_log.error
     if sign(live) == sign(from_error) and abs(live) < abs(from_error):
       self._pid_log.error = live * (1.0 - blend) + from_error * blend
 
-  # -- per-cycle snapshot + entry point ----------------------------------------
   def _snapshot_cycle(self, feedforward_seed, pid_core, pid_trace, torque_goal, torque_actual, roll_bias,
                       deadzone, lat_accel_goal, lat_accel_actual, curvature_goal, curvature_actual,
                       gravity_lat_accel, safety_limited, torque_output) -> None:
@@ -520,17 +485,6 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     return self._pid_log, self._out_tq
 
 
-# At higher speeds (25+mph) we can assume:
-# Lateral acceleration achieved by a specific car correlates to
-# torque applied to the steering rack. It does not correlate to
-# wheel slip, or to speed.
-
-# This controller applies torque to achieve desired lateral
-# accelerations. To compensate for the low speed effects the
-# proportional gain is increased at low speeds by the PID controller.
-# Additionally, there is friction in the steering wheel that needs
-# to be overcome to move it at all, this is compensated for too.
-
 KP = 0.8
 KI = 0.15
 
@@ -544,20 +498,29 @@ LAT_ACCEL_REQUEST_BUFFER_SECONDS = 1.0
 VERSION = 1
 
 class LatControlTorque(LatControl):
+  supports_legacy_curvature_lookahead = True
+
   def __init__(self, CP, CP_IQ, CI, dt):
     super().__init__(CP, CP_IQ, CI, dt)
     self.torque_params = CP.lateralTuning.torque.as_builder()
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.lateral_accel_from_torque = CI.lateral_accel_from_torque()
-    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, rate=1/self.dt)
+    params = Params()
+    self.hkg_reduced_torque_feedback = (CP.brand == "hyundai" and
+                                        params.get_bool("IQHkgReducedTorqueFeedback") and
+                                        not params.get_bool("NeuralNetworkFeedForward"))
+    p_gains = [gain * 0.8 for gain in KP_INTERP] if self.hkg_reduced_torque_feedback else KP_INTERP
+    self.friction_scale = 0.7 if self.hkg_reduced_torque_feedback else 1.0
+    self.pid = PIDController([INTERP_SPEEDS, p_gains], KI, rate=1/self.dt)
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)
     self.lat_accel_request_buffer = deque([0.] * self.lat_accel_request_buffer_len , maxlen=self.lat_accel_request_buffer_len)
     self.lookahead_frames = int(JERK_LOOKAHEAD_SECONDS / self.dt)
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
+    self.setpoint_lead_enabled = CP.brand == "toyota" and bool(CP.flags & ToyotaFlags.TSS2)
+    self.setpoint_lead_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
     self.lateral_acceleration_slew_limiter = LateralAccelerationSlewLimiter(Params().get_bool("IQLateralAccelSlew"))
-    self.curvature_lookahead_enabled = Params().get_bool("IQLateralCurvatureLookahead")
 
     self.nnff_assist = NeuralNetworkFeedForward(self, CP, CP_IQ, CI)
 
@@ -571,15 +534,12 @@ class LatControlTorque(LatControl):
     self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
                         self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
-  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay,
-             lookahead_curvature=None):
+  def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
     measured_curvature = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)
     measurement = measured_curvature * CS.vEgo ** 2
     target_curvature = desired_curvature
-    if self.curvature_lookahead_enabled and lookahead_curvature is not None:
-      target_curvature = lookahead_curvature
     if not active and self.lateral_acceleration_slew_limiter.enabled:
       self.lateral_acceleration_slew_limiter.reset(target_curvature * CS.vEgo ** 2)
     limited_curvature = self.lateral_acceleration_slew_limiter.update(target_curvature, CS.vEgo, self.dt)
@@ -593,6 +553,9 @@ class LatControlTorque(LatControl):
     delay_frames = int(np.clip(lat_delay / self.dt + 1, 1, self.lat_accel_request_buffer_len))
     expected_lateral_accel = self.lat_accel_request_buffer[-delay_frames]
     setpoint = expected_lateral_accel
+    if self.setpoint_lead_enabled:
+      request_ramp_rate = (future_desired_lateral_accel - expected_lateral_accel) / max(lat_delay, self.dt)
+      setpoint += self.setpoint_lead_filter.update(request_ramp_rate) * lat_delay
     error = setpoint - measurement
 
     lookahead_idx = int(np.clip(-delay_frames + self.lookahead_frames, -self.lat_accel_request_buffer_len+1, -2))
@@ -600,23 +563,20 @@ class LatControlTorque(LatControl):
     desired_lateral_jerk = self.jerk_filter.update(raw_lateral_jerk)
     gravity_adjusted_future_lateral_accel = future_desired_lateral_accel - roll_compensation
     ff = gravity_adjusted_future_lateral_accel
-    # latAccelOffset corrects roll compensation bias from device roll misalignment relative to car roll
     ff -= self.torque_params.latAccelOffset
-    ff += get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone, FRICTION_THRESHOLD, self.torque_params)
+    ff += self.friction_scale * get_friction(error + JERK_GAIN * desired_lateral_jerk, lateral_accel_deadzone,
+                                            FRICTION_THRESHOLD, self.torque_params)
 
     if not active:
       output_torque = 0.0
       pid_log.active = False
     else:
-      # do error correction in lateral acceleration space, convert at end to handle non-linear torque responses correctly
       pid_log.error = float(error)
 
       freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
       output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
       output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
 
-      # Lateral acceleration torque controller extension updates
-      # Overrides pid_log.error and output_torque
       pid_log, output_torque = self.nnff_assist.update(CS, VM, self.pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
                                                        future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
                                                        limited_curvature, measured_curvature, steer_limited_by_safety, output_torque)
@@ -626,11 +586,10 @@ class LatControlTorque(LatControl):
       pid_log.i = float(self.pid.i)
       pid_log.d = float(self.pid.d)
       pid_log.f = float(self.pid.f)
-      pid_log.output = float(-output_torque) # TODO: log lat accel?
+      pid_log.output = float(-output_torque)
       pid_log.actualLateralAccel = float(measurement)
       pid_log.desiredLateralAccel = float(setpoint)
       pid_log.desiredLateralJerk = float(desired_lateral_jerk)
       pid_log.saturated = bool(self._check_saturation(self.steer_max - abs(output_torque) < 1e-3, CS, steer_limited_by_safety, curvature_limited))
 
-    # TODO left is positive in this convention
     return -output_torque, 0.0, pid_log

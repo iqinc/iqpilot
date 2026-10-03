@@ -96,17 +96,6 @@ def _scan_segments(root: Path) -> dict[str, dict[int, Path]]:
   return routes
 
 
-def _cameras_present(seg_dir: Path) -> tuple[str, ...]:
-  present = []
-  for cam, filename in CAMERA_FILES.items():
-    try:
-      if (seg_dir / filename).exists():
-        present.append(cam)
-    except OSError:
-      continue
-  return tuple(present)
-
-
 def _format_route_time(ts: float) -> str:
   return format_local_time(ts)
 
@@ -168,7 +157,7 @@ def local_route_qlog_paths(route_name: str, log_root: str | Path | None = None) 
   return paths
 
 
-def compute_route_distance_miles(route_name: str, log_root: str | Path | None = None) -> float:
+def compute_route_distance_miles(route_name: str, log_root: str | Path | None = None, cancel=None) -> float:
   """Total driven distance (miles) by integrating carState.vEgo over the route's qlogs.
 
   Uses vEgo (not GPS) so it still works on cars with broken GPS. Decimated qlog cadence is
@@ -178,9 +167,13 @@ def compute_route_distance_miles(route_name: str, log_root: str | Path | None = 
 
   total_m = 0.0
   for qlog_path in local_route_qlog_paths(route_name, log_root):
+    if cancel is not None and cancel.is_set():
+      break
     last_t: float | None = None
     try:
       for msg in LogReader(qlog_path):
+        if cancel is not None and cancel.is_set():
+          break
         if msg.which() != "carState":
           continue
         t = msg.logMonoTime * 1e-9

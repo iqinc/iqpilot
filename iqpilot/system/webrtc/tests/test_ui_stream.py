@@ -45,8 +45,11 @@ class FakeSubMaster:
 
 class FakeChannel:
   def __init__(self, buffered_amount=0):
-    self.bufferedAmount = buffered_amount
+    self._buffered_amount = buffered_amount
     self.sent = []
+
+  def buffered_amount(self):
+    return self._buffered_amount
 
   def send(self, data):
     self.sent.append(data)

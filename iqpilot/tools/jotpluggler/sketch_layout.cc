@@ -995,28 +995,6 @@ void decode_can_frame(const dbc::Database *can_dbc,
   }
 }
 
-void append_live_can_frame(CanServiceKind service,
-                           const LiveCanFrame &frame,
-                           double time_offset,
-                           const dbc::Database *can_dbc,
-                           SeriesAccumulator *series) {
-  const double tm = frame.mono_time - time_offset;
-  CanMessageData *message = ensure_can_message(service, frame.bus, frame.address, series);
-  message->samples.push_back(CanFrameSample{
-    .mono_time = tm,
-    .bus_time = frame.bus_time,
-    .data = frame.data,
-  });
-  decode_can_frame(can_dbc,
-                   service == CanServiceKind::Can ? "can" : "sendcan",
-                   frame.bus,
-                   frame.address,
-                   reinterpret_cast<const uint8_t *>(frame.data.data()),
-                   frame.data.size(),
-                   tm,
-                   series);
-}
-
 SeriesAccumulator make_series_accumulator(const SchemaIndex &schema) {
   SeriesAccumulator out(schema.fixed_series_count);
   for (size_t i = 0; i < schema.fixed_paths.size(); ++i) {
@@ -1755,11 +1733,6 @@ StreamAccumulator::StreamAccumulator(const std::string &dbc_name, std::optional<
 
 StreamAccumulator::~StreamAccumulator() = default;
 
-void StreamAccumulator::setDbcName(const std::string &dbc_name) {
-  impl_->manual_dbc_name = dbc_name;
-  impl_->refresh_dbc();
-}
-
 void StreamAccumulator::appendEvent(kj::ArrayPtr<const capnp::word> data) {
   with_parseable_event(data, [&](const cereal::Event::Reader &event) {
     const cereal::Event::Which which = event.which();
@@ -1788,22 +1761,6 @@ void StreamAccumulator::appendEvent(kj::ArrayPtr<const capnp::word> data) {
                             alert_status_to_timeline_type(sd.getAlertStatus(), sd.getEnabled()));
     }
   });
-}
-
-void StreamAccumulator::appendCanFrames(CanServiceKind service, const std::vector<LiveCanFrame> &frames) {
-  if (frames.empty()) {
-    return;
-  }
-  if (!impl_->time_offset.has_value()) {
-    impl_->time_offset = frames.front().mono_time;
-  }
-  for (const LiveCanFrame &frame : frames) {
-    append_live_can_frame(service,
-                          frame,
-                          *impl_->time_offset,
-                          impl_->can_dbc ? &*impl_->can_dbc : nullptr,
-                          &impl_->series);
-  }
 }
 
 StreamExtractBatch StreamAccumulator::takeBatch() {
@@ -1839,10 +1796,6 @@ const std::string &StreamAccumulator::carFingerprint() const {
 
 const std::string &StreamAccumulator::dbc_name() const {
   return impl_->detected_dbc_name;
-}
-
-std::optional<double> StreamAccumulator::timeOffset() const {
-  return impl_->time_offset;
 }
 
 SketchLayout load_sketch_layout(const fs::path &layout_path) {

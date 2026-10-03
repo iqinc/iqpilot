@@ -263,6 +263,47 @@ class TestMonitoring:
     assert dm.wheelpos.prob_offseter.filtered_stat.n == dm.settings._WHEELPOS_FILTER_MIN_COUNT + 1
     assert dm.get_state_packet().driverMonitoringState.isRHD
 
+  def test_state_update_adopts_rhd_while_engaged_when_only_the_default_was_lhd(self):
+    dm = DriverMonitoring(rhd_saved=False)
+    ds = log.DriverStateV2.new_message()
+    ds.wheelOnRightProb = 1.0
+    set_driver_data(ds.rightDriverData)
+    set_driver_data(ds.leftDriverData, face_prob=0.0)
+
+    for _ in range(dm.settings._WHEELPOS_FILTER_MIN_COUNT + 2):
+      dm._update_states(ds, [0., 0., 0.], 20.0, True, False)
+
+    assert dm.wheel_on_right
+    assert dm.face_detected
+
+  def test_state_update_latches_a_calibrated_flip_while_engaged(self):
+    dm = DriverMonitoring(rhd_saved=False)
+    ds = log.DriverStateV2.new_message()
+    ds.wheelOnRightProb = 1.0
+    set_driver_data(ds.rightDriverData)
+    set_driver_data(ds.leftDriverData)
+
+    for _ in range(dm.settings._WHEELPOS_FILTER_MIN_COUNT + 2):
+      dm._update_states(ds, [0., 0., 0.], 20.0, True, False)
+    assert dm.wheel_on_right
+
+    dm.wheelpos.prob_offseter.filtered_stat.M = 0.0
+    dm._update_states(ds, [0., 0., 0.], 20.0, True, False)
+    assert dm.wheel_on_right
+
+  def test_state_update_uses_the_saved_side_before_calibration(self):
+    dm = DriverMonitoring(rhd_saved=True)
+    ds = log.DriverStateV2.new_message()
+    ds.wheelOnRightProb = 1.0
+    set_driver_data(ds.rightDriverData)
+    set_driver_data(ds.leftDriverData, face_prob=0.0)
+
+    dm._update_states(ds, [0., 0., 0.], 20.0, True, False)
+
+    assert not dm.wheelpos.prob_calibrated
+    assert dm.wheel_on_right
+    assert dm.face_detected
+
   def test_state_update_rejects_incomplete_driver_data(self):
     dm = DriverMonitoring()
     dm._update_states(log.DriverStateV2.new_message(), [0., 0., 0.], 0.0, False, False)

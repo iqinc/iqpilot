@@ -98,27 +98,21 @@ def save_exception(content: str) -> None:
     cloudlog.exception("error when attempting to save exception")
 
 
-def capture_fingerprint_mock() -> None:
+def record_vehicle_identification(candidate: str, brand: str) -> None:
+  matched = candidate != "MOCK"
+  cloudlog.info({"vehicle_identification": candidate, "brand": brand, "matched": matched})
+  if not _sentry_enabled():
+    return
   try:
-    set_user()
-    message = "car doesn't match any fingerprints"
-    sentry_sdk.capture_message(message=message, level="error")
-    sentry_sdk.flush()
-  except Exception as e:
-    cloudlog.exception(f"sentry fingerprint MOCK exception: {e}")
-
-
-def capture_fingerprint(candidate: str, car_name: str) -> None:
-  try:
-    set_user()
-    sentry_sdk.set_tag("carFingerprint", candidate)
-    sentry_sdk.set_tag("carName", car_name)
-
-    message = f"Fingerprinted {candidate}"
-    sentry_sdk.capture_message(message=message, level="info")
-    sentry_sdk.flush()
-  except Exception as e:
-    cloudlog.exception(f"sentry fingerprint exception: {e}")
+    with sentry_sdk.new_scope() as scope:
+      set_user()
+      scope.set_tag("carFingerprint", candidate)
+      scope.set_tag("carName", brand)
+      sentry_sdk.capture_message(message=f"Fingerprinted {candidate}" if matched else "car doesn't match any fingerprints",
+                                 level="info" if matched else "error")
+      sentry_sdk.flush()
+  except Exception:
+    cloudlog.exception("vehicle identification reporting failed")
 
 
 def set_tag(key: str, value: str) -> None:

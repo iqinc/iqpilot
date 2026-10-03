@@ -40,8 +40,7 @@ void Replay::setupServices(const std::vector<std::string> &allow, const std::vec
   auto event_schema = capnp::Schema::from<cereal::Event>().asStruct();
   sockets_.resize(event_schema.getUnionFields().size(), nullptr);
 
-  std::vector<const char *> active_services;
-  active_services.reserve(services.size());
+  active_services_.reserve(services.size());
 
   for (const auto &[name, _] : services) {
     bool is_blocked = std::find(block.begin(), block.end(), name) != block.end();
@@ -49,15 +48,12 @@ void Replay::setupServices(const std::vector<std::string> &allow, const std::vec
     if (is_allowed && !is_blocked) {
       uint16_t which = event_schema.getFieldByName(name).getProto().getDiscriminantValue();
       sockets_[which] = name.c_str();
-      active_services.push_back(name.c_str());
+      active_services_.push_back(name.c_str());
     }
   }
 
-  std::string services_str = join(active_services, ", ");
+  std::string services_str = join(active_services_, ", ");
   rInfo("active services: %s", services_str.c_str());
-  if (!sm_) {
-    pm_ = std::make_unique<PubMaster>(active_services);
-  }
 }
 
 void Replay::setupSegmentManager(bool has_filters) {
@@ -73,6 +69,13 @@ void Replay::setupSegmentManager(bool has_filters) {
 }
 
 Replay::~Replay() {
+  stop();
+  camera_server_.reset();
+  seg_mgr_.reset();
+}
+
+void Replay::stop() {
+  seg_mgr_->stop();
   if (stream_thread_.joinable()) {
     rInfo("shutdown: in progress...");
     interruptStream([this]() {
@@ -82,8 +85,6 @@ Replay::~Replay() {
     stream_thread_.join();
     rInfo("shutdown: done");
   }
-  camera_server_.reset();
-  seg_mgr_.reset();
 }
 
 bool Replay::load() {
@@ -235,6 +236,7 @@ void Replay::publishMessage(const Event *e) {
   if (event_filter_ && event_filter_(e)) return;
 
   if (!sm_) {
+    if (!pm_) pm_ = std::make_unique<PubMaster>(active_services_);
     auto bytes = e->data.asBytes();
     int ret = pm_->send(sockets_[e->which], (capnp::byte *)bytes.begin(), bytes.size());
     if (ret == -1) {

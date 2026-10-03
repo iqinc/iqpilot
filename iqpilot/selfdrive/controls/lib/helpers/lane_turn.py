@@ -16,6 +16,7 @@ TurnDirection = custom.IQTurnSignalDirection
 TURN_TRIGGER_MPS = 20 * CV.MPH_TO_MS
 TURN_SPEED_GATE_MPS = TURN_TRIGGER_MPS
 LANE_CHANGE_SPEED_MIN = TURN_SPEED_GATE_MPS
+TURN_SPEED_CEILING_MPS = 35 * CV.MPH_TO_MS
 
 
 @dataclass
@@ -60,7 +61,7 @@ class TurnSignalPlanner:
   def _refresh_from_params(self) -> None:
     requested_gate = _mph_param_to_mps(self._params.get("IQLaneTurnValue", return_default=True))
     self._state.active = self._params.get_bool("IQLaneTurnDesire")
-    self._state.speed_limit_mps = min(TURN_TRIGGER_MPS, requested_gate)
+    self._state.speed_limit_mps = min(TURN_SPEED_CEILING_MPS, requested_gate)
 
   def _consume_legacy_kwargs(self, **legacy) -> tuple[bool, bool, bool, bool, float]:
     return (

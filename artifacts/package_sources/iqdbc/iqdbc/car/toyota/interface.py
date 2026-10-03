@@ -129,6 +129,8 @@ class CarInterface(CarInterfaceBase):
                      car_fw: list[structs.CarParams.CarFw], alpha_long: bool, is_release_iq: bool, docs: bool) -> structs.IQCarParams:
     if candidate in UNSUPPORTED_DSU_CAR:
       ret.iqSafetyFlags |= ToyotaSafetyFlagsIQ.UNSUPPORTED_DSU
+    if candidate in TSS2_CAR:
+      ret.iqSafetyFlags |= ToyotaSafetyFlagsIQ.LKAS_HUD
 
     # Detect smartDSU, which intercepts ACC_CMD from the DSU (or radar) allowing openpilot to send it
     # 0x2AA is sent by a similar device which intercepts the radar instead of DSU on NO_DSU_CARs
