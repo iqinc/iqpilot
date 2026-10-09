@@ -1,0 +1,619 @@
+{
+  "python/_iqclosure/_vendored.json": {
+    "mode": 420,
+    "sha256": "c34a93cdd146943ae1e276f3a5df0bbd2f595c21f7a127622ebe1e965fe0a282",
+    "size": 1723
+  },
+  "python/_iqclosure/iqpilot/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/common/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/common/api/__init__.py": {
+    "mode": 420,
+    "sha256": "97d6e0d8cbd3e47797d734322b42d04efea4d95a2dae5a56f1baef3fd847aa0d",
+    "size": 939
+  },
+  "python/_iqclosure/iqpilot/common/api/base.py": {
+    "mode": 420,
+    "sha256": "86b834e02e24a005c903f1ca059b1a572e37c17a87271726c90918cd04b6133b",
+    "size": 3451
+  },
+  "python/_iqclosure/iqpilot/common/api/comma_connect.py": {
+    "mode": 420,
+    "sha256": "e7c2dd0b56fb8533c2cbc614e728a9ffc5ce7360524cfa62a02f5235bc23b9a8",
+    "size": 267
+  },
+  "python/_iqclosure/iqpilot/common/basedir.py": {
+    "mode": 420,
+    "sha256": "58cfa5d6405903ee1acecc4544463bb8f47a66921b120c382143aa80d8539b28",
+    "size": 106
+  },
+  "python/_iqclosure/iqpilot/common/file_helpers.py": {
+    "mode": 420,
+    "sha256": "3c661d05dea697fae741b3e65a93385e4e0f5941eae8e8f4ea64da8da90e2f52",
+    "size": 67
+  },
+  "python/_iqclosure/iqpilot/common/git_creds.py": {
+    "mode": 420,
+    "sha256": "aab57b08d1907d0a761111e2a9a415af990475a55307c0ced6f2573664abbc49",
+    "size": 7327
+  },
+  "python/_iqclosure/iqpilot/common/gpio.py": {
+    "mode": 420,
+    "sha256": "84edc2cba235b774293cbb1c52c6da74856425ff8ad99198997e23a05e784bb7",
+    "size": 2166
+  },
+  "python/_iqclosure/iqpilot/common/i2c.py": {
+    "mode": 420,
+    "sha256": "4af8f9da7504a548d15f18b91d71c1379cb7c05c84be031448764cc49920ce68",
+    "size": 2449
+  },
+  "python/_iqclosure/iqpilot/common/logging_extra.py": {
+    "mode": 420,
+    "sha256": "ce9b3b3d8498d76e1c4c0352a3e98e72759bb7f367ff8629c1329c46040595c3",
+    "size": 6628
+  },
+  "python/_iqclosure/iqpilot/common/realtime.py": {
+    "mode": 420,
+    "sha256": "016be524079ef32df03b2c135eab8f83da60a46fc7f143620b836c65f33e39a3",
+    "size": 4423
+  },
+  "python/_iqclosure/iqpilot/common/swaglog.py": {
+    "mode": 420,
+    "sha256": "0a133b4ef49f80b8890f115e81273f3f3e21351ae79f92dc02abc033e6d24027",
+    "size": 5274
+  },
+  "python/_iqclosure/iqpilot/common/time_helpers.py": {
+    "mode": 420,
+    "sha256": "c14cda1f84149d5ffa63a2adec5ca24126f77c1412a78412e5e3e68a6fd12bcf",
+    "size": 474
+  },
+  "python/_iqclosure/iqpilot/common/utils.py": {
+    "mode": 420,
+    "sha256": "103fa6c24f8b963576c482a34d7ecb020168fd3e85156493ae4432ee3b7b2c06",
+    "size": 5159
+  },
+  "python/_iqclosure/iqpilot/common/version.py": {
+    "mode": 420,
+    "sha256": "c04a243c77a170b750bad283da5e92bc6b1072bb674ece20dfa4eb9ec2d90309",
+    "size": 106
+  },
+  "python/_iqclosure/iqpilot/konn3kt/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/konn3kt/cloud_client.py": {
+    "mode": 420,
+    "sha256": "4d58e62f8d628a8570881f2b87c82c801b46928fbb84f8dab8a81a9b55ba4e15",
+    "size": 493
+  },
+  "python/_iqclosure/iqpilot/konn3kt/registration.py": {
+    "mode": 420,
+    "sha256": "5a2b06d919adce513fb8a7e4e6f26d48e502e92dbd89f9af7a0e67e9114ab3be",
+    "size": 2683
+  },
+  "python/_iqclosure/iqpilot/konn3kt/service_health.py": {
+    "mode": 420,
+    "sha256": "10fa7d8490322275963308a1162ac5a0d0e3a96ac4a4771884eb2d3ec69fb480",
+    "size": 264
+  },
+  "python/_iqclosure/iqpilot/konn3kt/shared_readers.py": {
+    "mode": 420,
+    "sha256": "234af8c58c75d1e569254c6e24560b79ccd091ea396319a3eb77e0016ca4b01b",
+    "size": 1450
+  },
+  "python/_iqclosure/iqpilot/selfdrive/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/selfdrive/car/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/selfdrive/car/vehicle_catalog.json": {
+    "mode": 420,
+    "sha256": "9226a2475a10088d7f472af2de9e9e3884522562db9432376c4a0def6142fe38",
+    "size": 122493
+  },
+  "python/_iqclosure/iqpilot/selfdrive/car/vehicle_catalog.py": {
+    "mode": 420,
+    "sha256": "d92bc1cfc964bd8f7f4a80ef704787e5be55b94e1701fb5639040a55ef4652f8",
+    "size": 2321
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/config.py": {
+    "mode": 420,
+    "sha256": "056c744bbd9f1fe1053555d9b1fc1257d53093d69ddc94be3f05d840eb70781c",
+    "size": 3590
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/egpu_helpers.py": {
+    "mode": 420,
+    "sha256": "a9f2bc8477b58a3df7196f4b40cdddf631e28051809e9bbfdd4c78148444c474",
+    "size": 10891
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/egpu_model.py": {
+    "mode": 420,
+    "sha256": "eb3ebc7065a863d51d5bb4359d68f26fc2f1929e1d7e044377f15cf5bac7f77d",
+    "size": 367
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/model_bundle_downloader.py": {
+    "mode": 420,
+    "sha256": "62b13a05afbe9b5fb5d9e3d09c1491b37826ff840126c5e317a7ebf1edc28762",
+    "size": 12060
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/models/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/models/fetcher.py": {
+    "mode": 420,
+    "sha256": "23622cdec9eed5649a05422ba19eae956ba16a63850927af4a222c3d9030a1bb",
+    "size": 399
+  },
+  "python/_iqclosure/iqpilot/selfdrive/iqmodeld/models/helpers.py": {
+    "mode": 420,
+    "sha256": "9628f88e71f7fae2c3d62dd17618367b3c7d12749cfe2a4737410288888cd3bd",
+    "size": 15008
+  },
+  "python/_iqclosure/iqpilot/system/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/hardware/__init__.py": {
+    "mode": 420,
+    "sha256": "889391bffca493e74bfc108cae2976a53b644caca13ab600061fd29e9622c627",
+    "size": 695
+  },
+  "python/_iqclosure/iqpilot/system/hardware/base.py": {
+    "mode": 420,
+    "sha256": "a56293f7c23e503ff62d0d3ed39f1831b5544a65b37378165934361a5ddcd304",
+    "size": 4966
+  },
+  "python/_iqclosure/iqpilot/system/hardware/hw.py": {
+    "mode": 420,
+    "sha256": "af504d08f49754fa49aa3040c6bfcc3d122c2948e50d4d481625ae8f00aa5256",
+    "size": 3398
+  },
+  "python/_iqclosure/iqpilot/system/hardware/pc/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/hardware/pc/hardware.py": {
+    "mode": 420,
+    "sha256": "2520895597c375ae570bd04d5f189e874c89d642f3f07bdbeb20388cb6691433",
+    "size": 258
+  },
+  "python/_iqclosure/iqpilot/system/hardware/tici/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/hardware/tici/amplifier.py": {
+    "mode": 420,
+    "sha256": "98f46f8705259b00efae7274186b4e68201aad467a19de4f16d5f850d10ab0b5",
+    "size": 7585
+  },
+  "python/_iqclosure/iqpilot/system/hardware/tici/esim_manager.py": {
+    "mode": 420,
+    "sha256": "ac8d6d33286a021b0e1591329b779742d73993279d3f4c56e933cd7efd3114c8",
+    "size": 10930
+  },
+  "python/_iqclosure/iqpilot/system/hardware/tici/hardware.py": {
+    "mode": 420,
+    "sha256": "e8eae4e8a75e1751525471cf54a8555b7bfd7f08ad84bf2e75642b5745f222db",
+    "size": 25601
+  },
+  "python/_iqclosure/iqpilot/system/hardware/tici/iwlist.py": {
+    "mode": 420,
+    "sha256": "d22858982705531732d5a20a45a73795496e5bbd9e23028c24609a7e58ac7aed",
+    "size": 890
+  },
+  "python/_iqclosure/iqpilot/system/hardware/tici/lpa.py": {
+    "mode": 420,
+    "sha256": "2bffb84aef35892c4788e80b6d937bf2eebd15e226b72a82c4f39217667c1ca0",
+    "size": 53692
+  },
+  "python/_iqclosure/iqpilot/system/hardware/tici/pins.py": {
+    "mode": 420,
+    "sha256": "b57ba4262e6a6a79f2db15c27356acf3e54f579a7edd13b483b2e16d140aca6d",
+    "size": 678
+  },
+  "python/_iqclosure/iqpilot/system/hardware/usb.py": {
+    "mode": 420,
+    "sha256": "14c87510ff8c0f21f7277eb763ff9ad491342a175818b1e34db86ee537c83878",
+    "size": 5537
+  },
+  "python/_iqclosure/iqpilot/system/loggerd/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/loggerd/xattr_cache.py": {
+    "mode": 420,
+    "sha256": "9638a45de8b036bbf85dad8bebaeb81a953eab0a35c6ab5efa624fb213d986c9",
+    "size": 1617
+  },
+  "python/_iqclosure/iqpilot/system/manager/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/manager/process.py": {
+    "mode": 420,
+    "sha256": "04bf7d945e43ed67362916884caf9ac6011ddd5dacc985f2adb282eacbdf225b",
+    "size": 10130
+  },
+  "python/_iqclosure/iqpilot/system/manager/process_config.py": {
+    "mode": 420,
+    "sha256": "79efb66c80e551cfb9c0cd63c3f7bb38f2ec67b29f3f1770b03e63995c27d0bc",
+    "size": 15441
+  },
+  "python/_iqclosure/iqpilot/system/phonegps/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/phonegps/bridge.py": {
+    "mode": 420,
+    "sha256": "dbc9af51f5ba3c2084846159fd7f135e9c599ab6564c54e037466dd7a9fd4fcb",
+    "size": 1853
+  },
+  "python/_iqclosure/iqpilot/system/sentry.py": {
+    "mode": 420,
+    "sha256": "eba517f88943dd97669e811c457ad264ffa76b0813af9d18d6992464446a00f3",
+    "size": 5232
+  },
+  "python/_iqclosure/iqpilot/system/ui/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/ui/lib/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/ui/lib/networkmanager.py": {
+    "mode": 420,
+    "sha256": "5d239320755efad6e88df237af763ed206ee37c0c8200db93bbdb0e0c884eb56",
+    "size": 1717
+  },
+  "python/_iqclosure/iqpilot/system/ui/lib/os_update.py": {
+    "mode": 420,
+    "sha256": "cabb9f8a20c0e5900b5dadcaf7b755bd2b41c6e082afb917facc86f1b1bd8acc",
+    "size": 5210
+  },
+  "python/_iqclosure/iqpilot/system/ui/lib/wifi_manager.py": {
+    "mode": 420,
+    "sha256": "859d3eb2f56eb456f1d6d2df18d93c5d4990a7f4a6e75be495930a19efcb5151",
+    "size": 42121
+  },
+  "python/_iqclosure/iqpilot/system/version.py": {
+    "mode": 420,
+    "sha256": "3a6bc7520dae7944a1da6f911cd090704a463e011f39949ea6c9df51b0e8c616",
+    "size": 6033
+  },
+  "python/_iqclosure/iqpilot/system/wireguard/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/_iqclosure/iqpilot/system/wireguard/tunnel.py": {
+    "mode": 420,
+    "sha256": "3fb0b048a8254a47c4a03f1c922d0f03787fef81898ebe8fbb5a17369e6a21bc",
+    "size": 8615
+  },
+  "python/iqpilot_private/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/backups/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/backups/archive_codec.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "22e7d400d14ffd92eb77dbf01c5213c606c910eb948c8993d9bbbbc2b55c6bfb",
+    "size": 135480
+  },
+  "python/iqpilot_private/konn3kt/backups/backup_keys.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "c60bc47682d1e75e7d5bec30641fbe9c531c5f9ac10f5c0025030389821b4c2b",
+    "size": 67680
+  },
+  "python/iqpilot_private/konn3kt/backups/backup_orchestrator.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "ae7e31adb069681fb1090bdeb939ae4f1ced807261c822eff73b46423b05c0e7",
+    "size": 204616
+  },
+  "python/iqpilot_private/konn3kt/backups/cbc_vault.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "863b1fccd12b5a78a9c517d21743bb0f51ba000509004880f24dea1879848e06",
+    "size": 69752
+  },
+  "python/iqpilot_private/konn3kt/backups/imahelper.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "c6bfabcbd48359a9e54d64fb5beb1adf7f749bf1f559265cbcf5b49686a062f2",
+    "size": 203064
+  },
+  "python/iqpilot_private/konn3kt/flockd/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/flockd/flockd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "af74b57c1db5e099b399131b1c83d54c64091a3ba73313ce87828b6ba5cd3ee5",
+    "size": 268240
+  },
+  "python/iqpilot_private/konn3kt/flockd/signatures.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "e21d3861d0dcf16730ce19bccd179136da432a4ad02c6b327467212e54321033",
+    "size": 68104
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/_vendor/localapi_runtime.zip": {
+    "mode": 420,
+    "sha256": "b9b0db807c2d9ad0631e0a4924d4666bac5891a5754d38dde7d421ce3499864d",
+    "size": 1379463
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/ble_auth.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "97c40cd7f936b73772414c4504c43c350c8bd395e63432e945823d1ceb092aa3",
+    "size": 268072
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/ble_connection_parameters.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "97d41ccb840f775eaa892a1fa5c699b7adbbb574bf0e3ffa1fc98374d1745f0c",
+    "size": 68104
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/ble_gatt.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "8dfde32d3005cfaa5d5f177adda07ea13a8d03e723aa9b8286b55c3720f6830e",
+    "size": 472568
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/ble_rpc_dispatch.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "21d687a45ea809a2d00d45d6938c17692d4856ee852808d7a1755a6e1f609498",
+    "size": 68080
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/ble_transportd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "a77636da9e51e3c8dc1b444b83226998ff60fbc98e71050af54d54fd5883aaf9",
+    "size": 402424
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/bt_gamepad.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "07423aa0d1753f720fe741e7f399f13d9bfc1d5f58620c7190cac4aec9cb6249",
+    "size": 337616
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/cloud_routes.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "55395d8cecc5043df35b401400de52b0c0f4956a9279bc12daf004b1617b4137",
+    "size": 134424
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/driving_settings.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "402afff6df48f275d01345ce0f432bc033fa09115039ca59d45dc0a80f8acb45",
+    "size": 68152
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/hephaestusd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "c4662be8df2447ee75c621f90295c5212cc06f304d72896b2f60262841f05b19",
+    "size": 4376840
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/iqsentryd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "a961b5e858ec1d93b07c413d31b2c5c478a9ff51cc93cfeb367f97f04576c45c",
+    "size": 402296
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/iqsentryvisiond.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "008857a4d415cec2c21b3f742a51f47f06001539c8512a7ba550de6e27c43885",
+    "size": 271008
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/k3wgd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "9f79a4816d213ca656df684b0238b06e88c9be6d1f5658d415cbf2775dc4381f",
+    "size": 338912
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/kwp2000.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "41430e70203e98c025953b30e28f290e367f9c7b1e315b9ddd1bc07ce05e5773",
+    "size": 136384
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/manage_hephaestusd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "d8c5261f019645fa4e71852c56669ad8a81bbeccd6b4be3f3edbe9d31a76a587",
+    "size": 133752
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/motd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "6c0332fb10b6ea8d1a186712586e125ac453072575697cb1495695fdbaaaed75",
+    "size": 67872
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/sentry_body.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "c5521a244c885eba848a11cf3822f7f221f2d459ac73495d2a1c1cb1862107d8",
+    "size": 137120
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/sentry_imu.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "127712133f6043647b82a51465d40f96abd1de918df75885fd149a3b0b9d213c",
+    "size": 135816
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/sentry_media.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "603fa5bdf03f17b52ea2fc87fb3a21026614ebeadede7795efeeca506c4f0eba",
+    "size": 204080
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/sentry_policy.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "e4eb81326d63128820887708b367eb5d0b9dc551a9292379c09e10c920dc7ba5",
+    "size": 201912
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/sentry_upload.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "b0b7caa4099a08ffd489f9107a5673651d92add47dec0a4a00464b87ee01df91",
+    "size": 205248
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/session_bridge.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "a2d6a4f97cb3fcd2ea230cf516fa6cf6cd9ebacf03e1671a5dab016cab3dbeff",
+    "size": 133960
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/tp20.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "a3504474d22ce0db4f96e48ab2b8b89f0bbc7ee7acd3829324a2a7a2a0600efe",
+    "size": 135584
+  },
+  "python/iqpilot_private/konn3kt/hephaestus/vw_pq_flasher.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "ed6d742d2a05c8c8154eebf944f12d6e797ed9a7716fc7e1e16590372b783e9e",
+    "size": 269536
+  },
+  "python/iqpilot_private/konn3kt/registration/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/registration/reg_core.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "b2cd34b69a3a9e6dc2a3ea875c8d3480b264552055495e3613d54d8da1c1684d",
+    "size": 133792
+  },
+  "python/iqpilot_private/konn3kt/telemetry/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/telemetry/iqtelemetryd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "625320d31f138b06958848da3acc5375655731ec58354e8eb05552031f14f715",
+    "size": 540624
+  },
+  "python/iqpilot_private/konn3kt/uploaderd/__init__.py": {
+    "mode": 420,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "size": 0
+  },
+  "python/iqpilot_private/konn3kt/uploaderd/iquploaderd.cpython-312-aarch64-linux-gnu.so": {
+    "mode": 493,
+    "sha256": "dbeec10584396f68335c3f7047685a1a1e0f4e5405a49ab0c8b3591f112746d3",
+    "size": 403168
+  },
+  "runtime": {
+    "entries": {
+      "iqpilot_private.konn3kt.backups.backup_orchestrator": {
+        "path": "python/iqpilot_private/konn3kt/backups/backup_orchestrator.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.flockd.flockd": {
+        "path": "python/iqpilot_private/konn3kt/flockd/flockd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.ble_transportd": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/ble_transportd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.cloud_routes": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/cloud_routes.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.hephaestusd": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/hephaestusd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.iqsentryd": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/iqsentryd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.k3wgd": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/k3wgd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.manage_hephaestusd": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/manage_hephaestusd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.motd": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/motd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.hephaestus.vw_pq_flasher": {
+        "path": "python/iqpilot_private/konn3kt/hephaestus/vw_pq_flasher.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.telemetry.iqtelemetryd": {
+        "path": "python/iqpilot_private/konn3kt/telemetry/iqtelemetryd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      },
+      "iqpilot_private.konn3kt.uploaderd.iquploaderd": {
+        "path": "python/iqpilot_private/konn3kt/uploaderd/iquploaderd.cpython-312-aarch64-linux-gnu.so",
+        "type": "python-module"
+      }
+    }
+  },
+  "signatures": {
+    "python/iqpilot_private/konn3kt/backups/archive_codec.cpython-312-aarch64-linux-gnu.so": "7aMP3xzFgJSQPkhUAZu6Uu9cakaGpgAagPMvSETvVDt88ubADwF3wz/r4BUBWaSGsLdXw01Cj3oMKi4ih+QvCg==",
+    "python/iqpilot_private/konn3kt/backups/backup_keys.cpython-312-aarch64-linux-gnu.so": "XnN+CfWdSUrrnBuHuTMqITi9ZZ/UYKEejVZqS9MguLEAO0/sqQ5gN5ecEJBDjws36N4qbQrOpazhl2v7formBw==",
+    "python/iqpilot_private/konn3kt/backups/backup_orchestrator.cpython-312-aarch64-linux-gnu.so": "yGc9hJnqZpZAWTc97LroD/EvW48ZNSsFcOZTJO6cXP42n7Kl2bx3xjP8JqMlkuzIuLmvarIKh8+uxumt+/ayCQ==",
+    "python/iqpilot_private/konn3kt/backups/cbc_vault.cpython-312-aarch64-linux-gnu.so": "mL0i+m+i/LEZRiEnefcplfp0PNhKvVIR3Ookx63WxsGp6IUoYl3CyabZ0H3ery/NNJL3CkDO0HOPs9N6zwfCDw==",
+    "python/iqpilot_private/konn3kt/backups/imahelper.cpython-312-aarch64-linux-gnu.so": "Fa8fRq62NHdtUXMQK6auPXJ1HgDCIwP/p4OH+FexcsliAEmg+stI7q4TCmKq0QfTG7QfyoDrTqX3u2zm1gyKBw==",
+    "python/iqpilot_private/konn3kt/flockd/flockd.cpython-312-aarch64-linux-gnu.so": "RdH7WhzQM4Q0tZ7/Tya+4umHSG9LpuFituTWu8WAIODSGvvRWoRfRtt915Dc+xENYtymuOHfW2ycQ9t1sQXOCw==",
+    "python/iqpilot_private/konn3kt/flockd/signatures.cpython-312-aarch64-linux-gnu.so": "VqYEJT/k9ZT3YHuf2CRnOIXuU6N2FO9srdIv8qWq9B8RHO6EUR1fALg6sbKtx0eoFLUVqgnXtbNPZvSDEllmBA==",
+    "python/iqpilot_private/konn3kt/hephaestus/ble_auth.cpython-312-aarch64-linux-gnu.so": "xR85G1Meq6YDcIPJG/Nhirn4uyOM86J4cj/bGwWtmqhBrVYkuZL3WlzkNxKrVO26KpHTdU465wdg41QCc+QuAg==",
+    "python/iqpilot_private/konn3kt/hephaestus/ble_connection_parameters.cpython-312-aarch64-linux-gnu.so": "pUwCE2HCtMMIfU6iJpJRT1JHU4QaAFjwSdQ50yTe/EJA18pd4efu/X2+CEcPIPZkfJZDEFc0VTQMujSuHCzzDA==",
+    "python/iqpilot_private/konn3kt/hephaestus/ble_gatt.cpython-312-aarch64-linux-gnu.so": "mlXNE2ZHlM5ktngxQMqbMqBPW2UnE7bCQhf3LGNKYp+uBrvGWf9BVwpWEZHHDTCUo0sQXeQncB1Ml0700gYMDQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/ble_rpc_dispatch.cpython-312-aarch64-linux-gnu.so": "gt7LAOL+mtAXfu9rGqxrWULZLIwqFnT5W9YcdOk10F6ofWVURcCnhl0MvWDvpfpRLtw4O/+DYwozlnXlNoG4Cg==",
+    "python/iqpilot_private/konn3kt/hephaestus/ble_transportd.cpython-312-aarch64-linux-gnu.so": "80fINE8aIOgriykTfRXxqnwInZH+CCUdVkeLyeQ01IEv6xmSfwjZtDO6MXlWoJFMZDI5t5plu3ZHXtzbjpvwBQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/bt_gamepad.cpython-312-aarch64-linux-gnu.so": "t6e154JyQhPcNScFD//Qg+mdKmwsdnNlpLEscKWmO/qt/1uwrL0qAvdjFocu04YNJlUEyeQl4oDGcWQ82kR9Cw==",
+    "python/iqpilot_private/konn3kt/hephaestus/cloud_routes.cpython-312-aarch64-linux-gnu.so": "DAHsQ+VqbD81IS2tSwGVD9WgTtad6OBjITobj/8IvbH8XjskO1l2fSUemBMioPLZmqjQradiZ2JpGWHv6xMRDQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/driving_settings.cpython-312-aarch64-linux-gnu.so": "BL0/3nggpHRgWXyJYHEQKPYqInJb4j2kQS5+OTdxmM5rZhb9PLZTogATQud9OjASdHmQAxbHKZOicy14ctXRDw==",
+    "python/iqpilot_private/konn3kt/hephaestus/hephaestusd.cpython-312-aarch64-linux-gnu.so": "KleTH0/ePveIKvBVzCsSGedg7mA8taIqgvEPu4Pp61ppfzcKA5Czh8EcTHxkDMA8spAHh4yVWMD4cm1KwWUCDw==",
+    "python/iqpilot_private/konn3kt/hephaestus/iqsentryd.cpython-312-aarch64-linux-gnu.so": "LiXBFc/+RBPegU3gX7G85/qfTF1HHW4zQSY5icNXMVZtrXugTz04HfDLzfJucGzvFBrYc+DcARJZQmrjt6JRDA==",
+    "python/iqpilot_private/konn3kt/hephaestus/iqsentryvisiond.cpython-312-aarch64-linux-gnu.so": "z5DV9kSBwv1gNVP2XZz5jIvFDtJbt37//i+iCzh/vyQa/dUREnj6aY461y59ulOrAAUZFqAAmP1ZY2iP5hydAQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/k3wgd.cpython-312-aarch64-linux-gnu.so": "NEd3CEnRPpvpeBYJLo5ZYEGrsZzBGxCVv8nwfTO+l25hI9OSJGPCgiBk0QNUzV8mCV9xY6EJUZFounb0OAHBBg==",
+    "python/iqpilot_private/konn3kt/hephaestus/kwp2000.cpython-312-aarch64-linux-gnu.so": "MFkmnY2lfAopOsz0uQwnxj/QcroQTNUOg8f5j9LvuTHJncbwKM8/5Hl5UO6mOcsXj8lGcvpECUvhWHkxh4hvCg==",
+    "python/iqpilot_private/konn3kt/hephaestus/manage_hephaestusd.cpython-312-aarch64-linux-gnu.so": "vFd00DPoxhVuuIRoV+2BmyrmNWL4xzTvkRgqyi8DuhI0+bRWOEqXlt9ZPPWUX3s5uYx4/0AxLIUlNExwN2/sDQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/motd.cpython-312-aarch64-linux-gnu.so": "lAdNduLRTTil3Z4yiIDaRzJWXoLNNT0afsOeKLx6NEnlekpuDR6nSHNsLSXC84X+ClpbKTMSO2BwsuKGeEJ4Ag==",
+    "python/iqpilot_private/konn3kt/hephaestus/sentry_body.cpython-312-aarch64-linux-gnu.so": "55pPL4+OKEtoqmvSla0CZSJaYOvr0jS3918rsFtNs2UkU7HpWM1uZ1BVmgVglXeDpB3Mwd9bLLGoGySX7H4KAQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/sentry_imu.cpython-312-aarch64-linux-gnu.so": "CaBu5LA/2Ot+y9q4dPkhEvsu/OVbGPjcmqHCya6+sXV6ZF/wipnKGn2H7f3d/+vjZaLT+MZegzcHRQGtFlRSDQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/sentry_media.cpython-312-aarch64-linux-gnu.so": "jbAC45m2YQwDxljmxZ3mWUnHvBvJw6YUXZ6uvIUQBDvZjRsUkAFAu4ufqvjiWMqSvVcm3Ax2Gje4gz3luWlBCA==",
+    "python/iqpilot_private/konn3kt/hephaestus/sentry_policy.cpython-312-aarch64-linux-gnu.so": "kxoZ+gJCEWKjPLpozQiOl3xfjB4MH4iHZXCYl04aLy9WVNhcciIc18Wf2qcH7SJaEo6VNTrugKKkXkPnpB0ZDQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/sentry_upload.cpython-312-aarch64-linux-gnu.so": "quK0KaQlTvA192cvUvXUlQIlxUbSV+OzWJQPiEjHJuquroTYXouiaPQSM1zEfVU3daM8IkYoRHBR+Y1T6YeiAg==",
+    "python/iqpilot_private/konn3kt/hephaestus/session_bridge.cpython-312-aarch64-linux-gnu.so": "l5qssBErnmsAgHZFvSSpVhW/MA4jVG9sSkJbDcDY+EWSDbIrG5VYxqQjEDBw2wG55A9tCfUSOGa4+YSw1sgaCQ==",
+    "python/iqpilot_private/konn3kt/hephaestus/tp20.cpython-312-aarch64-linux-gnu.so": "ROXByxfyAodd83xbMUQ8tktZhuo/5frYjv1p1JlYJ9F20U+pcTEF3GsiXBDOGtZaGNEdhYcR/+ZV5SSZKwgECA==",
+    "python/iqpilot_private/konn3kt/hephaestus/vw_pq_flasher.cpython-312-aarch64-linux-gnu.so": "LA74WUANRg0HtfTJzV+vw4khJal1KPEQsmePzhwOdlLTBy3Nj0XfIV4A336RTRpE3w+CHNr65X2+Nn+uP7YdBg==",
+    "python/iqpilot_private/konn3kt/registration/reg_core.cpython-312-aarch64-linux-gnu.so": "3qyKJNXLjce+5J/6vSCtYIZMbzYjpYJIl+HbyDuh32MpVkhz/LX+rz6LHL9JzUeg0E/Jq6Dc35ROQ8EsJyRqAg==",
+    "python/iqpilot_private/konn3kt/telemetry/iqtelemetryd.cpython-312-aarch64-linux-gnu.so": "CYElqViNWvC6QNUKEvrUQDJQ9qTcPn/2BJSZcq6n+/J8nzGQ5dtkrE77c4oZEd0QyNjQCIp8Dz3QwCGD14zsBQ==",
+    "python/iqpilot_private/konn3kt/uploaderd/iquploaderd.cpython-312-aarch64-linux-gnu.so": "LZThWgju6AYFF6SObAJV1VnPqWHBh1YcyhcrMJVJqjD4nkFCdSBPUxkMUGIXBuxAO0s90yct2TxFhaO6CCyoAQ=="
+  }
+}
