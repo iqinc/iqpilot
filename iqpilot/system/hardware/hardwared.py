@@ -154,14 +154,16 @@ class _CarParamsCache:
       return
     self._last_check = now
 
-    cp_bytes = params.get("CarParams")
+    cp_bytes = params.get("CarParams") or params.get("CarParamsPersistent")
     if not cp_bytes or cp_bytes == self._last_bytes:
       return
     self._last_bytes = cp_bytes
 
     try:
       CP = messaging.log_from_bytes(cp_bytes, car.CarParams)
-      self.no_sleep = (CP.brand == "tesla") or _is_meb(CP)
+      from iqdbc.car.hyundai.values import CAR
+      ev6 = CP.brand == "hyundai" and CP.carFingerprint in (CAR.KIA_EV6, CAR.KIA_EV6_PE)
+      self.no_sleep = ev6 or (CP.brand == "tesla") or _is_meb(CP)
     except Exception:
       self.no_sleep = False
 

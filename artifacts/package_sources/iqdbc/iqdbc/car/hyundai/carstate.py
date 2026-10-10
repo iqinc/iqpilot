@@ -217,6 +217,8 @@ class CarState(CarStateBase):
         parser._add_message(name, ignore_counter = ignore_counter)   # ← 이름으로 등록
 
       def add_and_cache(parser, name: str, attr: str, ignore_counter: bool = False):
+        if parser is None:
+          return False
         add_if_seen(parser, name, ignore_counter)
         if name in parser.vl:   # 등록 성공했을 때만
           setattr(self, attr, parser.vl[name])
@@ -227,7 +229,7 @@ class CarState(CarStateBase):
         self.cp.controls_ready = self.cp_cam.controls_ready = True
         if self.cp_alt is not None:
           self.cp_alt.controls_ready = True
-      elif self.controls_ready_count == 100:
+      elif self.controls_ready_count == 127:
         self.cp.enable_capture = self.cp_cam.enable_capture = False
         if self.cp_alt is not None:
           self.cp_alt.enable_capture = False
@@ -278,8 +280,11 @@ class CarState(CarStateBase):
           add_and_cache(self.cp, self.cruise_btns_msg_canfd, "cruise_buttons_msg")
           if not add_and_cache(self.cp_cam, "CAM_0x362", "cam_0x362") and self.cp_alt is not None:
             add_and_cache(self.cp_alt, "CAM_0x362", "cam_0x362")
-          if not add_and_cache(self.cp_alt, "CAM_0x2a4", "cam_0x2a4", ignore_counter=True) and self.cp_cam is not None:
-            add_and_cache(self.cp_cam, "CAM_0x2a4", "cam_0x2a4", ignore_counter=True)
+          # Standard HDA2 A-CAN loses its startup copy when Panda enables safety.
+          camera_first = self.CP.flags & HyundaiFlags.CANFD_HDA2 and not self.CP.flags & HyundaiFlags.CAMERA_SCC
+          primary, fallback = (self.cp_cam, self.cp_alt) if camera_first else (self.cp_alt, self.cp_cam)
+          if not add_and_cache(primary, "CAM_0x2a4", "cam_0x2a4", ignore_counter=True):
+            add_and_cache(fallback, "CAM_0x2a4", "cam_0x2a4", ignore_counter=True)
         elif self.controls_ready_count == 125:
           add_and_cache(self.cp, "MANUAL_SPEED_LIMIT_ASSIST", "manual_speed_limit_assist", ignore_counter = True)
           if self.gear_msg_canfd == "ACCELERATOR":

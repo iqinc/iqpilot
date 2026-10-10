@@ -5,6 +5,7 @@
 #include <bitset>
 #include <cassert>
 #include <cerrno>
+#include <map>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -236,6 +237,8 @@ std::optional<bool> send_panda_states(PubMaster *pm, const std::vector<Panda *> 
   bool ignition_local = false;
   const uint32_t pandas_cnt = pandas.size();
   static Params params;
+  static std::map<std::string, IgnitionLineHold> ignition_holds;
+  const uint64_t now_ns = nanos_since_boot();
   const bool allow_offroad_external_can_tx = params.getBool("Konn3ktAllowOffroadExternalCanTx");
 
   // build msg
@@ -270,6 +273,8 @@ std::optional<bool> send_panda_states(PubMaster *pm, const std::vector<Panda *> 
       can_health[i] = *can_health_opt;
     }
     pandaCanStates.push_back(can_health);
+
+    health.ignition_line_pkt = ignition_holds[panda->hw_serial()].update(health.ignition_line_pkt != 0, now_ns);
 
     if (spoofing_started) {
       health.ignition_line_pkt = 1;

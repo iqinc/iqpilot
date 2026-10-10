@@ -14,3 +14,4 @@ if GetOption('extras'):
   env.Program('tests/test_pandad_usbprotocol', ['tests/test_pandad_usbprotocol.cc'], LIBS=[panda] + libs)
 
   env.Program('tests/test_panda_safety', ['tests/test_panda_safety.cc'] + safety, LIBS=libs)
+  env.Program('tests/test_ignition_hold', ['tests/test_ignition_hold.cc'], LIBS=libs)

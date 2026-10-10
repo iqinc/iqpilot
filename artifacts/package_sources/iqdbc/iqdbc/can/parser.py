@@ -236,7 +236,8 @@ class CANParser:
         if src != self.bus:
           continue
         bus_empty = False
-        if self.enable_capture:
+        # frames before controls are ready predate the ECU knockout and safety-mode forwarding change
+        if self.controls_ready and self.enable_capture:
           self.seen_addresses.add(address)
         state = self.message_states.get(address)
         if state is None or len(dat) > 64:

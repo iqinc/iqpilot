@@ -42,6 +42,29 @@ def dVisual(CCS, CS):
     decelV = False
   return decelV
 
+# The MQB ACC_02.ACC_Abstandsindex and PQ ACC_GRA_Anzeige.ACA_gemZeitl ("measured time gap") lead marker is
+# a time headway on a log scale, not a distance. Fitted to the stock radar's own output against lead distance
+# and speed on 8 stock-ACC cars (Golf, Jetta, Atlas, Taos, Arteon and Kodiaq digital clusters, Octavia analog,
+# Sharan PQ): position = 0.17 + 0.465 * ln(headway), from about 0.7 s (closest) to 6 s (farthest). Stopped,
+# the radar still reports a finite headway, as if the car were rolling at about 3.5 m/s.
+LEAD_HEADWAY_POSITION_OFFSET = 0.17
+LEAD_HEADWAY_POSITION_PER_LOG_S = 0.465
+LEAD_HEADWAY_MIN_SPEED = 3.5  # m/s
+# Raw code at the closest and farthest positions: 4-bit analog MQB and PQ clusters use 1-15, digital MQB
+# clusters (Kombi_03.KBI_Variante) the 10-bit 34-972 the stock radar sends. 0 means no lead on both.
+LEAD_INDEX_RANGE_ANALOG = (1, 15)
+LEAD_INDEX_RANGE_DIGITAL = (34, 972)
+
+
+def lead_headway_index(lead_distance: float, v_ego: float, digital_cluster: bool) -> int:
+  if lead_distance <= 0:
+    return 0
+  headway = lead_distance / max(v_ego, LEAD_HEADWAY_MIN_SPEED)
+  position = clip(LEAD_HEADWAY_POSITION_OFFSET + LEAD_HEADWAY_POSITION_PER_LOG_S * np.log(headway), 0.0, 1.0)
+  closest, farthest = LEAD_INDEX_RANGE_DIGITAL if digital_cluster else LEAD_INDEX_RANGE_ANALOG
+  return int(round(closest + position * (farthest - closest)))
+
+
 def accel_during_driver_override(accel: float, gas_pressed: bool, keep_long_active: bool) -> float:
   return 0.0 if gas_pressed and keep_long_active else accel
 
@@ -494,9 +517,9 @@ class CarController(CarControllerBase):
                                                          hud_control.leadVisible, hud_control.leadDistanceBars + 1, show_distance_bars,
                                                          CS.esp_hold_confirmation, distance, gap, fcw_alert, acc_hud_event, speed_limit))
       else:
-        # MLB scales the raw lead distance against the set follow gap in the packer, the others clamp to a bar count
+        # MLB scales the raw lead distance against the set follow gap in the packer, MQB and PQ send a headway index
         leadDistance = hud_control.leadDistance if self.CCS is mlbcan else \
-          (min(15, hud_control.leadDistance) if hud_control.leadDistance != 0 else 0)
+          lead_headway_index(hud_control.leadDistance, CS.out.vEgo, CS.upscale_lead_car_signal)
         self.leadDistanceBars = min(3, hud_control.leadDistanceBars)
         acc_hud_status = self.CCS.acc_hud_status_value(CS.out.cruiseState.available, CS.out.accFaulted, CC.longActive and hud_engaged,
                                                        hud_override)

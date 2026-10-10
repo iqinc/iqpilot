@@ -68,6 +68,7 @@ compare_runtime*.html
 
 iqpilot/selfdrive/pandad/pandad
 iqpilot/selfdrive/pandad/tests/test_panda_safety
+iqpilot/selfdrive/pandad/tests/test_ignition_hold
 iqpilot/cereal/services.h
 iqpilot/cereal/gen
 iqpilot/cereal/messaging/bridge
