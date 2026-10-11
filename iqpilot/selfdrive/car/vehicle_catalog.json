@@ -3941,6 +3941,73 @@
       ],
       "req": "All"
     },
+    "TESLA_MODEL_S_HW1|2014-2016": {
+      "label": "Tesla Model S (with HW1) 2014-16",
+      "id": "TESLA_MODEL_S_HW1",
+      "mk": "Tesla",
+      "grp": "tesla",
+      "mdl": "Model S (with HW1)",
+      "yrs": [
+        "2014",
+        "2015",
+        "2016"
+      ],
+      "req": "All"
+    },
+    "TESLA_MODEL_S_HW2|2017-2019": {
+      "label": "Tesla Model S (with HW2) 2017-19",
+      "id": "TESLA_MODEL_S_HW2",
+      "mk": "Tesla",
+      "grp": "tesla",
+      "mdl": "Model S (with HW2)",
+      "yrs": [
+        "2017",
+        "2018",
+        "2019"
+      ],
+      "req": "All"
+    },
+    "TESLA_MODEL_S_HW3|2020-2023": {
+      "label": "Tesla Model S (with HW3) 2020-23",
+      "id": "TESLA_MODEL_S_HW3",
+      "mk": "Tesla",
+      "grp": "tesla",
+      "mdl": "Model S (with HW3)",
+      "yrs": [
+        "2020",
+        "2021",
+        "2022",
+        "2023"
+      ],
+      "req": "All"
+    },
+    "TESLA_MODEL_X_HW1|2014-2016": {
+      "label": "Tesla Model X (with HW1) 2014-16",
+      "id": "TESLA_MODEL_X_HW1",
+      "mk": "Tesla",
+      "grp": "tesla",
+      "mdl": "Model X (with HW1)",
+      "yrs": [
+        "2014",
+        "2015",
+        "2016"
+      ],
+      "req": "All"
+    },
+    "TESLA_MODEL_X_HW2|2016-2019": {
+      "label": "Tesla Model X (with HW2) 2016-19",
+      "id": "TESLA_MODEL_X_HW2",
+      "mk": "Tesla",
+      "grp": "tesla",
+      "mdl": "Model X (with HW2)",
+      "yrs": [
+        "2016",
+        "2017",
+        "2018",
+        "2019"
+      ],
+      "req": "All"
+    },
     "TESLA_MODEL_X|2024": {
       "label": "Tesla Model X (with HW4) 2024",
       "id": "TESLA_MODEL_X",

@@ -13,7 +13,7 @@ from iqdbc.car.tesla.teslacan import TeslaCAN
 from iqdbc.car.tesla.radar_interface import RADAR_START_ADDR
 from iqdbc.car.tesla.carcontroller import CarController
 from iqdbc.car.tesla.carstate import CarState, stock_autosteer_invalid
-from iqdbc.car.tesla.values import (CANBUS, CAR, FW_PATTERN, LEGACY_DAS_STEERING_FW, TeslaFlags, TeslaSafetyFlags,
+from iqdbc.car.tesla.values import (CANBUS, CAR, FW_PATTERN, LEGACY_CARS, LEGACY_DAS_STEERING_FW, TeslaFlags, TeslaSafetyFlags,
                                     get_platform_codes, is_ascii_version_fw, is_hw4_gen2_fw, is_legacy_das_steering)
 from iqdbc.lvbs.car.interfaces import _apply_tesla_options
 from iqdbc.lvbs.car.tesla.values import TeslaFlagsIQ, TeslaSafetyFlagsIQ
@@ -44,6 +44,8 @@ def fw_match(fw: bytes):
 class TestTeslaFwPattern:
   def test_all_known_fw_parses(self):
     for car, ecus in FW_VERSIONS.items():
+      if car in LEGACY_CARS:
+        continue
       for fws in ecus.values():
         for fw in fws:
           if not is_ascii_version_fw(fw):
@@ -53,6 +55,8 @@ class TestTeslaFwPattern:
   def test_only_hw4_gen2_ships_a_binary_fw(self):
     # a binary FW can only ever match exactly, so it must not creep into other platforms
     for car, ecus in FW_VERSIONS.items():
+      if car in LEGACY_CARS:
+        continue
       for fws in ecus.values():
         for fw in fws:
           if is_ascii_version_fw(fw):

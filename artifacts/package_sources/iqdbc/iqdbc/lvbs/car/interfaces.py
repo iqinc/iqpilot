@@ -9,6 +9,7 @@ from collections.abc import Callable
 from iqdbc.car import structs
 from iqdbc.car.can_definitions import CanRecvCallable, CanSendCallable
 from iqdbc.car.subaru.values import SubaruFlags
+from iqdbc.car.tesla.values import LEGACY_CARS
 from iqdbc.lvbs.car.subaru.iq_values import SubaruFlagsIQ, SubaruSafetyFlagsIQ
 from iqdbc.lvbs.car.tesla.values import TeslaFlagsIQ, TeslaSafetyFlagsIQ
 from iqdbc.lvbs.car.toyota.values import ToyotaFlagsIQ
@@ -89,7 +90,7 @@ def _apply_long_tuning(CI, CP: structs.CarParams, CP_IQ: structs.IQCarParams,
 
 def _apply_tesla_options(CP: structs.CarParams, CP_IQ: structs.IQCarParams,
                          params_dict: dict[str, str]) -> None:
-  if CP.brand == 'tesla':
+  if CP.brand == 'tesla' and CP.carFingerprint not in LEGACY_CARS:
     torque_blend = int(params_dict.get("IQTeslaTorqueBlend", 0)) == 1
     if torque_blend:
       CP_IQ.flags |= TeslaFlagsIQ.COOP_STEERING.value

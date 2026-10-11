@@ -55,4 +55,31 @@ FW_VERSIONS = {
       b'TeM3_SP_XP002p2_0.0.0 (36),XPR003.10.0',
     ],
   },
+  CAR.TESLA_MODEL_X_HW1: {
+    (Ecu.eps, 0x730, None): [
+      b'1057658-00-00B\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
+    ],
+  },
+  CAR.TESLA_MODEL_X_HW2: {
+    (Ecu.eps, 0x730, None): [
+      b'\x10#\x81',
+    ],
+  },
+  CAR.TESLA_MODEL_S_HW1: {
+    (Ecu.eps, 0x730, None): [
+      b'1016704-00-HAA\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00',
+      b'\x10\x00A',
+    ],
+  },
+  CAR.TESLA_MODEL_S_HW2: {
+    (Ecu.eps, 0x730, None): [
+      b'\x10#\x01',
+    ],
+  },
+  CAR.TESLA_MODEL_S_HW3: {
+    (Ecu.eps, 0x730, None): [
+      b'SX_0.0.0 (99),S013.7',
+      b'SX_0.0.0 (99),SR013.7',
+    ],
+  },
 }

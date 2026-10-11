@@ -66,6 +66,7 @@ for name, argtypes, restype in (
   ("comms_can_write", [ctypes.c_char_p, ctypes.c_uint32], None),
   ("comms_can_reset", [], None),
   ("can_slots_empty", [ctypes.POINTER(CANRing)], ctypes.c_uint32),
+  ("ignition_can_hook", [ctypes.POINTER(CANPacket)], None),
 ):
   func = getattr(libpanda, name)
   func.argtypes = argtypes

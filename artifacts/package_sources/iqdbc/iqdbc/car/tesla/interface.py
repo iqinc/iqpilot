@@ -2,7 +2,8 @@ from iqdbc.car import Bus, get_safety_config, structs
 from iqdbc.car.interfaces import CarInterfaceBase
 from iqdbc.car.tesla.carcontroller import CarController
 from iqdbc.car.tesla.carstate import CarState
-from iqdbc.car.tesla.values import TeslaSafetyFlags, TeslaFlags, CANBUS, CAR, DBC, Ecu, is_legacy_das_steering
+from iqdbc.car.tesla.values import (TeslaSafetyFlags, TeslaFlags, TeslaLegacySafetyFlags, CANBUS, CAR, DBC, Ecu, LEGACY_CARS,
+                                    LEGACY_HW1_CARS, LEGACY_HW2_CARS, is_legacy_das_steering)
 from iqdbc.car.tesla.radar_interface import RadarInterface, RADAR_START_ADDR
 
 from iqdbc.lvbs.car.tesla.values import TeslaFlagsIQ, TeslaSafetyFlagsIQ
@@ -15,6 +16,9 @@ class CarInterface(CarInterfaceBase):
 
   @staticmethod
   def _get_params(ret: structs.CarParams, candidate, fingerprint, car_fw, alpha_long, is_release, docs) -> structs.CarParams:
+    if candidate in LEGACY_CARS:
+      return CarInterface._get_params_legacy(ret, candidate, fingerprint)
+
     ret.brand = "tesla"
 
     ret.safetyConfigs = [get_safety_config(structs.CarParams.SafetyModel.tesla)]
@@ -64,8 +68,43 @@ class CarInterface(CarInterfaceBase):
     return ret
 
   @staticmethod
+  def _get_params_legacy(ret: structs.CarParams, candidate, fingerprint) -> structs.CarParams:
+    ret.brand = "tesla"
+
+    if not any(0x201 in messages for messages in fingerprint.values()):
+      ret.flags |= TeslaFlags.NO_SDM1.value
+
+    safety_model = structs.CarParams.SafetyModel.teslaLegacy
+    if candidate in LEGACY_HW1_CARS:
+      ret.safetyConfigs = [
+        get_safety_config(safety_model, int(TeslaLegacySafetyFlags.HW1)),
+      ]
+    else:
+      hw = TeslaLegacySafetyFlags.HW2 if candidate in LEGACY_HW2_CARS else TeslaLegacySafetyFlags.HW3
+      ret.safetyConfigs = [
+        get_safety_config(safety_model, int(hw)),
+        get_safety_config(safety_model, int(hw | TeslaLegacySafetyFlags.EXTERNAL_PANDA)),
+      ]
+
+    ret.steerLimitTimer = 0.4
+    ret.steerActuatorDelay = 0.1
+    ret.steerAtStandstill = True
+
+    ret.steerControlType = structs.CarParams.SteerControlType.angle
+    ret.radarUnavailable = candidate == CAR.TESLA_MODEL_S_HW2
+
+    ret.alphaLongitudinalAvailable = True
+    ret.openpilotLongitudinalControl = True
+    ret.safetyConfigs[0].safetyParam |= TeslaLegacySafetyFlags.LONG_CONTROL.value
+
+    return ret
+
+  @staticmethod
   def _get_params_iq(stock_cp: structs.CarParams, ret: structs.IQCarParams, candidate, fingerprint: dict[int, dict[int, int]],
                      car_fw: list[structs.CarParams.CarFw], alpha_long: bool, is_release_iq: bool, docs: bool) -> structs.IQCarParams:
+
+    if candidate in LEGACY_CARS:
+      return ret
 
     stock_cp.enableBsm = True
 

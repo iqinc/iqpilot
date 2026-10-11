@@ -78,6 +78,62 @@ class CAR(Platforms):
     [TeslaCarHW4ModelSXDocs("Tesla Model X (with HW4) 2024")],
     CarSpecs(mass=2495., wheelbase=2.960, steerRatio=12.0),
   )
+  TESLA_MODEL_X_HW1 = TeslaPlatformConfig(
+    [CarDocs("Tesla Model X (with HW1) 2014-16", "All", car_parts=CarParts.common([CarHarness.tesla_model_x_hw1]))],
+    CarSpecs(mass=2447., wheelbase=2.960, steerRatio=15.0),
+    {
+      Bus.chassis: 'tesla_can',
+      Bus.party: 'tesla_can',
+      Bus.pt: 'tesla_can',
+      Bus.radar: 'tesla_radar_bosch_generated',
+    },
+  )
+  TESLA_MODEL_X_HW2 = TeslaPlatformConfig(
+    [CarDocs("Tesla Model X (with HW2) 2016-19", "All", car_parts=CarParts.common([CarHarness.tesla_model_sx_hw2]))],
+    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
+    {
+      Bus.chassis: 'tesla_can',
+      Bus.party: 'tesla_can',
+      Bus.pt: 'tesla_powertrain',
+      Bus.radar: 'tesla_radar_bosch_generated',
+    },
+  )
+  TESLA_MODEL_S_HW1 = TeslaPlatformConfig(
+    [CarDocs("Tesla Model S (with HW1) 2014-16", "All", car_parts=CarParts.common([CarHarness.tesla_model_s_hw1]))],
+    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
+    {
+      Bus.chassis: 'tesla_can',
+      Bus.party: 'tesla_can',
+      Bus.pt: 'tesla_can',
+      Bus.radar: 'tesla_radar_bosch_generated',
+    },
+  )
+  TESLA_MODEL_S_HW2 = TeslaPlatformConfig(
+    [CarDocs("Tesla Model S (with HW2) 2017-19", "All", car_parts=CarParts.common([CarHarness.tesla_model_sx_hw2]))],
+    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
+    {
+      Bus.chassis: 'tesla_can',
+      Bus.party: 'tesla_can',
+      Bus.pt: 'tesla_powertrain',
+      Bus.radar: 'tesla_radar_bosch_generated',
+    },
+  )
+  TESLA_MODEL_S_HW3 = TeslaPlatformConfig(
+    [CarDocs("Tesla Model S (with HW3) 2020-23", "All", car_parts=CarParts.common([CarHarness.tesla_model_sx_hw3]))],
+    CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
+    {
+      Bus.chassis: 'tesla_can',
+      Bus.party: 'tesla_raven_party',
+      Bus.pt: 'tesla_powertrain',
+      Bus.radar: 'tesla_radar_continental_generated',
+    },
+  )
+
+
+LEGACY_CARS = (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_S_HW2, CAR.TESLA_MODEL_S_HW3, CAR.TESLA_MODEL_X_HW1, CAR.TESLA_MODEL_X_HW2)
+LEGACY_HW1_CARS = (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1)
+LEGACY_HW2_CARS = (CAR.TESLA_MODEL_S_HW2, CAR.TESLA_MODEL_X_HW2)
+LEGACY_BOSCH_RADAR_CARS = LEGACY_HW1_CARS + LEGACY_HW2_CARS
 
 
 # Cars with this EPS FW have a 2-bit DAS_steeringControlType and use TeslaFlags.LEGACY_DAS_STEERING
@@ -240,6 +296,11 @@ FW_QUERY_CONFIG = FwQueryConfig(
       [StdQueries.TESTER_PRESENT_RESPONSE, StdQueries.UDS_VERSION_RESPONSE],
       bus=0,
     ),
+    Request(
+      [StdQueries.TESTER_PRESENT_REQUEST, StdQueries.MANUFACTURER_SOFTWARE_VERSION_REQUEST],
+      [StdQueries.TESTER_PRESENT_RESPONSE, StdQueries.MANUFACTURER_SOFTWARE_VERSION_RESPONSE],
+      bus=0,
+    ),
   ],
   match_fw_to_car_fuzzy=match_fw_to_car_fuzzy,
 )
@@ -249,6 +310,24 @@ class CANBUS:
   party = 0
   vehicle = 1
   autopilot_party = 2
+
+
+@dataclass(frozen=True)
+class LegacyCanBus:
+  party: int
+  chassis: int
+  powertrain: int
+  radar: int
+  autopilot_party: int
+  autopilot_powertrain: int
+
+
+def get_legacy_canbus(candidate: str) -> LegacyCanBus:
+  if candidate in LEGACY_HW1_CARS:
+    return LegacyCanBus(party=0, chassis=0, powertrain=0, radar=1, autopilot_party=2, autopilot_powertrain=2)
+  if candidate == CAR.TESLA_MODEL_S_HW3:
+    return LegacyCanBus(party=0, chassis=1, powertrain=4, radar=5, autopilot_party=2, autopilot_powertrain=6)
+  return LegacyCanBus(party=0, chassis=0, powertrain=4, radar=1, autopilot_party=2, autopilot_powertrain=6)
 
 
 GEAR_MAP = {
@@ -288,12 +367,21 @@ class CarControllerParams:
   JERK_LIMIT_MAX = 4.9  # m/s^3, ACC faults at 5.0
   JERK_LIMIT_MIN = -4.9  # m/s^3, ACC faults at 5.0
   JERK_UP = 1.0  # m/s^3
+  JERK_RAMP_RATE = JERK_LIMIT_MAX * 0.002
 
 
 class TeslaSafetyFlags(IntFlag):
   LONG_CONTROL = 1
   LEGACY_DAS_STEERING = 2
   HW4_GEN2 = 4
+
+
+class TeslaLegacySafetyFlags(IntFlag):
+  LONG_CONTROL = 1
+  EXTERNAL_PANDA = 4
+  HW1 = 8
+  HW2 = 16
+  HW3 = 32
 
 
 class TeslaFlags(IntFlag):
@@ -304,6 +392,7 @@ class TeslaFlags(IntFlag):
   HW4_GEN2 = 8
   # blinkers and the seatbelt buckle are only on the VEHICLE bus, which needs its CAN lines tapped
   HW4_GEN2_VEHICLE_BUS = 16
+  NO_SDM1 = 32
 
 
 DBC = CAR.create_dbc_map()

@@ -5,7 +5,8 @@ from iqdbc.car.lateral import apply_steer_angle_limits_vm
 from iqdbc.car.interfaces import CarControllerBase
 from iqdbc.car.tesla import TESLA_BLINKERS
 from iqdbc.car.tesla.teslacan import TeslaCAN
-from iqdbc.car.tesla.values import CarControllerParams
+from iqdbc.car.tesla.teslacan_legacy import TeslaCANLegacy
+from iqdbc.car.tesla.values import CAR, CarControllerParams, LEGACY_CARS, LEGACY_HW1_CARS, get_legacy_canbus
 from iqdbc.car.vehicle_model import VehicleModel
 from iqpilot.selfdrive.car.enhanced_stock_longitudinal_control import get_set_speed_kph_from_params
 from iqdbc.lvbs.car.tesla.torque_blend import TorqueBlendController
@@ -36,7 +37,46 @@ class CarController(CarControllerBase):
     self.blinker_request_prev = False
     self.blinker_cancel_frame = 0
 
+    self.legacy = CP.carFingerprint in LEGACY_CARS
+    if self.legacy:
+      from iqdbc.car.tesla.interface import CarInterface
+      canbus = get_legacy_canbus(CP.carFingerprint)
+      packers = {canbus.party: CANPacker(dbc_names[Bus.party]), canbus.powertrain: CANPacker(dbc_names[Bus.pt])}
+      self.tesla_can_legacy = TeslaCANLegacy(packers, canbus)
+      self.VM = VehicleModel(CarInterface.get_non_essential_params(CAR.TESLA_MODEL_S_HW3))
+
+  def update_legacy(self, CC, CS):
+    actuators = CC.actuators
+    can_sends = []
+
+    lat_active = CC.latActive and CS.hands_on_level < 3
+
+    if self.frame % CarControllerParams.STEER_STEP == 0:
+      self.apply_angle_last = apply_steer_angle_limits_vm(actuators.steeringAngleDeg, self.apply_angle_last, CS.out.vEgoRaw, CS.out.steeringAngleDeg,
+                                                          lat_active, CarControllerParams, self.VM)
+      counter = (self.frame // CarControllerParams.STEER_STEP) % 16
+      can_sends.append(self.tesla_can_legacy.create_steering_control(counter, self.apply_angle_last, lat_active))
+
+    if self.frame % 10 == 0 and self.CP.carFingerprint not in LEGACY_HW1_CARS:
+      counter = (self.frame // 10) % 16
+      can_sends.append(self.tesla_can_legacy.create_steering_allowed(counter))
+
+    if self.frame % 4 == 0:
+      state = 13 if CC.cruiseControl.cancel else 4
+      accel = float(np.clip(actuators.accel, CarControllerParams.ACCEL_MIN, CarControllerParams.ACCEL_MAX))
+      counter = (self.frame // 4) % 8
+      can_sends.append(self.tesla_can_legacy.create_longitudinal_command(state, accel, counter, CS.out.vEgo, CC.longActive, CS.out.gasPressed))
+
+    new_actuators = actuators.as_builder()
+    new_actuators.steeringAngleDeg = self.apply_angle_last
+
+    self.frame += 1
+    return new_actuators, can_sends
+
   def update(self, CC, CC_IQ, CS, now_nanos):
+    if self.legacy:
+      return self.update_legacy(CC, CS)
+
     actuators = CC.actuators
     can_sends = []
 
