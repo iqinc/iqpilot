@@ -108,7 +108,7 @@ class Panda:
   SERIAL_DEBUG = 0
   SERIAL_SOM_DEBUG = 4
 
-  USB_VIDS = (0xbbaa, 0x3801)  # 0x3801 is comma's registered VID
+  USB_VIDS = (0xbbaa, 0x3801, 0xbaba)  # 0x3801 is comma's registered VID, 0xbaba is the bootstub on xnor-tech black pandas
   USB_PIDS = (0xddee, 0xddcc)
   REQUEST_IN = usb1.ENDPOINT_IN | usb1.TYPE_VENDOR | usb1.RECIPIENT_DEVICE
   REQUEST_OUT = usb1.ENDPOINT_OUT | usb1.TYPE_VENDOR | usb1.RECIPIENT_DEVICE

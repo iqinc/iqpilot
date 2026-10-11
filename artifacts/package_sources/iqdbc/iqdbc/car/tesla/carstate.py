@@ -4,7 +4,8 @@ from iqdbc.car import Bus, structs
 from iqdbc.car.common.conversions import Conversions as CV
 from iqdbc.car.interfaces import CarStateBase
 from iqdbc.car.tesla import TESLA_BLINKERS
-from iqdbc.car.tesla.values import DBC, CANBUS, CAR, GEAR_MAP, LEGACY_CARS, STEER_THRESHOLD, TeslaFlags, get_legacy_canbus
+from iqdbc.car.tesla.values import (DBC, CANBUS, CAR, GEAR_MAP, LEGACY_CARS, LEGACY_HW3_CARS, STEER_THRESHOLD, TeslaFlags,
+                                    get_legacy_canbus)
 
 from iqdbc.lvbs.car.tesla.iq_carstate import IQCarState
 from iqdbc.lvbs.car.tesla.values import TeslaFlagsIQ, TeslaSafetyFlagsIQ
@@ -77,7 +78,7 @@ class CarState(CarStateBase, IQCarState):
 
     ret.brakePressed = cp_chassis.vl["BrakeMessage"]["driverBrakeStatus"] == 2
 
-    if self.CP.carFingerprint == CAR.TESLA_MODEL_S_HW3:
+    if self.CP.carFingerprint in LEGACY_HW3_CARS:
       epas_status = cp_party.vl["EPAS_sysStatus"]
     else:
       epas_status = cp_chassis.vl["EPAS_sysStatus"]

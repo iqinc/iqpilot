@@ -118,6 +118,16 @@ class CAR(Platforms):
       Bus.radar: 'tesla_radar_bosch_generated',
     },
   )
+  TESLA_MODEL_X_HW3 = TeslaPlatformConfig(
+    [CarDocs("Tesla Model X (with HW3) 2021-23", "All", car_parts=CarParts.common([CarHarness.tesla_model_sx_hw3]))],
+    CarSpecs(mass=2468., wheelbase=2.960, steerRatio=15.0),
+    {
+      Bus.chassis: 'tesla_can',
+      Bus.party: 'tesla_raven_party',
+      Bus.pt: 'tesla_powertrain',
+      Bus.radar: 'tesla_radar_continental_generated',
+    },
+  )
   TESLA_MODEL_S_HW3 = TeslaPlatformConfig(
     [CarDocs("Tesla Model S (with HW3) 2020-23", "All", car_parts=CarParts.common([CarHarness.tesla_model_sx_hw3]))],
     CarSpecs(mass=2100., wheelbase=2.960, steerRatio=15.0),
@@ -130,9 +140,11 @@ class CAR(Platforms):
   )
 
 
-LEGACY_CARS = (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_S_HW2, CAR.TESLA_MODEL_S_HW3, CAR.TESLA_MODEL_X_HW1, CAR.TESLA_MODEL_X_HW2)
+LEGACY_CARS = (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_S_HW2, CAR.TESLA_MODEL_S_HW3, CAR.TESLA_MODEL_X_HW1, CAR.TESLA_MODEL_X_HW2,
+               CAR.TESLA_MODEL_X_HW3)
 LEGACY_HW1_CARS = (CAR.TESLA_MODEL_S_HW1, CAR.TESLA_MODEL_X_HW1)
 LEGACY_HW2_CARS = (CAR.TESLA_MODEL_S_HW2, CAR.TESLA_MODEL_X_HW2)
+LEGACY_HW3_CARS = (CAR.TESLA_MODEL_S_HW3, CAR.TESLA_MODEL_X_HW3)
 LEGACY_BOSCH_RADAR_CARS = LEGACY_HW1_CARS + LEGACY_HW2_CARS
 
 
@@ -325,7 +337,7 @@ class LegacyCanBus:
 def get_legacy_canbus(candidate: str) -> LegacyCanBus:
   if candidate in LEGACY_HW1_CARS:
     return LegacyCanBus(party=0, chassis=0, powertrain=0, radar=1, autopilot_party=2, autopilot_powertrain=2)
-  if candidate == CAR.TESLA_MODEL_S_HW3:
+  if candidate in LEGACY_HW3_CARS:
     return LegacyCanBus(party=0, chassis=1, powertrain=4, radar=5, autopilot_party=2, autopilot_powertrain=6)
   return LegacyCanBus(party=0, chassis=0, powertrain=4, radar=1, autopilot_party=2, autopilot_powertrain=6)
 

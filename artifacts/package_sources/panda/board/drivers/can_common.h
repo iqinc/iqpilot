@@ -324,6 +324,40 @@ void ignition_can_hook(CANPacket_t *msg) {
       prev_counter_vw_meb = counter;
     }
 
+    if ((msg->addr == 0x116U) && (len == 6)) {
+      const int TESLA_LEGACY_DI_GEAR_LOCK = 3;
+      const uint8_t TESLA_LEGACY_DI_GEAR_R = 2U;
+      const uint8_t TESLA_LEGACY_DI_GEAR_D = 4U;
+      static int prev_counter_tesla_legacy_gear = -1;
+      static int tesla_legacy_gear_streak = 0;
+
+      uint8_t checksum = (uint8_t)(0x16U + 0x01U);
+      for (int i = 0; i < 5; i++) {
+        checksum += (uint8_t)msg->data[i];
+      }
+
+      if (checksum == (uint8_t)msg->data[5]) {
+        int counter = msg->data[4] & 0xFU;
+        if ((prev_counter_tesla_legacy_gear != -1) && (counter == ((prev_counter_tesla_legacy_gear + 1) % 16))) {
+          if (tesla_legacy_gear_streak < TESLA_LEGACY_DI_GEAR_LOCK) {
+            tesla_legacy_gear_streak += 1;
+          }
+        } else {
+          tesla_legacy_gear_streak = 0;
+        }
+        prev_counter_tesla_legacy_gear = counter;
+
+        if (tesla_legacy_gear_streak >= TESLA_LEGACY_DI_GEAR_LOCK) {
+          const uint8_t gear = (msg->data[1] >> 4) & 0x7U;
+          ignition_can = (gear >= TESLA_LEGACY_DI_GEAR_R) && (gear <= TESLA_LEGACY_DI_GEAR_D);
+          ignition_can_cnt = 0U;
+        }
+      } else {
+        tesla_legacy_gear_streak = 0;
+        prev_counter_tesla_legacy_gear = -1;
+      }
+    }
+
   }
 
   if (((msg->bus == 0U) || (msg->bus == 1U)) && (msg->addr == 0x348U) && (GET_LEN(msg) == 8)) {

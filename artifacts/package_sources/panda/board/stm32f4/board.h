@@ -13,6 +13,7 @@
 #include "board/stm32f4/llfan.h"
 #include "board/drivers/clock_source.h"
 #include "board/boards/dos.h"
+#include "board/boards/black.h"
 
 void detect_board_type(void) {
   set_gpio_output(GPIOC, 14, 1);
@@ -23,6 +24,14 @@ void detect_board_type(void) {
   } else if (!detect_with_pull(GPIOB, 15, PULL_UP)) {
     hw_type = HW_TYPE_DOS;
     current_board = &board_dos;
+  } else if (detect_with_pull(GPIOA, 4, PULL_DOWN) || detect_with_pull(GPIOA, 5, PULL_DOWN) ||
+             detect_with_pull(GPIOA, 6, PULL_DOWN) || detect_with_pull(GPIOA, 7, PULL_DOWN)) {
+    hw_type = HW_TYPE_UNKNOWN;
+  } else if (detect_with_pull(GPIOA, 13, PULL_DOWN)) {
+    hw_type = HW_TYPE_UNKNOWN;
+  } else {
+    hw_type = HW_TYPE_BLACK_PANDA;
+    current_board = &board_black;
   }
 
   // Return A13 to the alt mode to fix SWD

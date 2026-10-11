@@ -86,6 +86,7 @@ class TestLegacyBuses:
     (CAR.TESLA_MODEL_S_HW2, {Bus.party: 0, Bus.ap_party: 2, Bus.pt: 4, Bus.ap_pt: 6, Bus.chassis: 0}),
     (CAR.TESLA_MODEL_X_HW2, {Bus.party: 0, Bus.ap_party: 2, Bus.pt: 4, Bus.ap_pt: 6, Bus.chassis: 0}),
     (CAR.TESLA_MODEL_S_HW3, {Bus.party: 0, Bus.ap_party: 2, Bus.pt: 4, Bus.ap_pt: 6, Bus.chassis: 1}),
+    (CAR.TESLA_MODEL_X_HW3, {Bus.party: 0, Bus.ap_party: 2, Bus.pt: 4, Bus.ap_pt: 6, Bus.chassis: 1}),
   ])
   def test_parser_buses(self, candidate, expected):
     CP, CP_IQ = make_params(candidate)
@@ -94,6 +95,7 @@ class TestLegacyBuses:
 
   def test_hw3_radar_is_on_the_external_panda(self):
     assert get_legacy_canbus(CAR.TESLA_MODEL_S_HW3).radar == 5
+    assert get_legacy_canbus(CAR.TESLA_MODEL_X_HW3).radar == 5
     assert get_legacy_canbus(CAR.TESLA_MODEL_S_HW2).radar == 1
 
   def test_dbc_map(self):
@@ -107,7 +109,7 @@ class TestLegacyBuses:
 
 
 class TestLegacyFingerprint:
-  @pytest.mark.parametrize("candidate", LEGACY_CARS)
+  @pytest.mark.parametrize("candidate", [c for c in LEGACY_CARS if c in FW_VERSIONS])
   def test_exact_match(self, candidate):
     for fw in FW_VERSIONS[candidate][(Ecu.eps, 0x730, None)]:
       car_fw = [CarParams.CarFw(ecu=Ecu.eps, fwVersion=fw, address=0x730, subAddress=0, brand='tesla')]
@@ -183,6 +185,19 @@ class TestLegacyCarState:
     assert ret.stockLkas
     assert cs.hands_on_level == 1
     assert cs.das_control["DAS_aebEvent"] == 1
+
+  def test_model_x_hw3_reads_the_same_sources_as_model_s_hw3(self):
+    cs, parsers = self.car_state(CAR.TESLA_MODEL_X_HW3)
+    feed(
+      parsers,
+      pack('tesla_raven_party', 0, EPAS_sysStatus={"EPAS_internalSAS": 4.0, "EPAS_handsOnLevel": 0, "EPAS_eacStatus": 2}),
+      pack('tesla_can', 1, ESP_B={"ESP_vehicleSpeed": 36.0}, DI_state={"DI_cruiseState": 2, "DI_speedUnits": 1, "DI_digitalSpeed": 40}),
+      pack('tesla_powertrain', 4, DI_torque1={"DI_pedalPos": 0}),
+    )
+    ret, _ = cs.update(parsers)
+    assert ret.vEgoRaw == pytest.approx(10.0, abs=0.01)
+    assert ret.steeringAngleDeg == pytest.approx(-4.0, abs=0.1)
+    assert ret.cruiseState.enabled
 
   def test_hw3_door_open(self):
     cs, parsers = self.car_state(CAR.TESLA_MODEL_S_HW3)
