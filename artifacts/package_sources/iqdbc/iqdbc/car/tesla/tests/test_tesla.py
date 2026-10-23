@@ -479,6 +479,36 @@ class TestTeslaCarControllerIQParams:
     assert new_actuators.accel == 1.0
 
 
+class TestTeslaOdometerStoreMissing:
+  @staticmethod
+  def _car_state(fingerprint):
+    CP = CarInterface.get_params(CAR.TESLA_MODEL_Y, fingerprint, [], False, False, False)
+    CP_IQ = CarInterface.get_params_iq(CP, CAR.TESLA_MODEL_Y, fingerprint, [], False, False, False)
+    car_state = CarState(CP, CP_IQ)
+    parsers = CarState.get_can_parsers(CP, CP_IQ)
+    car_state.update(parsers)
+    return car_state, parsers
+
+  def test_update_passes_through_odometer_when_store_is_unavailable(self):
+    fingerprint = hw4_gen2_fingerprint(vehicle_bus=True)
+    fingerprint[CANBUS.vehicle][0x3B6] = 8
+    car_state, parsers = self._car_state(fingerprint)
+    assert bool(car_state.CP_IQ.flags & TeslaFlagsIQ.HAS_VEHICLE_BUS)
+    car_state._odometer_store = None
+
+    packer = CANPacker("tesla_model3_vehicle")
+    odo_msg = packer.make_can_msg("ID3B6UI_odometer", 1, {
+      "UI_odometer": 29150.377,
+      "UI_odometerCounter": 1,
+      "UI_odometerChecksum": 0,
+    })
+    for parser in parsers.values():
+      parser.update([1_000_000_000, [odo_msg]])
+    ret, _ = car_state.update(parsers)
+
+    assert ret.odometer == pytest.approx(29150.377, abs=0.01)
+
+
 @pytest.fixture
 def stub_odometer_store():
   # the odometer store lives in a signed runtime that isn't importable off-device

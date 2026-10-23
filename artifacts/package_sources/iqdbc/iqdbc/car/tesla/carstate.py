@@ -274,7 +274,7 @@ class CarState(CarStateBase, IQCarState):
       self.das_body_controls_dat = bytes(can_parsers[Bus.cam].dat.get(0x3E9, b""))
 
     IQCarState.update(self, ret, ret_iq, can_parsers)
-    if ret.odometer > 0.0:
+    if ret.odometer > 0.0 and self._odometer_store is not None:
       ret.odometer = self._odometer_store.record(ret.odometer) or 0.0
 
     return ret, ret_iq
