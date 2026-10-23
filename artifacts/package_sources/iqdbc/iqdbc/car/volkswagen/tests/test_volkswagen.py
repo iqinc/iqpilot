@@ -258,6 +258,34 @@ def test_mlb_no_ecan_transmits_on_the_powertrain_bus():
   assert {bus for _, _, bus in sent} == {1}
 
 
+def test_hca_torque_stops_the_moment_openpilot_disengages():
+  a4 = _a4_mk4_car()
+  packer = CANPacker("vw_mlb")
+  nanos = 0
+
+  def run(enabled, lat_active, steps=20):
+    nonlocal nanos
+    CC = structs.CarControl()
+    CC.enabled = enabled
+    CC.latActive = lat_active
+    CC.actuators.torque = 1.0
+    CC = CC.as_reader()
+    CC_IQ = structs.IQCarControl()
+    for _ in range(steps):
+      nanos += int(DT_CTRL * 1e9)
+      a4.update([(nanos, _a4_mk4_frames(packer, eps_torque=0))])
+      a4.apply(CC, CC_IQ, nanos)
+    return a4.CC.HCA_Status, a4.CC.apply_torque_last
+
+  engaged_status, engaged_torque = run(enabled=True, lat_active=True)
+  assert engaged_status in (5, 7)
+  assert engaged_torque != 0
+
+  disengaged_status, disengaged_torque = run(enabled=False, lat_active=True)
+  assert disengaged_status == 3
+  assert disengaged_torque == 0
+
+
 def test_mlb_no_hca_eps_reports_a_steer_fault_without_a_can_fault():
   a4 = _a4_mk4_car()
   assert a4.CP.flags & VolkswagenFlagsIQ.IQ_MLB_NO_HCA_EPS

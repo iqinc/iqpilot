@@ -86,6 +86,28 @@ def test_resolve_combined_split_artifact_prefers_override(tmp_path: Path, monkey
   assert resolve_combined_split_artifact(bundle) == expected
 
 
+def test_resolve_combined_split_artifact_finds_encrypted_copy_after_plaintext_removed(tmp_path: Path, monkeypatch):
+  bundle = _Bundle([_Model(ModelType.policy, "driving_combined_83b81b83.pkl.iqc")])
+  bundle.ref = "83b81b83cdf76a577946a1567f4644e1a018443c"
+  expected = tmp_path / "driving_combined_83b81b83.pkl.iqc"
+  expected.write_bytes(b"IQC1")
+
+  monkeypatch.setattr("iqpilot.selfdrive.iqmodeld.models.combined_artifact._MODEL_ROOT", tmp_path)
+
+  assert resolve_combined_split_artifact(bundle) == expected
+
+
+def test_resolve_combined_split_artifact_prefers_plaintext_when_both_exist(tmp_path: Path, monkeypatch):
+  bundle = _Bundle([_Model(ModelType.vision, "driving_vision_demo_tinygrad.pkl.iqc")])
+  plaintext = tmp_path / "driving_combined_demo.pkl"
+  plaintext.write_bytes(b"iq")
+  (tmp_path / "driving_combined_demo.pkl.iqc").write_bytes(b"IQC1")
+
+  monkeypatch.setattr("iqpilot.selfdrive.iqmodeld.models.combined_artifact._MODEL_ROOT", tmp_path)
+
+  assert resolve_combined_split_artifact(bundle) == plaintext
+
+
 def test_get_model_runner_prefers_combined_split_artifact(monkeypatch):
   bundle = _Bundle([
     _Model(ModelType.vision, "driving_vision_demo_tinygrad.pkl"),

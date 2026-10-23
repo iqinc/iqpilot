@@ -32,6 +32,10 @@ CEREAL_SERVICES = [f for f in log.Event.schema.union_fields if f in SERVICE_LIST
                    and SERVICE_LIST[f].should_log and "encode" not in f.lower()]
 
 
+# Cold-starting loggerd/encoderd imports the venv from scratch; CI runners on USB disks need far more than 5 s.
+PROCESS_START_TIMEOUT_S = 60
+
+
 class TestLoggerd:
   def _get_latest_log_dir(self):
     log_dirs = sorted(Path(Paths.log_root()).iterdir(), key=lambda f: f.stat().st_mtime)
@@ -80,7 +84,7 @@ class TestLoggerd:
 
     managed_processes["loggerd"].start()
     for s in services:
-      assert pm.wait_for_readers_to_update(s, timeout=5)
+      assert pm.wait_for_readers_to_update(s, timeout=PROCESS_START_TIMEOUT_S)
 
     sent_msgs = defaultdict(list)
     for i in range(random.randint(2, 10) * 100):
@@ -128,7 +132,7 @@ class TestLoggerd:
       managed_processes["loggerd"].start()
       managed_processes["encoderd"].start()
       for _, _, state in streams:
-        assert pm.wait_for_readers_to_update(state, timeout=5)
+        assert pm.wait_for_readers_to_update(state, timeout=PROCESS_START_TIMEOUT_S)
 
       fps = 20
       for n in range(1, int(num_segs * segment_length * fps) + 1):

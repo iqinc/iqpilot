@@ -193,7 +193,7 @@ class LongitudinalMpc:
     try:
       return self._params.get_bool("newLeadMpc")
     except UnknownKeyName:
-      return True
+      return False
 
   def reset(self):
     self.solver.reset()

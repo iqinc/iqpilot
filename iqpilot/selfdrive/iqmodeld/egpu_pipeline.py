@@ -30,8 +30,10 @@ class EgpuPipeline:
     self.output_len = int(meta["output_len"])
 
   def run(self, warped: np.ndarray, desire_vec: np.ndarray, traffic_convention: np.ndarray,
-          action_t: np.ndarray) -> np.ndarray:
-    if isinstance(self.infer_fn, PolicyRunner):
+          action_t: np.ndarray, extras: dict | None = None) -> np.ndarray:
+    if self.stateful:
+      out = np.asarray(self.infer_fn.run(warped, desire_vec, traffic_convention, action_t, extras), dtype=np.float32).reshape(-1)
+    elif isinstance(self.infer_fn, PolicyRunner):
       out = np.asarray(self.infer_fn.run(warped, desire_vec, traffic_convention, action_t), dtype=np.float32).reshape(-1)
     else:
       inputs = self.state.push_and_materialize(warped, desire_vec, traffic_convention, action_t)
@@ -42,10 +44,11 @@ class EgpuPipeline:
     return out
 
   def run_frames(self, main_frame, extra_frame, tfm: np.ndarray, big_tfm: np.ndarray, desire_vec: np.ndarray,
-                 traffic_convention: np.ndarray, action_t: np.ndarray) -> np.ndarray:
+                 traffic_convention: np.ndarray, action_t: np.ndarray, extras: dict | None = None) -> np.ndarray:
     if not isinstance(self.infer_fn, ModelRunner):
       raise EgpuPipelineError("run_frames needs a format-3 (warp-on-dock) artifact")
-    out = np.asarray(self.infer_fn.run(main_frame, extra_frame, tfm, big_tfm, desire_vec, traffic_convention, action_t),
+    args = (main_frame, extra_frame, tfm, big_tfm, desire_vec, traffic_convention, action_t)
+    out = np.asarray(self.infer_fn.run(*args, extras) if self.stateful else self.infer_fn.run(*args),
                      dtype=np.float32).reshape(-1)
     self._check(out)
     return out

@@ -1183,9 +1183,10 @@ class NavMapPanel(Widget):
     if now - self._last_params_refresh < PARAMS_REFRESH_S:
       return
     try:
-      self._maps_enabled = self._force_visible or self._params.get_bool("OnScreenNavigation")
+      navigation_enabled = self._params.get_bool("NavigationEnabled")
+      self._maps_enabled = self._force_visible or (navigation_enabled and self._params.get_bool("OnScreenNavigation"))
     except UnknownKeyName:
-      # If the param doesn't exist in this build, default to disabled unless explicitly embedded.
+      navigation_enabled = False
       self._maps_enabled = self._force_visible
     try:
       self._online_maps_enabled = self._params.get_bool("OnlineOSMaps")
@@ -1195,7 +1196,7 @@ class NavMapPanel(Widget):
       self._offline_maps_enabled = False
 
     has_downloaded_maps = find_offline_mbtiles_path() is not None or find_offline_xyz_root() is not None
-    if gui_app.big_ui() and has_downloaded_maps:
+    if navigation_enabled and gui_app.big_ui() and has_downloaded_maps:
       enable_panel = not self._maps_enabled
       enable_offline = not self._offline_maps_enabled
       self._maps_enabled = True
@@ -1365,9 +1366,9 @@ class NavMapPanel(Widget):
 
   def set_maps_enabled(self, enabled: bool) -> None:
     self._params.put_bool("OnScreenNavigation", enabled)
-    self._maps_enabled = enabled
-    self._last_params_refresh = time.monotonic()
-    if not enabled:
+    self._last_params_refresh = -math.inf
+    self._refresh_params(time.monotonic())
+    if not self._maps_enabled:
       self.active = False
       self._release_providers()
 

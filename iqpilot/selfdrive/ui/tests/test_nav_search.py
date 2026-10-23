@@ -3,6 +3,8 @@ Copyright (c) IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed
 """
 from types import SimpleNamespace
 
+import pytest
+
 from iqpilot.selfdrive.ui.lib import nav_search
 
 
@@ -13,6 +15,18 @@ class FakeParams:
       "OsmLocationName": "CN",
       "MapboxToken": "mapbox-key",
     }.get(key)
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_selecting_destination_preserves_navigation_master_switch(monkeypatch, enabled):
+  values = {'NavigationEnabled': enabled, 'NavigationActive': True, 'AthenaNavigationRoute': {}}
+  params = SimpleNamespace(put=values.__setitem__, put_bool=values.__setitem__, remove=lambda key: values.pop(key, None))
+  monkeypatch.setattr(nav_search, 'Params', lambda: params)
+  nav_search.set_destination(41.0, -87.0, 'Home')
+  assert values['NavigationEnabled'] is enabled
+  assert values['NavigationDestination'] == {'latitude': 41.0, 'longitude': -87.0, 'name': 'Home'}
+  assert not values['NavigationActive']
+  assert 'AthenaNavigationRoute' not in values
 
 
 def test_china_search_uses_amap_without_calling_mapbox(monkeypatch):

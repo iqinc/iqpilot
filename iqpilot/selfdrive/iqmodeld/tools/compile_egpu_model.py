@@ -26,13 +26,14 @@ os.environ.setdefault("DEV", "USB+AMD:LLVM")
 
 import numpy as np
 
-from iqpilot.selfdrive.iqmodeld.egpu_helpers import egpu_pkl_path, local_onnx, patch_tinygrad_fetch_fw
+from iqpilot.selfdrive.iqmodeld.egpu_helpers import egpu_pkl_path, local_onnx, patch_tinygrad_fetch_fw, patch_tinygrad_prune_views
 from iqpilot.selfdrive.iqmodeld.egpu_model import EGPU_MODELS, get_egpu_model, resolve_egpu_model
 from iqpilot.selfdrive.iqmodeld.temporal_state import MODEL_INPUT_SPEC, spec_from_meta
 
 INPUT_SPEC = dict(MODEL_INPUT_SPEC)
 
 patch_tinygrad_fetch_fw()
+patch_tinygrad_prune_views()
 
 SEED = 42
 

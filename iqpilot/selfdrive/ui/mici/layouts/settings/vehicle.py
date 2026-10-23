@@ -8,6 +8,7 @@ import pyray as rl
 
 from iqpilot.cereal import car
 from iqpilot.selfdrive.car.vehicle_catalog import load_catalog
+from iqpilot.selfdrive.ui.lib.nnff_settings import nnff_availability
 from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl
 from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.ui.lib.application import gui_app, FontWeight, MousePos
@@ -84,6 +85,9 @@ class VehicleLayoutMici(NavScroller):
     self._tesla_fsd_visualization = BigParamControl(tr("FSD visuals"), "IQTeslaFsdVisualization")
     self._hkg_reduced_feedback = BigParamControl(tr("reduced steering feedback (beta)"), "IQHkgReducedTorqueFeedback",
                                                 toggle_callback=self._on_hkg_reduced_feedback)
+    self._nnff = BigParamControl(tr("NNFF steering"), "NeuralNetworkFeedForward",
+                                toggle_callback=self._on_nnff)
+    self._nnff_available = False
 
     self._brand_widgets = {
       "toyota": [self._toyota_long],
@@ -95,7 +99,7 @@ class VehicleLayoutMici(NavScroller):
     }
     self._all_brand_widgets = [w for ws in self._brand_widgets.values() for w in ws]
 
-    self._scroller.add_widgets([self._vehicle_btn] + self._all_brand_widgets)
+    self._scroller.add_widgets([self._vehicle_btn, self._nnff] + self._all_brand_widgets)
 
   def _get_current_brand(self) -> str:
     bundle = ui_state.params.get("CarPlatformBundle")
@@ -193,11 +197,45 @@ class VehicleLayoutMici(NavScroller):
     ui_state.params.put_bool("OnroadCycleRequested", True)
 
   def _on_hkg_reduced_feedback(self, checked: bool):
+    if not ui_state.is_offroad():
+      self._hkg_reduced_feedback.refresh()
+      return
+    ui_state.params.put_bool("IQHkgReducedTorqueFeedback", checked)
     if checked:
       ui_state.params.put_bool("NeuralNetworkFeedForward", False)
+      self._nnff.refresh()
+    ui_state.params.put_bool("OnroadCycleRequested", True)
+
+  def _nnff_status(self) -> tuple[bool, str]:
+    return nnff_availability(ui_state.CP, ui_state.params)
+
+  def _refresh_nnff(self):
+    self._nnff_available, status = self._nnff_status()
+    self._nnff.set_value(status)
+    self._nnff.refresh()
+    self._nnff.set_enabled(ui_state.is_offroad() and
+                           (self._nnff_available or ui_state.params.get_bool("NeuralNetworkFeedForward")))
+
+  def _on_nnff(self, checked: bool):
+    if not ui_state.is_offroad():
+      self._nnff.refresh()
+      return
+    if checked:
+      self._nnff_available, status = self._nnff_status()
+      self._nnff.set_value(status)
+      if not self._nnff_available:
+        self._nnff.refresh()
+        return
+    # BigParamControl saves after this callback, so persist first or the cycle request restarts controls on the old value.
+    ui_state.params.put_bool("NeuralNetworkFeedForward", checked)
+    if checked:
+      ui_state.params.put_bool("IQHkgReducedTorqueFeedback", False)
+      self._hkg_reduced_feedback.refresh()
+    ui_state.params.put_bool("OnroadCycleRequested", True)
 
   def _refresh(self):
     self._vehicle_btn.set_value(self._vehicle_status())
+    self._refresh_nnff()
 
     brand = self._get_current_brand()
     offroad = ui_state.is_offroad()
@@ -231,6 +269,8 @@ class VehicleLayoutMici(NavScroller):
     super()._update_state()
     self._vehicle_btn.set_value(self._vehicle_status())
     self._hkg_reduced_feedback.set_enabled(ui_state.is_offroad())
+    self._nnff.set_enabled(ui_state.is_offroad() and
+                           (self._nnff_available or ui_state.params.get_bool("NeuralNetworkFeedForward")))
 
   def show_event(self):
     super().show_event()

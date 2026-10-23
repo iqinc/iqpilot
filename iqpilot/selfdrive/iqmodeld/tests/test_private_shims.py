@@ -12,6 +12,7 @@ from iqpilot import _proprietary_loader
 
 ROOT = Path(__file__).resolve().parents[4]
 SHIMS = {
+  "iqpilot.selfdrive.controls.lib.action_engine": "iqpilot_private.navd.action_engine",
   "iqpilot.selfdrive.iqmodeld.cot_decode": "iqpilot_private.context.cot_decode",
   "iqpilot.selfdrive.iqmodeld.drive_profile": "iqpilot_private.context.drive_profile",
   "iqpilot.selfdrive.iqmodeld.speed_limit_input": "iqpilot_private.context.speed_limit_input",

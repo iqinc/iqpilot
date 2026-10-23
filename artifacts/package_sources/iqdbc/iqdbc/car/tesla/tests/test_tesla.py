@@ -13,7 +13,7 @@ from iqdbc.car.tesla.teslacan import TeslaCAN
 from iqdbc.car.tesla.radar_interface import RADAR_START_ADDR
 from iqdbc.car.tesla.carcontroller import CarController
 from iqdbc.car.tesla.carstate import CarState, stock_autosteer_invalid
-from iqdbc.car.tesla.values import (CANBUS, CAR, FW_PATTERN, LEGACY_DAS_STEERING_FW, TeslaFlags, TeslaSafetyFlags,
+from iqdbc.car.tesla.values import (CANBUS, CAR, FW_PATTERN, LEGACY_CARS, LEGACY_DAS_STEERING_FW, TeslaFlags, TeslaSafetyFlags,
                                     get_platform_codes, is_ascii_version_fw, is_hw4_gen2_fw, is_legacy_das_steering)
 from iqdbc.lvbs.car.interfaces import _apply_tesla_options
 from iqdbc.lvbs.car.tesla.values import TeslaFlagsIQ, TeslaSafetyFlagsIQ
@@ -44,6 +44,8 @@ def fw_match(fw: bytes):
 class TestTeslaFwPattern:
   def test_all_known_fw_parses(self):
     for car, ecus in FW_VERSIONS.items():
+      if car in LEGACY_CARS:
+        continue
       for fws in ecus.values():
         for fw in fws:
           if not is_ascii_version_fw(fw):
@@ -53,6 +55,8 @@ class TestTeslaFwPattern:
   def test_only_hw4_gen2_ships_a_binary_fw(self):
     # a binary FW can only ever match exactly, so it must not creep into other platforms
     for car, ecus in FW_VERSIONS.items():
+      if car in LEGACY_CARS:
+        continue
       for fws in ecus.values():
         for fw in fws:
           if is_ascii_version_fw(fw):
@@ -217,6 +221,31 @@ class TestStockAutosteerInvalid:
 
 
 class TestTeslaFingerprint:
+  @pytest.mark.parametrize("candidate", [CAR.TESLA_MODEL_3, CAR.TESLA_MODEL_Y, CAR.TESLA_MODEL_X])
+  @pytest.mark.parametrize("bus", [CANBUS.party, CANBUS.vehicle, CANBUS.autopilot_party])
+  @pytest.mark.parametrize("marker", [0x3DF, 0x3B6])
+  def test_vehicle_bus_addon_requires_marker_on_vehicle_bus(self, candidate, bus, marker):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[bus][marker] = 8
+    CP = CarInterface.get_params(candidate, fingerprint, [], False, False, False)
+    CP_IQ = CarInterface.get_params_iq(CP, candidate, fingerprint, [], False, False, False)
+    addon_present = bus == CANBUS.vehicle
+
+    assert bool(CP_IQ.flags & TeslaFlagsIQ.HAS_VEHICLE_BUS) == addon_present
+    assert bool(CP_IQ.iqSafetyFlags & TeslaSafetyFlagsIQ.HAS_VEHICLE_BUS) == addon_present
+    assert (Bus.adas in CarState.get_can_parsers(CP, CP_IQ)) == addon_present
+
+  def test_standard_harness_with_mirrored_odometer_has_no_vehicle_bus_parser(self):
+    fingerprint = gen_empty_fingerprint()
+    for bus in (CANBUS.party, CANBUS.autopilot_party):
+      fingerprint[bus][0x3B6] = 6
+    CP = CarInterface.get_params(CAR.TESLA_MODEL_3, fingerprint, [], False, False, False)
+    CP_IQ = CarInterface.get_params_iq(CP, CAR.TESLA_MODEL_3, fingerprint, [], False, False, False)
+
+    assert not CP_IQ.flags & TeslaFlagsIQ.HAS_VEHICLE_BUS
+    assert not CP_IQ.iqSafetyFlags & TeslaSafetyFlagsIQ.HAS_VEHICLE_BUS
+    assert Bus.adas not in CarState.get_can_parsers(CP, CP_IQ)
+
   def test_radar_detection(self):
     # Test radar availability detection for cars with radar DBC defined
     for radar in (True, False):

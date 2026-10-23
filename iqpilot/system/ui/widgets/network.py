@@ -18,13 +18,12 @@ from iqpilot.system.ui.widgets.confirm_dialog import ConfirmDialog
 from iqpilot.system.ui.widgets.keyboard import Keyboard
 from iqpilot.system.ui.widgets.label import gui_label
 from iqpilot.system.ui.widgets.scroller_tici import Scroller
-from iqpilot.system.ui.widgets.list_view import ButtonAction, ListItem, MultipleButtonAction, ToggleAction, button_item, text_item
+from iqpilot.system.ui.widgets.list_view import ButtonAction, ListItem, ToggleAction, button_item, text_item
 
 if gui_app.iqpilot_ui():
   from iqpilot.system.ui.iqwidgets.widgets.list_view import button_item
   from iqpilot.system.ui.iqwidgets.widgets.list_view import IQListItem as ListItem
   from iqpilot.system.ui.iqwidgets.widgets.list_view import IQToggleAction as ToggleAction
-  from iqpilot.system.ui.iqwidgets.widgets.list_view import IQMultipleButtonAction as MultipleButtonAction
 
 # These are only used for AdvancedNetworkSettings, standalone apps just need WifiManagerUI
 try:
@@ -196,10 +195,9 @@ class AdvancedNetworkSettings(Widget):
     self._apn_btn = button_item(lambda: tr("APN Setting"), lambda: tr("EDIT"), callback=self._edit_apn)
 
     # Wi-Fi metered toggle
-    self._wifi_metered_action = MultipleButtonAction([lambda: tr("default"), lambda: tr("metered"), lambda: tr("unmetered")], 255, 0,
-                                                     callback=self._toggle_wifi_metered)
-    wifi_metered_btn = ListItem(lambda: tr("Wi-Fi Network Metered"), description=lambda: tr("Prevent large data uploads when on a metered Wi-Fi connection"),
-                                action_item=self._wifi_metered_action)
+    self._wifi_metered_action = ToggleAction(initial_state=False)
+    wifi_metered_btn = ListItem(lambda: tr("Wi-Fi Metered"), action_item=self._wifi_metered_action,
+                                callback=self._toggle_wifi_metered)
 
     self._cellular = CellularInfoPoller()
     carrier_item = text_item(lambda: tr("Carrier"), lambda: self._cellular.info.carrier_text or tr("No modem"))
@@ -248,11 +246,11 @@ class AdvancedNetworkSettings(Widget):
 
     if self._wifi_manager.is_tethering_active() or self._wifi_manager.ipv4_address == "":
       self._wifi_metered_action.set_enabled(False)
-      self._wifi_metered_action.selected_button = 0
+      self._wifi_metered_action.set_state(False)
     elif self._wifi_manager.ipv4_address != "":
       metered = self._wifi_manager.current_network_metered
       self._wifi_metered_action.set_enabled(True)
-      self._wifi_metered_action.selected_button = int(metered) if metered in (MeteredType.UNKNOWN, MeteredType.YES, MeteredType.NO) else 0
+      self._wifi_metered_action.set_state(metered == MeteredType.YES)
 
   def _cellular_ip_text(self) -> str:
     info = self._cellular.info
@@ -318,8 +316,8 @@ class AdvancedNetworkSettings(Widget):
     self._params.put_bool("GsmMetered", metered)
     self._wifi_manager.update_gsm_settings(self._params.get_bool("GsmRoaming"), self._params.get("GsmApn") or "", metered)
 
-  def _toggle_wifi_metered(self, metered):
-    metered_type = {0: MeteredType.UNKNOWN, 1: MeteredType.YES, 2: MeteredType.NO}.get(metered, MeteredType.UNKNOWN)
+  def _toggle_wifi_metered(self):
+    metered_type = MeteredType.YES if self._wifi_metered_action.get_state() else MeteredType.NO
     self._wifi_metered_action.set_enabled(False)
     self._wifi_manager.set_current_network_metered(metered_type)
 

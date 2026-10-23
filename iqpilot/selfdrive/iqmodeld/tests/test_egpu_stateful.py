@@ -152,3 +152,28 @@ def test_pipeline_reports_warmth_and_resets():
   assert pipeline.warm_frames == 4
   pipeline.reset_state()
   assert pipeline.warm_frames == 0
+
+
+def test_warp_on_dock_artifact_reads_every_frame_feed():
+  from tinygrad.engine.jit import TinyJit
+  from tinygrad.tensor import Tensor
+  from iqpilot.selfdrive.iqmodeld.egpu_helpers import patch_tinygrad_prune_views
+  from iqpilot.selfdrive.iqmodeld.egpu_policy import StatefulModelRunner, make_run_stateful_model, make_warp, nv12_copy_size, stateful_model_size
+  patch_tinygrad_prune_views()
+  pairs = state_pairs(SPEC)
+  nv12 = (64, 48, 64, 48, 24)
+  fcs = nv12_copy_size(*nv12[2:])
+  w, h = stateful_model_size(SPEC)
+  def model(inp):
+    feeds = {name: (inp[name] @ Tensor.eye(2)).contiguous() for name in ("traffic_convention", "action_t")}
+    return _tg_model({**inp, **feeds})
+
+  run = make_run_stateful(model, SPEC, pairs, "CPU")
+  jit = TinyJit(make_run_stateful_model(make_warp(nv12, w, h, "CPU"), run, SPEC, pairs, fcs, "CPU"), prune=True)
+  runner = StatefulModelRunner(jit, SPEC, pairs, "CPU", fcs)
+  frame, eye = np.zeros(fcs, dtype=np.uint8), np.eye(3, dtype=np.float32)
+  for i in range(6):
+    traffic = np.array([i % 2, 1 - i % 2], dtype=np.float32)
+    action_t = np.array([0.1 * i, -0.05 * i], dtype=np.float32)
+    out = runner.run(frame, frame, eye, eye, np.zeros(8, dtype=np.float32), traffic, action_t)
+    np.testing.assert_allclose(out[32:36], np.concatenate([traffic, action_t]), rtol=1e-6, atol=1e-7, err_msg=f"frame {i}")

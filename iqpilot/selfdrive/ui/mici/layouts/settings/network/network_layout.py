@@ -10,7 +10,7 @@ from iqpilot.system.ui.widgets.scroller import Scroller, draw_scroller_edge_fade
 from iqpilot.selfdrive.ui.mici.layouts.settings.network.wifi_ui import WifiUIMici
 from iqpilot.selfdrive.ui.mici.layouts.settings.network.esim_ui import EsimUIMici
 from iqpilot.selfdrive.ui.mici.layouts.settings.network.speed_test_ui import SpeedTestMici
-from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl, BigMultiToggle, BigToggle
+from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl, BigToggle
 from iqpilot.selfdrive.ui.mici.widgets.stock_dialog import BigInputDialog
 from iqpilot.selfdrive.ui.ui_state import ui_state
 from iqpilot.system.ui.lib.application import gui_app
@@ -92,21 +92,11 @@ class NetworkLayoutMici(NavWidget):
     self._wireguard_installed = wireguard.installed()
     self._wireguard_btn.set_visible(lambda: self._wireguard_installed)
 
-    # ******** Network Metered ********
-    self._metered_options = [tr("default"), tr("metered"), tr("unmetered")]
-
-    def network_metered_callback(value: str):
+    def network_metered_callback(enabled: bool):
       self._network_metered_btn.set_enabled(False)
-      metered = {
-        self._metered_options[0]: MeteredType.UNKNOWN,
-        self._metered_options[1]: MeteredType.YES,
-        self._metered_options[2]: MeteredType.NO
-      }.get(value, MeteredType.UNKNOWN)
-      self._wifi_manager.set_current_network_metered(metered)
+      self._wifi_manager.set_current_network_metered(MeteredType.YES if enabled else MeteredType.NO)
 
-    # TODO: signal for current network metered type when changing networks, this is wrong until you press it once
-    # TODO: disable when not connected
-    self._network_metered_btn = BigMultiToggle(tr("network usage"), self._metered_options, select_callback=network_metered_callback)
+    self._network_metered_btn = BigToggle(tr("Wi-Fi Metered"), toggle_callback=network_metered_callback)
     self._network_metered_btn.set_enabled(False)
 
     wifi_button = BigButton(tr("wi-fi"))
@@ -245,13 +235,7 @@ class NetworkLayoutMici(NavWidget):
     # Update IP address
     self._ip_address_btn.set_value(self._wifi_manager.ipv4_address or tr("Not connected"))
 
-    # Update network metered
-    self._network_metered_btn.set_value(
-      {
-        MeteredType.UNKNOWN: self._metered_options[0],
-        MeteredType.YES: self._metered_options[1],
-        MeteredType.NO: self._metered_options[2]
-      }.get(self._wifi_manager.current_network_metered, self._metered_options[0]))
+    self._network_metered_btn.set_checked(self._wifi_manager.current_network_metered == MeteredType.YES)
 
   def _switch_to_panel(self, panel_type: NetworkPanelType):
     if panel_type == NetworkPanelType.ESIM:

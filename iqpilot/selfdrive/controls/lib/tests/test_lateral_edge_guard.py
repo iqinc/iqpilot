@@ -10,8 +10,6 @@ import math
 from iqpilot.cereal import custom, log
 import iqpilot.cereal.messaging as messaging
 from iqpilot.common.realtime import DT_MDL
-from iqpilot.selfdrive.controls.lib.desire_helper import DesireHelper
-from iqpilot.selfdrive.controls.lib.helpers.lane_change import AutoLaneChangeMode
 from iqpilot.selfdrive.controls.lib.helpers.lateral_edge_guard import (
   ADJACENT_LANE_LINE_PROB,
   BLOCK_DEBOUNCE_S,
@@ -194,23 +192,6 @@ def test_measured_lane_width_is_clamped_and_falls_back() -> None:
   assert LateralEdgeGuard._measured_lane_width(lane_model(4.0, ego_width_m=9.0)) == MAX_MEASURED_LANE_WIDTH_M
   assert LateralEdgeGuard._measured_lane_width(lane_model(4.0, ego_width_m=0.5)) == MIN_MEASURED_LANE_WIDTH_M
   assert LateralEdgeGuard._measured_lane_width(lane_model(4.0, ego_width_m=3.2)) == 3.2
-
-
-def test_desire_helper_blocks_only_when_edge_guard_is_enabled() -> None:
-  helper = DesireHelper()
-  helper.lateral_edge_guard = LateralEdgeGuard(enabled=True)
-  helper.alc.lane_change_set_timer = AutoLaneChangeMode.NUDGE
-  helper.lane_change_state = log.LaneChangeState.preLaneChange
-  helper.lane_change_direction = log.LaneChangeDirection.left
-  update_for(helper.lateral_edge_guard, edge_model(4.0), BLOCK_DEBOUNCE_S)
-  helper.update(CarState(), True, 1.0, modeldata=edge_model(4.0))
-  assert helper.lateral_edge_block == custom.IQLateralEdgeBlock.left
-  assert helper.lane_change_state == log.LaneChangeState.preLaneChange
-
-  helper.lateral_edge_guard = LateralEdgeGuard(enabled=False)
-  helper.update(CarState(), True, 1.0, modeldata=edge_model(4.0))
-  assert helper.lateral_edge_block == custom.IQLateralEdgeBlock.none
-  assert helper.lane_change_state == log.LaneChangeState.laneChangeStarting
 
 
 def test_published_edge_block_maps_to_distinct_event_and_alert() -> None:

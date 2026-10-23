@@ -18,7 +18,7 @@ from iqdbc.car.volkswagen.pq_radar_handler import PQRadarHandler
 from iqdbc.car.volkswagen.values import (
   CanBus, CarControllerParams, MQB_A0_CARS, VolkswagenFlags, VolkswagenFlagsIQ, apply_pq_stopping_accel,
 )
-from iqdbc.car.volkswagen.mebutils import LongControlJerk, LongControlLimit, LatControlCurvature, LongStopHold
+from iqdbc.car.volkswagen.mebutils import CurvatureSmoother, LongControlJerk, LongControlLimit, LatControlCurvature, LongStopHold
 from iqdbc.car.vehicle_model import VehicleModel
 
 iqpilot_path = os.path.join(os.path.dirname(__file__), '..', '..', '..')
@@ -42,6 +42,29 @@ def dVisual(CCS, CS):
     decelV = False
   return decelV
 
+# The MQB ACC_02.ACC_Abstandsindex and PQ ACC_GRA_Anzeige.ACA_gemZeitl ("measured time gap") lead marker is
+# a time headway on a log scale, not a distance. Fitted to the stock radar's own output against lead distance
+# and speed on 8 stock-ACC cars (Golf, Jetta, Atlas, Taos, Arteon and Kodiaq digital clusters, Octavia analog,
+# Sharan PQ): position = 0.17 + 0.465 * ln(headway), from about 0.7 s (closest) to 6 s (farthest). Stopped,
+# the radar still reports a finite headway, as if the car were rolling at about 3.5 m/s.
+LEAD_HEADWAY_POSITION_OFFSET = 0.17
+LEAD_HEADWAY_POSITION_PER_LOG_S = 0.465
+LEAD_HEADWAY_MIN_SPEED = 3.5  # m/s
+# Raw code at the closest and farthest positions: 4-bit analog MQB and PQ clusters use 1-15, digital MQB
+# clusters (Kombi_03.KBI_Variante) the 10-bit 34-972 the stock radar sends. 0 means no lead on both.
+LEAD_INDEX_RANGE_ANALOG = (1, 15)
+LEAD_INDEX_RANGE_DIGITAL = (34, 972)
+
+
+def lead_headway_index(lead_distance: float, v_ego: float, digital_cluster: bool) -> int:
+  if lead_distance <= 0:
+    return 0
+  headway = lead_distance / max(v_ego, LEAD_HEADWAY_MIN_SPEED)
+  position = clip(LEAD_HEADWAY_POSITION_OFFSET + LEAD_HEADWAY_POSITION_PER_LOG_S * np.log(headway), 0.0, 1.0)
+  closest, farthest = LEAD_INDEX_RANGE_DIGITAL if digital_cluster else LEAD_INDEX_RANGE_ANALOG
+  return int(round(closest + position * (farthest - closest)))
+
+
 def accel_during_driver_override(accel: float, gas_pressed: bool, keep_long_active: bool) -> float:
   return 0.0 if gas_pressed and keep_long_active else accel
 
@@ -64,8 +87,11 @@ def ea_blinker_command(left_request, right_request, left_active, right_active):
 
 class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP, CP_IQ):
-    from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
-    self._iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
+    try:
+      from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
+      self._iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
+    except Exception:
+      self._iq_lvbs_alc = None
     super().__init__(dbc_names, CP, CP_IQ)
     self._params = Params()
     self.CCP = CarControllerParams(CP)
@@ -102,6 +128,10 @@ class CarController(CarControllerBase):
     self.steering_power_last = 0
     self.long_jerk_control = LongControlJerk(dt=(DT_CTRL * self.CCP.ACC_CONTROL_STEP)) if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) else None
     self.long_limit_control = LongControlLimit(dt=(DT_CTRL * self.CCP.ACC_CONTROL_STEP)) if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) else None
+    self.curvature_smoother = (
+      CurvatureSmoother(self.CCP.CURVATURE_SMOOTH_SPEED_BP, self.CCP.CURVATURE_SMOOTH_TAU_V, DT_CTRL * self.CCP.STEER_STEP)
+      if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) else None
+    )
     self.long_stop_hold = LongStopHold(dt=(DT_CTRL * self.CCP.ACC_CONTROL_STEP)) if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) else None
     self.gra_acc_counter_last = None
     self.gra_cancel_ticks = 0
@@ -215,7 +245,7 @@ class CarController(CarControllerBase):
       self._pq_patch_checked = True
       self.eps_timer_workaround = not self._params.get_bool("VwPqEpsPatched")
     blend_active = bool(self.blend_stock_radar and self.radar_handler is not None and self.CP.openpilotLongitudinalControl)
-    AngleLateralControl = self._iq_lvbs_alc.angle_lateral_control_enabled(self, CS)
+    AngleLateralControl = self._iq_lvbs_alc.angle_lateral_control_enabled(self, CS) if self._iq_lvbs_alc else False
     self.entering = CS.vw_iq_lvbs_alc_entering
     self.active = CS.vw_iq_lvbs_alc_active
 
@@ -239,6 +269,7 @@ class CarController(CarControllerBase):
             apply_curvature = apply_curvature + (CS.out.steeringCurvature - (CC.currentCurvature - CC.rollCompensation))
           else:
             apply_curvature = actuators.curvature + (CS.out.steeringCurvature - CC.currentCurvature)
+          apply_curvature = self.curvature_smoother.update(apply_curvature, CS.out.vEgo)
           apply_curvature = apply_std_curvature_limits(apply_curvature, self.apply_curvature_last, CS.out.vEgoRaw, CS.out.steeringCurvature,
                                                        CS.out.steeringPressed, self.CCP.STEER_STEP, CC.latActive, self.CCP.CURVATURE_LIMITS)
 
@@ -261,12 +292,13 @@ class CarController(CarControllerBase):
             hca_enabled = False
             apply_curvature = 0.
             steering_power = 0
+          self.curvature_smoother.reset(apply_curvature)
 
         can_sends.append(self.CCS.create_steering_control(self.packer_pt, self.CAN.pt, apply_curvature, hca_enabled, steering_power))
         self.apply_curvature_last = apply_curvature
         self.steering_power_last = steering_power
       else:
-        if CC.latActive and not AngleLateralControl:
+        if CC.latActive and CC.enabled and not AngleLateralControl:
           torque_scale = self._get_mqb_steering_torque_scale(CS.out.vEgo, iq_mqb_steering_lockout)
           new_torque = int(round(actuators.torque * self.CCP.STEER_MAX * torque_scale))
           apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.CCP)
@@ -322,8 +354,9 @@ class CarController(CarControllerBase):
           ea_simulated_torque = CS.out.steeringTorque
         can_sends.append(self.CCS.create_eps_update(self.packer_pt, self.CAN.cam, CS.eps_stock_values, ea_simulated_torque))
 
-    self._iq_lvbs_alc.update_vw_alc(self, CC, CS, actuators, can_sends, apply_torque)
-    if self.frame % self.CCP.STEER_STEP == 0:
+    if self._iq_lvbs_alc:
+      self._iq_lvbs_alc.update_vw_alc(self, CC, CS, actuators, can_sends, apply_torque)
+    if self._iq_lvbs_alc and self.frame % self.CCP.STEER_STEP == 0:
       self._iq_lvbs_alc.append_private_apd(self, CC_IQ, can_sends)
 
     if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) and self.CP.flags & VolkswagenFlags.STOCK_KLR_PRESENT:
@@ -494,9 +527,9 @@ class CarController(CarControllerBase):
                                                          hud_control.leadVisible, hud_control.leadDistanceBars + 1, show_distance_bars,
                                                          CS.esp_hold_confirmation, distance, gap, fcw_alert, acc_hud_event, speed_limit))
       else:
-        # MLB scales the raw lead distance against the set follow gap in the packer, the others clamp to a bar count
+        # MLB scales the raw lead distance against the set follow gap in the packer, MQB and PQ send a headway index
         leadDistance = hud_control.leadDistance if self.CCS is mlbcan else \
-          (min(15, hud_control.leadDistance) if hud_control.leadDistance != 0 else 0)
+          lead_headway_index(hud_control.leadDistance, CS.out.vEgo, CS.upscale_lead_car_signal)
         self.leadDistanceBars = min(3, hud_control.leadDistanceBars)
         acc_hud_status = self.CCS.acc_hud_status_value(CS.out.cruiseState.available, CS.out.accFaulted, CC.longActive and hud_engaged,
                                                        hud_override)
@@ -509,7 +542,7 @@ class CarController(CarControllerBase):
                                                          self.leadDistanceBars, fcw_alert, lead_visible or fcw_alert, self.unavailable,
                                                          decel, d_unresponsive, **hud_kwargs))
 
-    if self.CP.flags & VolkswagenFlags.PQ:
+    if self._iq_lvbs_alc and self.CP.flags & VolkswagenFlags.PQ:
       self._iq_lvbs_alc.update_turn_signals(self, CC, CS, can_sends)
 
     if self.CP.openpilotLongitudinalControl and (self.CP.flags & VolkswagenFlags.PQ):

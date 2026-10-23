@@ -154,14 +154,16 @@ class _CarParamsCache:
       return
     self._last_check = now
 
-    cp_bytes = params.get("CarParams")
+    cp_bytes = params.get("CarParams") or params.get("CarParamsPersistent")
     if not cp_bytes or cp_bytes == self._last_bytes:
       return
     self._last_bytes = cp_bytes
 
     try:
       CP = messaging.log_from_bytes(cp_bytes, car.CarParams)
-      self.no_sleep = (CP.brand == "tesla") or _is_meb(CP)
+      from iqdbc.car.hyundai.values import CAR
+      ev6 = CP.brand == "hyundai" and CP.carFingerprint in (CAR.KIA_EV6, CAR.KIA_EV6_PE)
+      self.no_sleep = ev6 or (CP.brand == "tesla") or _is_meb(CP)
     except Exception:
       self.no_sleep = False
 
@@ -296,7 +298,7 @@ def hw_state_thread(end_event, hw_queue):
           if (modem_missing_count % 4) == 0:
             modem_restart_count += 1
             cloudlog.event("restarting ModemManager")
-            os.system("sudo systemctl restart --no-block ModemManager")
+            subprocess.run(["sudo", "-n", "systemctl", "restart", "--no-block", "ModemManager"], timeout=5, capture_output=True, check=False)
 
         tx, rx = HARDWARE.get_modem_data_usage()
 

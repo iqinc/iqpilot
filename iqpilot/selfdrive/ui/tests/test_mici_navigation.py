@@ -17,7 +17,7 @@ def scene(monkeypatch):
     alive = {'iqNavState': True, 'iqNavRenderState': True}
     valid = {'iqNavState': True, 'iqNavRenderState': True}
 
-  params = {'NavigationDestination': {'latitude': 41.0, 'longitude': -87.0}, 'NavigationActive': True}
+  params = {'NavigationDestination': {'latitude': 41.0, 'longitude': -87.0}, 'NavigationActive': True, 'NavigationEnabled': True}
   sm = Messages(iqNavState=nav, iqNavRenderState=render)
   state = SimpleNamespace(started=True, is_metric=False, sm=sm,
                           params=SimpleNamespace(get=params.get, get_bool=lambda key: bool(params.get(key))))
@@ -30,7 +30,7 @@ def scene(monkeypatch):
   return SimpleNamespace(screen=screen, nav=nav, render=render, sm=sm, state=state, params=params, clock=clock)
 
 
-@pytest.mark.parametrize('invalid', ['missing', 'malformed', 'cancelled', 'offroad', 'stale', 'invalid_message',
+@pytest.mark.parametrize('invalid', ['missing', 'malformed', 'cancelled', 'disabled', 'offroad', 'stale', 'invalid_message',
                                      'inactive', 'wrong_destination', 'no_destination', 'no_maneuver', 'nan', 'negative'])
 def test_invalid_guidance_returns_to_camera(scene, invalid):
   assert scene.screen.active
@@ -40,6 +40,8 @@ def test_invalid_guidance_returns_to_camera(scene, invalid):
     scene.params['NavigationDestination'] = {'latitude': float('nan'), 'longitude': -87.0}
   elif invalid == 'cancelled':
     scene.params['NavigationActive'] = False
+  elif invalid == 'disabled':
+    scene.params['NavigationEnabled'] = False
   elif invalid == 'offroad':
     scene.state.started = False
   elif invalid == 'stale':
@@ -121,6 +123,15 @@ def test_guidance_recovers_without_waiting_screen(scene):
   scene.screen.update()
   assert scene.screen.active
   assert scene.screen._street == 'Turn left onto Main Street'
+
+
+def test_master_switch_hides_live_guidance_and_can_reenable_it(scene):
+  scene.params['NavigationEnabled'] = False
+  scene.screen.update()
+  assert not scene.screen.active
+  scene.params['NavigationEnabled'] = True
+  scene.screen.update()
+  assert scene.screen.active
 
 
 def test_navigation_taps_are_consumed_before_home_callback(scene, mocker):

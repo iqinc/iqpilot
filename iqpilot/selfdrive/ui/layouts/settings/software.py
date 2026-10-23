@@ -189,12 +189,12 @@ class SoftwareLayout(Widget):
       # Start checking for updates
       self._waiting_for_updater = True
       self._waiting_start_ts = time.monotonic()
-      os.system("pkill -SIGUSR1 -f system.updated.updated")
+      ui_state.params.put("UpdaterManualRequest", "check")
     else:
       # Start downloading
       self._waiting_for_updater = True
       self._waiting_start_ts = time.monotonic()
-      os.system("pkill -SIGHUP -f system.updated.updated")
+      ui_state.params.put("UpdaterManualRequest", "fetch")
 
   def _on_uninstall(self):
     def handle_uninstall_confirmation(result):
@@ -229,7 +229,7 @@ class SoftwareLayout(Widget):
         selection = self._branch_dialog.selection
         ui_state.params.put("UpdaterTargetBranch", selection)
         self._branch_btn.action_item.set_value(selection)
-        os.system("pkill -SIGUSR1 -f system.updated.updated")
+        ui_state.params.put("UpdaterManualRequest", "check")
       self._branch_dialog = None
 
     gui_app.set_modal_overlay(self._branch_dialog, callback=handle_selection)
@@ -252,7 +252,7 @@ class SoftwareLayout(Widget):
           return
         git_creds.set_credentials(username, token)
         self._refresh_auth_value()
-        os.system("pkill -SIGUSR1 -f system.updated.updated")
+        ui_state.params.put("UpdaterManualRequest", "check")
 
       open_text_prompt(tr("Git token / password"),
                        tr("leave username and token blank to clear"),

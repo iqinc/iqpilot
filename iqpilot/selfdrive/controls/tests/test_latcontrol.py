@@ -128,14 +128,59 @@ class TestLatControl:
     assert not lac_log.active
     assert controller.lateral_acceleration_slew_limiter.a_lim == 0.9
 
-  def test_pq_live_torque_update_freeze_and_unfreeze(self, monkeypatch):
-    _, controller = self.build_pq_controller()
-    initial = (controller.torque_params.latAccelFactor, controller.torque_params.latAccelOffset, controller.torque_params.friction)
-    controller.update_live_torque_params(3.0, 0.2, 0.4)
-    assert (controller.torque_params.latAccelFactor, controller.torque_params.latAccelOffset, controller.torque_params.friction) == initial
+  @staticmethod
+  def settle_pq_live_torque(controller, factor, offset, valid, seconds=60.0):
+    controller.set_live_torque_valid(valid)
+    for _ in range(int(seconds / DT_CTRL)):
+      controller.update_live_torque_params(factor, offset, 0.4)
 
-    monkeypatch.setattr(latcontrol_torque_pq, "FREEZE_LIVE_TORQUE_PARAMS", False)
+  def test_pq_live_torque_falls_back_until_torqued_is_valid(self):
+    _, controller = self.build_pq_controller()
+    self.settle_pq_live_torque(controller, 3.0, 0.2, valid=False)
+    assert abs(controller.torque_params.latAccelFactor - latcontrol_torque_pq.DEFAULT_LAT_ACCEL_FACTOR) < 1e-6
+    assert abs(controller.torque_params.latAccelOffset - latcontrol_torque_pq.DEFAULT_LAT_ACCEL_OFFSET) < 1e-6
+    assert abs(controller.torque_params.friction - latcontrol_torque_pq.DEFAULT_FRICTION) < 1e-6
+
+  def test_pq_live_torque_uses_learned_factor_and_offset(self):
+    _, controller = self.build_pq_controller()
+    self.settle_pq_live_torque(controller, 2.35, 0.047, valid=True)
+    expected_factor = 2.35 * latcontrol_torque_pq.LIVE_LAT_ACCEL_FACTOR_GAIN
+    assert abs(controller.torque_params.latAccelFactor - expected_factor) < 1e-3
+    assert abs(controller.torque_params.latAccelOffset - 0.047) < 1e-3
+    assert abs(controller.torque_params.friction - latcontrol_torque_pq.DEFAULT_FRICTION) < 1e-6
+
+  def test_pq_live_torque_changes_are_smoothed(self):
+    _, controller = self.build_pq_controller()
+    controller.set_live_torque_valid(True)
     controller.update_live_torque_params(3.0, 0.2, 0.4)
-    assert controller.torque_params.latAccelFactor == 3.0
-    assert abs(controller.torque_params.latAccelOffset - 0.2) < 1e-6
-    assert abs(controller.torque_params.friction - 0.4) < 1e-6
+    step = controller.torque_params.latAccelFactor - latcontrol_torque_pq.DEFAULT_LAT_ACCEL_FACTOR
+    assert 0.0 < step < 0.01
+
+  def test_pq_live_torque_is_bounded(self):
+    _, controller = self.build_pq_controller()
+    self.settle_pq_live_torque(controller, 10.0, 2.0, valid=True)
+    assert abs(controller.torque_params.latAccelFactor - latcontrol_torque_pq.LIVE_LAT_ACCEL_FACTOR_BOUNDS[1]) < 1e-3
+    assert abs(controller.torque_params.latAccelOffset - latcontrol_torque_pq.LIVE_LAT_ACCEL_OFFSET_BOUNDS[1]) < 1e-3
+    self.settle_pq_live_torque(controller, 0.1, -2.0, valid=True)
+    assert abs(controller.torque_params.latAccelFactor - latcontrol_torque_pq.LIVE_LAT_ACCEL_FACTOR_BOUNDS[0]) < 1e-3
+    assert abs(controller.torque_params.latAccelOffset - latcontrol_torque_pq.LIVE_LAT_ACCEL_OFFSET_BOUNDS[0]) < 1e-3
+
+  def test_pq_live_torque_rejects_non_finite_estimates(self):
+    _, controller = self.build_pq_controller()
+    self.settle_pq_live_torque(controller, float('nan'), 0.2, valid=True)
+    assert abs(controller.torque_params.latAccelFactor - latcontrol_torque_pq.DEFAULT_LAT_ACCEL_FACTOR) < 1e-6
+    assert abs(controller.torque_params.latAccelOffset - latcontrol_torque_pq.DEFAULT_LAT_ACCEL_OFFSET) < 1e-6
+
+  def test_pq_live_torque_freeze_keeps_defaults(self, monkeypatch):
+    monkeypatch.setattr(latcontrol_torque_pq, "FREEZE_LIVE_TORQUE_PARAMS", True)
+    _, controller = self.build_pq_controller()
+    self.settle_pq_live_torque(controller, 3.0, 0.2, valid=True, seconds=1.0)
+    assert abs(controller.torque_params.latAccelFactor - latcontrol_torque_pq.DEFAULT_LAT_ACCEL_FACTOR) < 1e-6
+    assert abs(controller.torque_params.latAccelOffset - latcontrol_torque_pq.DEFAULT_LAT_ACCEL_OFFSET) < 1e-6
+
+  def test_pq_integrator_gain_rises_at_highway_speed(self):
+    _, controller = self.build_pq_controller()
+    controller.pid.speed = 5.0
+    assert abs(controller.pid.k_i - latcontrol_torque_pq.KI) < 1e-9
+    controller.pid.speed = 30.0
+    assert abs(controller.pid.k_i - latcontrol_torque_pq.KI_HIGHWAY) < 1e-9

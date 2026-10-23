@@ -602,7 +602,7 @@ class Setup(Widget):
 
       run_cmd(["rm", "-f", VALID_CACHE_PATH])
       # sudo: a prior *run* install can leave root-owned .pyc here that a comma-user rm can't delete.
-      run_cmd(["sudo", "rm", "-rf", INSTALL_PATH])
+      run_cmd(["sudo", "-n", "rm", "-rf", INSTALL_PATH])
       run_cmd(["mv", TMP_INSTALL_PATH, INSTALL_PATH])
 
       self._ble_progress("installing", 90)
@@ -683,7 +683,7 @@ class Setup(Widget):
       # succeeds; a prior *run* install leaves root-owned __pycache__ .pyc it can't delete, so it
       # aborts before continue.sh and bounces back to setup. Clear the old tree first (sudo) so the
       # installer's rm succeeds.
-      subprocess.run(["sudo", "rm", "-rf", INSTALL_PATH], check=False)
+      subprocess.run(["sudo", "-n", "rm", "-rf", INSTALL_PATH], check=False)
       os.rename(tmpfile, INSTALLER_DESTINATION_PATH)
 
       with open(INSTALLER_URL_PATH, "w") as f:

@@ -18,6 +18,7 @@ PROGRESS_EPS = 0.02
 ANTI_CREEP_RATE = 0.50
 SETTLE_JERK = 2.5
 EMERGENCY_DECEL = 3.0
+SMOOTH_STOP_MAX_SPEED = 3.0
 
 
 def read_smooth_stops_enabled(params: Params) -> bool:

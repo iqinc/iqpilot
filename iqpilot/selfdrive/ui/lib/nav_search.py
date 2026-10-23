@@ -233,7 +233,6 @@ def set_destination(lat: float, lon: float, name: str) -> None:
   params.put_bool("NavigationActive", False)
   # NavigationDestination is a JSON-typed param: pass the object, not a pre-serialized string.
   params.put("NavigationDestination", {"latitude": float(lat), "longitude": float(lon), "name": name or ""})
-  params.put_bool("NavigationEnabled", True)
 
 
 def cancel_navigation() -> None:

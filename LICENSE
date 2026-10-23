@@ -1,4 +1,4 @@
-IQ.Lvbs License v1.8.2
+IQ.Lvbs License v1.8.3
 
 Copyright (c) 2026 IQ.Lvbs LLC, a part of Project Teal Lvbs Inc. All Rights Reserved.
 
@@ -42,7 +42,8 @@ You may NOT:
 5. Sublicense, sell, or transfer rights to the Software.
 
 6. Use the Software and/or its source code to compete with or create a
-   substantially similar product.
+   substantially similar product that is not a personal non-commercial fork of IQ.Pilot that complies with
+   all other subsections of this license.
 
 7. Use the Software in closed source software not licensed by IQ.Lvbs LLC.
 
@@ -54,9 +55,8 @@ OWNERSHIP
 
 All rights, title, and interest in the Software remain exclusively with the
 Copyright Holder. Any modifications, improvements, or derivative works you
-create based on the Software are owned by the Copyright Holder. By
-contributing modifications, you irrevocably assign all rights to the
-Copyright Holder.
+create based on the Software are owned by you (licensing of that work is in no manner the liability of IQ Lvbs or its associates).
+Any derivative in which IQ.Pilot source code is used and modified shall remain the property of IQ Lvbs with the exception of the modifications you have added.
 
 PROPRIETARY COMPONENTS
 

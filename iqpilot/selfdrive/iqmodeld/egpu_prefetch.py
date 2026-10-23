@@ -35,6 +35,7 @@ def _selected_meta(params: Params) -> dict | None:
 def _drop_stale_partials(keep: str) -> None:
   root = os.path.dirname(keep)
   partial_globs = ("egpu_*_amd_policy.pkl.part", "egpu_*_amd_policy_oob.pkl.part", "egpu_*_amd_model_oob.pkl.part",
+                   "egpu_*_amd_model_oob2.pkl.part",
                    "big_driving_supercombo_*.onnx.part")
   for path in [p for g in partial_globs for p in glob.glob(os.path.join(root, g))]:
     if not path.startswith(keep):

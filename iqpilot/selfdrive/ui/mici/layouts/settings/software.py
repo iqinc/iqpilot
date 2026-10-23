@@ -102,13 +102,12 @@ class CheckUpdateButton(BigButton):
     self._state = UpdaterState.WAITING_FOR_UPDATER
     self.set_icon(self._txt_update_icon)
 
-    def run():
-      if self.get_value() == "download update":
-        os.system("pkill -SIGHUP -f system.updated.updated")
-      else:
-        os.system("pkill -SIGUSR1 -f system.updated.updated")
-
-    threading.Thread(target=run, daemon=True).start()
+    # The updater runs in a confined SELinux domain under hidepid=2, so the UI
+    # cannot find or signal it by PID. Write a param the updater polls instead.
+    if self.get_value() == "download update":
+      ui_state.params.put("UpdaterManualRequest", "fetch")
+    else:
+      ui_state.params.put("UpdaterManualRequest", "check")
 
   def set_value(self, value: str):
     super().set_value(value)

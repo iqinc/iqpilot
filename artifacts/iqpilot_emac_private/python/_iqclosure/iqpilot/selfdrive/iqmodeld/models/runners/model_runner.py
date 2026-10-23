@@ -2,7 +2,6 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos
 """
 import os
-import pickle as _pk
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -13,6 +12,7 @@ from iqpilot.system.hardware import TICI
 from iqpilot.system.hardware.hw import Paths as _hw_paths
 from iqpilot.selfdrive.iqmodeld.models.helpers import get_active_bundle as _fetch_bundle
 from iqpilot.selfdrive.iqmodeld.models.combined_artifact import has_combined_split_artifact
+from iqpilot.selfdrive.iqmodeld.models.iqc import load_pickle
 
 # ---- runtime type surface (native OpenCL/frame handles resolve to Any off-device) ----
 if TYPE_CHECKING:
@@ -73,8 +73,7 @@ def load_artifact_metadata(metadata_filename):
     if os.path.getsize(path) > _META_MAX_BYTES:
       cloudlog.error(f"metadata pkl {metadata_filename} is artifact-sized, refusing to unpickle it")
       return tuple({} for _ in _META_FIELDS)
-    with open(path, 'rb') as fh:
-      blob = _pk.load(fh)
+    blob = load_pickle(path)
     return tuple(blob.get(field, {}) for field in _META_FIELDS)
   except Exception:
     cloudlog.exception(f"unreadable metadata pkl {metadata_filename}, continuing without it")

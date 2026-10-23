@@ -47,13 +47,25 @@ class TestManager:
     proc.proc.is_alive.return_value = True
 
     deadline = manager.update_modeld_watchdog(None, True, False, proc, 10.0)
-    assert deadline == 10.0 + manager.MODELD_WATCHDOG_TIMEOUT
+    assert deadline == 10.0 + manager.MODELD_FIRST_PUBLISH_TIMEOUT
     assert manager.update_modeld_watchdog(deadline, True, False, proc, deadline - 0.1) == deadline
     proc.restart.assert_not_called()
 
-    next_deadline = manager.update_modeld_watchdog(deadline, True, False, proc, deadline)
+    assert manager.update_modeld_watchdog(deadline, True, False, proc, deadline) is None
     proc.restart.assert_called_once_with()
-    assert next_deadline == deadline + manager.MODELD_WATCHDOG_TIMEOUT
+    assert manager.update_modeld_watchdog(None, True, False, proc, deadline + 1) == deadline + 1 + manager.MODELD_FIRST_PUBLISH_TIMEOUT
+
+  def test_modeld_watchdog_slow_first_load_is_not_a_stall(self, mocker):
+    proc = mocker.Mock()
+    proc.proc.is_alive.return_value = True
+
+    deadline = manager.update_modeld_watchdog(None, True, False, proc, 0.0)
+    assert manager.update_modeld_watchdog(deadline, True, False, proc, manager.MODELD_WATCHDOG_TIMEOUT + 1) == deadline
+    proc.restart.assert_not_called()
+    deadline = manager.update_modeld_watchdog(deadline, True, True, proc, 90.0)
+    assert deadline == 90.0 + manager.MODELD_WATCHDOG_TIMEOUT
+    manager.update_modeld_watchdog(deadline, True, False, proc, deadline)
+    proc.restart.assert_called_once_with()
 
   def test_modeld_watchdog_tracks_output_and_resets(self, mocker):
     proc = mocker.Mock()

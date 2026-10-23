@@ -48,7 +48,6 @@ def apply_longitudinal_mode(params, mode: int) -> None:
     params.put_bool("AlphaLongitudinalEnabled", True)
     params.put_bool("ExperimentalMode", False)
     params.put_bool("IQDynamicMode", False)
-    set_valid_personality(params, PERSONALITY_RELAXED)
   elif mode == LONGITUDINAL_MODE_DYNAMIC:
     params.put_bool("AlphaLongitudinalEnabled", True)
     params.put_bool("ExperimentalMode", True)
@@ -76,20 +75,11 @@ def next_longitudinal_mode(current: int, onroad: bool, iq_modes_available: bool)
 
 
 def get_follow_distance_state(params) -> tuple[int | None, bool]:
-  mode = get_longitudinal_mode(params)
-  if mode == LONGITUDINAL_MODE_STOCK:
+  if get_longitudinal_mode(params) == LONGITUDINAL_MODE_STOCK:
     get_valid_personality(params)
     return None, False
-  if mode == LONGITUDINAL_MODE_CHILL:
-    if get_valid_personality(params) != PERSONALITY_RELAXED:
-      set_valid_personality(params, PERSONALITY_RELAXED)
-    return PERSONALITY_RELAXED, False
   return get_valid_personality(params), True
 
 
 def get_runtime_personality(params) -> int:
-  if get_longitudinal_mode(params) == LONGITUDINAL_MODE_CHILL:
-    if get_valid_personality(params) != PERSONALITY_RELAXED:
-      set_valid_personality(params, PERSONALITY_RELAXED)
-    return PERSONALITY_RELAXED
   return get_valid_personality(params)

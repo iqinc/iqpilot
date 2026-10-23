@@ -77,7 +77,7 @@ std::string ensure_params_path(const std::string &prefix, const std::string &pat
 class FileLock {
 public:
   FileLock(const std::string &fn) {
-    fd_ = HANDLE_EINTR(open(fn.c_str(), O_CREAT, 0775));
+    fd_ = HANDLE_EINTR(open(fn.c_str(), O_CREAT | O_CLOEXEC, 0775));
     if (fd_ < 0 || HANDLE_EINTR(flock(fd_, LOCK_EX)) < 0) {
       LOGE("Failed to lock file %s, errno=%d", fn.c_str(), errno);
     }
@@ -135,7 +135,7 @@ int Params::put(const char* key, const char* value, size_t value_size) {
   // 4) rename the temp file to the real name
   // 5) fsync() the containing directory
   std::string tmp_path = params_path + "/.tmp_value_XXXXXX";
-  int tmp_fd = mkstemp((char*)tmp_path.c_str());
+  int tmp_fd = mkostemp((char*)tmp_path.c_str(), O_CLOEXEC);
   if (tmp_fd < 0) return -1;
 
   int result = -1;

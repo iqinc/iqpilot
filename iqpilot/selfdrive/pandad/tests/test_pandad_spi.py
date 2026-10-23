@@ -36,9 +36,10 @@ class TestBoarddSpi:
 
     st = time.monotonic()
     ts = {s: list() for s in socks.keys()}
-    for _ in range(int(os.getenv("TEST_TIME", "20"))):
+    test_time = int(os.getenv("TEST_TIME", "20"))
+    for i in range(test_time + 2):
       # send some CAN messages
-      if not JUNGLE_SPAM:
+      if not JUNGLE_SPAM and i < test_time:
         sent = send_random_can_messages(sendcan, random.randrange(2, 20))
         for k, v in sent.items():
           sent_msgs[k].extend(list(v))
@@ -65,8 +66,7 @@ class TestBoarddSpi:
                 continue
               key = (msg.address, msg.dat)
               assert key in sent_msgs[msg.src], f"got unexpected msg: {msg.src=} {msg.address=} {msg.dat=}"
-              # TODO: enable this
-              #sent_msgs[msg.src].remove(key)
+              sent_msgs[msg.src].remove(key)
               total_recv_count += 1
           elif service == "pandaStates":
             assert len(m.pandaStates) == 1
@@ -100,3 +100,5 @@ class TestBoarddSpi:
     with subtests.test(msg="CAN traffic"):
       print(f"Sent {total_sent_count} CAN messages, got {total_recv_count} back. {total_recv_count/(total_sent_count+1e-4):.2%} received")
       assert total_recv_count > 20
+
+      assert all(len(v) == 0 for v in sent_msgs.values())

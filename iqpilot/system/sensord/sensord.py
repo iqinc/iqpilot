@@ -20,6 +20,41 @@ from iqpilot.system.sensord.sensors.lsm6ds3_temp import LSM6DS3_Temp
 from iqpilot.system.sensord.sensors.mmc5603nj_magn import MMC5603NJ_Magn
 
 I2C_BUS_IMU = 1
+IMU_INT_GPIO = 84
+GPIO_RETRY_S = 0.1
+GPIO_LOG_INTERVAL_S = 5.0
+SILENCE_REINIT_S = 2.0
+REINIT_MIN_INTERVAL_S = 3.0
+THREAD_RESTART_S = 0.5
+
+
+def acquire_interrupt_fd(event) -> int | None:
+  next_log = 0.0
+  while not event.is_set():
+    try:
+      return gpiochip_get_ro_value_fd("sensord", 0, IMU_INT_GPIO)
+    except OSError as e:
+      now = time.monotonic()
+      if now >= next_log:
+        cloudlog.error(f"imu interrupt gpio unavailable: {e}")
+        next_log = now + GPIO_LOG_INTERVAL_S
+      event.wait(GPIO_RETRY_S)
+  return None
+
+
+def reinit_interrupt_sensors(sensors: list[tuple[Sensor, str, bool]]) -> None:
+  interrupt_sensors = [(sensor, service) for sensor, service, interrupt in sensors if interrupt]
+  for sensor, service in interrupt_sensors:
+    try:
+      sensor.reset()
+    except Exception:
+      cloudlog.exception(f"Error resetting {service} sensor")
+  for sensor, service in interrupt_sensors:
+    try:
+      sensor.init()
+    except Exception:
+      cloudlog.exception(f"Error initializing {service} sensor")
+
 
 def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
   pm = messaging.PubMaster([service for sensor, service, interrupt in sensors if interrupt])
@@ -27,20 +62,44 @@ def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
   # Requesting both edges as the data ready pulse from the lsm6ds sensor is
   # very short (75us) and is mostly detected as falling edge instead of rising.
   # So if it is detected as rising the following falling edge is skipped.
-  fd = gpiochip_get_ro_value_fd("sensord", 0, 84)
+  fd = acquire_interrupt_fd(event)
+  if fd is None:
+    return
+  try:
+    run_interrupt_loop(sensors, event, pm, fd)
+  finally:
+    os.close(fd)
 
+
+def run_interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event, pm, fd: int) -> None:
   # Configure IRQ affinity
   irq_path = "/proc/irq/336/smp_affinity_list"
   if not os.path.exists(irq_path):
     irq_path = "/proc/irq/335/smp_affinity_list"
   if os.path.exists(irq_path):
-    sudo_write('1\n', irq_path)
+    try:
+      sudo_write('1\n', irq_path)
+    except OSError:
+      cloudlog.exception("imu irq affinity not set")
+
+  reinit_interrupt_sensors(sensors)
 
   offset = time.time_ns() - time.monotonic_ns()
+  started = time.monotonic()
+  last_publish = {service: started for sensor, service, interrupt in sensors if interrupt}
+  last_reinit = started
 
   poller = select.poll()
   poller.register(fd, select.POLLIN | select.POLLPRI)
   while not event.is_set():
+    now = time.monotonic()
+    silent = any(now - published > SILENCE_REINIT_S for published in last_publish.values())
+    if silent and now - last_reinit > REINIT_MIN_INTERVAL_S:
+      cloudlog.warning("imu silent, reinitializing sensors")
+      reinit_interrupt_sensors(sensors)
+      last_reinit = time.monotonic()
+      continue
+
     events = poller.poll(100)
     if not events:
       cloudlog.error("poll timed out")
@@ -68,10 +127,20 @@ def interrupt_loop(sensors: list[tuple[Sensor, str, bool]], event) -> None:
           msg = messaging.new_message(service, valid=True)
           setattr(msg, service, evt)
           pm.send(service, msg)
+          last_publish[service] = time.monotonic()
         except Sensor.DataNotReady:
           pass
         except Exception:
           cloudlog.exception(f"Error processing {service}")
+
+
+def interrupt_thread(sensors: list[tuple[Sensor, str, bool]], event) -> None:
+  while not event.is_set():
+    try:
+      interrupt_loop(sensors, event)
+    except Exception:
+      cloudlog.exception("imu interrupt loop failed")
+      event.wait(THREAD_RESTART_S)
 
 
 def polling_loop(sensor: Sensor, service: str, event: threading.Event) -> None:
@@ -112,7 +181,7 @@ def main() -> None:
   # Initialize sensors
   exit_event = threading.Event()
   threads = [
-    threading.Thread(target=interrupt_loop, args=(sensors_cfg, exit_event), daemon=True)
+    threading.Thread(target=interrupt_thread, args=(sensors_cfg, exit_event), daemon=True)
   ]
   for sensor, service, interrupt in sensors_cfg:
     try:

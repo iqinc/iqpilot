@@ -35,12 +35,12 @@ def test_toggle_off_matches_pre_fix_outputs(controls_module, case, slew):
 
 @pytest.mark.parametrize("case", ["torque", "tss2", "gm"])
 @pytest.mark.parametrize("slew", [False, True])
-def test_toggle_off_preserves_active_nnff_outputs(controls_module, case, slew):
+def test_unknown_model_cannot_replace_action_with_nnff(controls_module, case, slew):
   controls = build_controls(controls_module, case, lookahead=False, slew=slew, nnff=True)
   actual = run_scenario(controls)
   assert controls.LaC.nnff_assist.model.queries > 0
-  with np.load(Path(__file__).with_name("fixtures") / "lateral_lookahead_off.npz") as baseline:
-    np.testing.assert_allclose(actual, baseline[f"{case}_slew{int(slew)}_nnff"], rtol=1e-12, atol=1e-12)
+  enabled = build_controls(controls_module, case, lookahead=True, slew=slew, nnff=True)
+  np.testing.assert_array_equal(actual, run_scenario(enabled))
 
 
 @pytest.mark.parametrize("case", CONTROL_CASES)

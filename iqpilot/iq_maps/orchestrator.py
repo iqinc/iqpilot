@@ -20,7 +20,8 @@ from iqpilot.common.swaglog import cloudlog
 from iqpilot.selfdrive.selfdrived.alertmanager import set_offroad_alert
 from iqpilot.system.hardware.hw import Paths
 from iqpilot.iq_maps import VENDOR_MAPD_BIN_DIR, VENDOR_MAPD_PATH
-from iqpilot.iq_maps.tile_bundle_downloader import TileBundleDownloader, region_bundle_installed
+from iqpilot.iq_maps.tile_bundle_downloader import (TileBundleDownloader, region_bundle_installed, region_roads_path,
+                                                    region_valhalla_installed)
 from iqpilot.iq_maps.vendor_mapd_installer import VendorMapdInstaller
 
 OfflineMapAction = custom.MapdInputType
@@ -337,12 +338,13 @@ def _configured_region_selector() -> str:
 
 
 def tile_bundles_missing() -> bool:
-  if not (params.get_bool("OfflineOSMaps") or params.get_bool("OsmLocal")):
-    return False
   selector = _configured_region_selector()
   if not selector:
     return False
-  return any(not region_bundle_installed(part) for part in selector.split(",") if part)
+  parts = [part for part in selector.split(",") if part]
+  if (params.get_bool("OfflineOSMaps") or params.get_bool("OsmLocal")) and any(not region_bundle_installed(part) for part in parts):
+    return True
+  return any((region_bundle_installed(part) or region_valhalla_installed(part)) and not region_roads_path(part).exists() for part in parts)
 
 
 def maybe_restore_tile_bundles() -> None:

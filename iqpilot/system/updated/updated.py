@@ -44,19 +44,40 @@ class UpdateInstallMode:
   DOWNLOAD_AND_INSTALL = "download_and_install"
 
 class WaitTimeHelper:
-  def __init__(self):
+  def __init__(self, params=None):
     self.ready_event = threading.Event()
     self.user_request = UserRequest.NONE
     signal.signal(signal.SIGHUP, self.update_now)
     signal.signal(signal.SIGUSR1, self.check_now)
+    # The UI runs in a SELinux-confined domain under hidepid=2 and cannot
+    # signal this process by PID. It writes UpdaterManualRequest instead,
+    # which this thread polls and turns into the same request a signal would.
+    self._params = params
+    if params is not None:
+      params.remove("UpdaterManualRequest")
+      threading.Thread(target=self._poll_request_param, daemon=True).start()
+
+  def _poll_request_param(self) -> None:
+    while True:
+      try:
+        req = self._params.get("UpdaterManualRequest", encoding="utf-8")
+      except Exception:
+        req = None
+      if req:
+        self._params.remove("UpdaterManualRequest")
+        if req == "fetch":
+          self.update_now(0, None)
+        elif req == "check":
+          self.check_now(0, None)
+      time.sleep(1)
 
   def update_now(self, signum: int, frame) -> None:
-    cloudlog.info("caught SIGHUP, attempting to downloading update")
+    cloudlog.info("update request received, attempting to download update")
     self.user_request = UserRequest.FETCH
     self.ready_event.set()
 
   def check_now(self, signum: int, frame) -> None:
-    cloudlog.info("caught SIGUSR1, checking for updates")
+    cloudlog.info("check request received, checking for updates")
     self.user_request = UserRequest.CHECK
     self.ready_event.set()
 
@@ -125,15 +146,44 @@ def agnos_version_allowed(current_version: str, expected_version: str, compat_ve
 
   return current_version in compat_versions
 
-def configure_git_auth(cwd: str) -> None:
-  """Install the IQ.Lvbs read-only git credential helper before any remote op.
+# The public release repo at git.konn3kt.com/IQ.Lvbs/IQ.Pilot needs no auth.
+# Earlier builds installed an insteadOf rule + JWT credential helper that
+# rewrote origin through the authenticated k3 proxy; when the device can't sign
+# a JWT the fetch fails. Clearing those leaves the public origin, which fetches
+# directly. A device that installed from GitHub is already rewritten to it and
+# is left untouched here.
+PUBLIC_RELEASE_REMOTE = "https://git.konn3kt.com/IQ.Lvbs/IQ.Pilot.git"
 
-  The IQ.Firewall blocks anonymous access to the git server (to stop bandwidth-
-  wasting mirrors), so the fleet must authenticate. The read token + credential
-  helper live in a proprietary, signed, compiled bundle
-  (iqpilot_private.konn3kt.iqlvbs.git_remote); the token never appears in
-  .git/config, argv, or this open-source file. On dev installs without the
-  bundle this is a no-op and ambient git credentials are used."""
+def _clear_stale_proxy_config(cwd: str) -> None:
+  subprocess.run(["git", "-C", cwd, "config", "--unset-all", "credential.helper"],
+                 check=False, capture_output=True)
+  try:
+    raw = subprocess.check_output(["git", "-C", cwd, "config", "--get-regexp", r"^url\..*\.insteadOf$"],
+                                  text=True, stderr=subprocess.DEVNULL)
+    for line in raw.strip().splitlines():
+      config_key = line.split()[0] if line.strip() else ""
+      if config_key and "iqos-git" in config_key:
+        subprocess.run(["git", "-C", cwd, "config", "--unset", config_key], check=False, capture_output=True)
+  except subprocess.CalledProcessError:
+    pass
+  # If a prior build pointed origin at the k3 proxy or the GitHub mirror,
+  # restore the public Gitea release remote so updates come from the same host
+  # the prebuilt ships to and need no auth.
+  origin_url = subprocess.check_output(["git", "-C", cwd, "config", "--get", "remote.origin.url"],
+                                        text=True, stderr=subprocess.DEVNULL).strip().lower()
+  is_release_repo = "iqos-git" in origin_url or "iq.lvbs/iq.pilot" in origin_url or "iqinc/iqpilot" in origin_url or "iqinc/openpilot" in origin_url
+  already_public = origin_url == PUBLIC_RELEASE_REMOTE.lower()
+  if is_release_repo and not already_public:
+    subprocess.run(["git", "-C", cwd, "remote", "set-url", "origin", PUBLIC_RELEASE_REMOTE],
+                   check=False, capture_output=True)
+    cloudlog.info("updater: restored public release remote git.konn3kt.com/IQ.Lvbs/IQ.Pilot")
+
+def configure_git_auth(cwd: str) -> None:
+  if _configure_broker_git_proxy(cwd):
+    return
+
+  _clear_stale_proxy_config(cwd)
+
   try:
     from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
     import_verified_module("iqpilot_updater_private", "iqpilot_private.updater.git_remote").configure(cwd)
@@ -145,6 +195,10 @@ def configure_git_auth(cwd: str) -> None:
     configure_user_creds(cwd)
   except Exception:
     cloudlog.exception("updater: user git credentials unavailable")
+
+
+def _configure_broker_git_proxy(cwd: str) -> bool:
+  return False
 
 
 def setup_git_options(cwd: str) -> None:
@@ -525,7 +579,7 @@ def main() -> None:
 
     updater = Updater()
     update_failed_count = 0 # TODO: Load from param?
-    wait_helper = WaitTimeHelper()
+    wait_helper = WaitTimeHelper(params)
 
     params.put("UpdaterState", "idle")
     params.put_bool("UpdateAvailable", False)

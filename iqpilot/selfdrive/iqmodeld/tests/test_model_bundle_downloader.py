@@ -2,6 +2,7 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 """
 import hashlib
+from types import SimpleNamespace
 import http.server
 import os
 import threading
@@ -54,6 +55,11 @@ def server():
   srv.server_close()
 
 
+def _fake_broker(port):
+  return SimpleNamespace(broker_lfs_url=lambda oid, size: f"http://127.0.0.1:{port}/o/{oid}",
+                         broker_headers=lambda: {"Authorization": "JWT test"})
+
+
 def _objects(parts):
   return [{"oid": hashlib.sha256(p).hexdigest(), "size": len(p)} for p in parts]
 
@@ -65,9 +71,7 @@ def test_resume_continues_a_cut_part_and_reuses_finished_parts(server, tmp_path,
   _RangeHandler.hits = []
   _RangeHandler.cut_first = {objs[1]["oid"]: 100_000}
   port = server.server_address[1]
-  monkeypatch.setattr(dl, "_requests_auth", lambda: None)
-  monkeypatch.setattr(dl, "_resolve_oid", lambda session, base, oid, size, auth: (f"http://127.0.0.1:{port}/o/{oid}", {}))
-  monkeypatch.setattr(dl, "MODELS_BASE_URLS", ("http://unused",))
+  monkeypatch.setattr(dl, "_git_auth", lambda: _fake_broker(port))
   monkeypatch.setattr(dl, "STREAM_RETRIES", 3)
   monkeypatch.setattr(dl, "CHUNK", 64 * 1024)
   whole = b"".join(parts)
@@ -88,9 +92,7 @@ def test_corrupt_finished_part_is_refetched(server, tmp_path, monkeypatch):
   _RangeHandler.hits = []
   _RangeHandler.cut_first = {}
   port = server.server_address[1]
-  monkeypatch.setattr(dl, "_requests_auth", lambda: None)
-  monkeypatch.setattr(dl, "_resolve_oid", lambda session, base, oid, size, auth: (f"http://127.0.0.1:{port}/o/{oid}", {}))
-  monkeypatch.setattr(dl, "MODELS_BASE_URLS", ("http://unused",))
+  monkeypatch.setattr(dl, "_git_auth", lambda: _fake_broker(port))
   dst = str(tmp_path / "model.pkl")
   os.makedirs(dst + ".parts")
   with open(dl._part_path(dst, objs[0]["oid"]), "wb") as f:
@@ -108,7 +110,7 @@ def test_hf_single_file_resumes_after_cut(server, tmp_path, monkeypatch):
   _RangeHandler.hits = []
   _RangeHandler.cut_first = {oid: 250_000}
   port = server.server_address[1]
-  monkeypatch.setattr(dl, "_hf", lambda: ({"Authorization": "Bearer test"}, lambda p: f"http://127.0.0.1:{port}/o/{oid}"))
+  monkeypatch.setattr(dl, "_resolve_hf", lambda p: (f"http://127.0.0.1:{port}/o/{oid}", {"Authorization": "Bearer test"}))
   monkeypatch.setattr(dl, "STREAM_RETRIES", 3)
   monkeypatch.setattr(dl, "CHUNK", 64 * 1024)
   dst = str(tmp_path / "policy.pkl")
@@ -141,7 +143,7 @@ def test_download_onnx_prefers_hf_then_falls_back(tmp_path, monkeypatch):
 
 
 def _parallel(monkeypatch, port, oid):
-  monkeypatch.setattr(dl, "_hf", lambda: ({"Authorization": "Bearer test"}, lambda p: f"http://127.0.0.1:{port}/o/{oid}"))
+  monkeypatch.setattr(dl, "_resolve_hf", lambda p: (f"http://127.0.0.1:{port}/o/{oid}", {"Authorization": "Bearer test"}))
   monkeypatch.setattr(dl, "STREAM_RETRIES", 2)
   monkeypatch.setattr(dl, "CHUNK", 64 * 1024)
   monkeypatch.setattr(dl, "PARALLEL_MIN_BYTES", 100_000)

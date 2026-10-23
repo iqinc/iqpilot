@@ -98,7 +98,7 @@ int msgq_new_queue(msgq_queue_t * q, const char * path, size_t size){
   }
   std::string full_path = base_path + path;
 
-  auto fd = open(full_path.c_str(), O_RDWR | O_CREAT, 0664);
+  auto fd = open(full_path.c_str(), O_RDWR | O_CREAT, 0660);
   if (fd < 0) {
     std::cout << "Warning, could not open: " << full_path << std::endl;
     return -1;

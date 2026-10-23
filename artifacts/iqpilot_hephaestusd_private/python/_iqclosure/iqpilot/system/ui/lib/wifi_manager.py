@@ -177,7 +177,7 @@ class WifiManager:
     # State
     self._connecting_to_ssid: str = ""
     self._ipv4_address: str = ""
-    self._current_network_metered: MeteredType = MeteredType.UNKNOWN
+    self._current_network_metered: MeteredType = MeteredType.NO
     self._tethering_password: str = ""
     self._ipv4_forward = False
     self._tethering_transition = False
@@ -568,6 +568,7 @@ class WifiManager:
           'type': ('s', '802-11-wireless'),
           'uuid': ('s', str(uuid.uuid4())),
           'id': ('s', f'iqpilot connection {ssid}'),
+          'metered': ('i', int(MeteredType.NO)),
           'autoconnect-retries': ('i', 0),
         },
         '802-11-wireless': {
@@ -802,7 +803,7 @@ class WifiManager:
       cloudlog.warning("No WiFi device found")
       return
 
-    self._current_network_metered = MeteredType.UNKNOWN
+    self._current_network_metered = MeteredType.NO
     for active_conn in self._get_active_connections():
       conn_addr = DBusAddress(active_conn, bus_name=NM, interface=NM_ACTIVE_CONNECTION_IFACE)
       conn_type = self._router_main.send_and_get_reply(Properties(conn_addr).get('Type')).body[0][1]
@@ -821,8 +822,14 @@ class WifiManager:
         metered_prop = settings['connection'].get('metered', ('i', 0))[1]
         if metered_prop == MeteredType.YES:
           self._current_network_metered = MeteredType.YES
-        elif metered_prop == MeteredType.NO:
+        else:
           self._current_network_metered = MeteredType.NO
+          if metered_prop != MeteredType.NO:
+            settings['connection']['metered'] = ('i', int(MeteredType.NO))
+            settings_addr = DBusAddress(conn_path, bus_name=NM, interface=NM_CONNECTION_IFACE)
+            reply = self._router_main.send_and_get_reply(new_method_call(settings_addr, 'Update', 'a{sa{sv}}', (settings,)))
+            if reply.header.message_type == MessageType.error:
+              cloudlog.warning(f'Failed to default Wi-Fi connection to unmetered: {reply}')
         return
 
   def set_current_network_metered(self, metered: MeteredType):

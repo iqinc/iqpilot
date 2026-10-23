@@ -3,7 +3,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 """
 from __future__ import annotations
 
-import functools
 import hashlib
 import json
 import os
@@ -24,26 +23,29 @@ RANGE_RETRIES = 4
 PARALLEL_PARTS = max(1, int(os.environ.get("IQ_DOWNLOAD_PARTS", "3")))
 
 
-def _requests_auth():
+def _git_auth():
   import importlib
   for mod in ("iqpilot_private.models.git_auth", "iqpilot.models_private_src.git_auth",
               "iqpilot.selfdrive.iqmodeld.models.git_auth"):
     try:
-      return importlib.import_module(mod).get_requests_auth()
+      return importlib.import_module(mod)
     except Exception:
       continue
   return None
 
 
-def _hf():
-  import importlib
-  for mod in ("iqpilot_private.models.git_auth", "iqpilot.selfdrive.iqmodeld.models.git_auth"):
-    try:
-      m = importlib.import_module(mod)
-      return m.get_hf_headers(), m.hf_resolve_url
-    except Exception:
-      continue
-  return None, None
+def _resolve_hf(hf_path: str) -> tuple[str | None, dict]:
+  m = _git_auth()
+  if m is None:
+    return None, {}
+  return m.resolve_hf(hf_path)
+
+
+def requests_get(url: str, **kwargs):
+  m = _git_auth()
+  if m is None:
+    raise RuntimeError("no asset broker available")
+  return m.requests_get(url, **kwargs)
 
 
 class RangesNotHonoured(Exception):
@@ -189,10 +191,9 @@ def _verify_file(tmp: str, sha256: str, size: int) -> None:
 
 def download_hf_file(hf_path: str, dst: str, sha256: str, size: int, progress_cb=None) -> str:
   import requests
-  headers, resolve = _hf()
-  if resolve is None:
+  url, headers = _resolve_hf(hf_path)
+  if url is None:
     raise RuntimeError("no HF credentials available")
-  url = resolve(hf_path)
   os.makedirs(os.path.dirname(dst), exist_ok=True)
   tmp = dst + ".hfpart"
   last_error: Exception | None = None
@@ -213,8 +214,10 @@ def download_hf_file(hf_path: str, dst: str, sha256: str, size: int, progress_cb
           os.remove(leftover)
     except Exception as e:
       last_error = e
-  for _attempt in range(STREAM_RETRIES):
+  for attempt in range(STREAM_RETRIES):
     try:
+      if attempt:
+        url, headers = _resolve_hf(hf_path)
       have = os.path.getsize(tmp) if os.path.isfile(tmp) else 0
       if size and have > size:
         os.remove(tmp)
@@ -242,26 +245,6 @@ def download_hf_file(hf_path: str, dst: str, sha256: str, size: int, progress_cb
   raise RuntimeError(f"HF download failed: {last_error}")
 
 
-def _lfs_endpoint(base_url: str) -> str:
-  return base_url.split("/raw/", 1)[0] + ".git/info/lfs"
-
-
-def _resolve_oid(session, base_url: str, oid: str, size: int, auth):
-  import requests
-  batch = session.post(f"{_lfs_endpoint(base_url)}/objects/batch",
-                       data=json.dumps({"operation": "download", "transfers": ["basic"],
-                                        "objects": [{"oid": oid, "size": size}]}),
-                       headers={"Content-Type": "application/vnd.git-lfs+json",
-                                "Accept": "application/vnd.git-lfs+json"},
-                       auth=auth, timeout=HTTP_TIMEOUT_S)
-  batch.raise_for_status()
-  entry = batch.json()["objects"][0]
-  if "actions" not in entry:
-    raise requests.RequestException(f"LFS object unavailable: {entry.get('error', oid)}")
-  action = entry["actions"]["download"]
-  return action["href"], action.get("header", {})
-
-
 def _part_path(dst: str, oid: str) -> str:
   return os.path.join(dst + ".parts", oid)
 
@@ -276,19 +259,28 @@ def _part_complete(path: str, oid: str, size: int) -> bool:
   return digest.hexdigest() == oid
 
 
-def _fetch_part(session, base_url: str, obj: dict, path: str, auth, progress) -> None:
+def _fetch_part(session, obj: dict, path: str, progress) -> None:
   size = int(obj["size"])
   have = os.path.getsize(path) if os.path.isfile(path) else 0
   if have > size:
     os.remove(path)
     have = 0
-  href, headers = _resolve_oid(session, base_url, obj["oid"], size, auth)
-  obj_auth = None if headers.get("Authorization") else auth
+  m = _git_auth()
+  if m is None:
+    raise RuntimeError("no asset broker available for LFS parts")
+  target = m.broker_lfs_url(obj["oid"], size)
+  headers = m.broker_headers() if target else {}
+  if not (target and headers):
+    raise RuntimeError("no device identity for the konn3kt asset broker")
+  _stream_part(session, target, headers, path, have, progress)
+
+
+def _stream_part(session, href: str, headers: dict, path: str, have: int, progress) -> None:
   # LFS parts are content-addressed (oid == sha256), so a half-written part can be resumed with a
   # Range request and verified afterwards instead of being thrown away on every restart.
   if have:
     headers = {**headers, "Range": f"bytes={have}-"}
-  with session.get(href, headers=headers, stream=True, timeout=HTTP_TIMEOUT_S, auth=obj_auth) as r:
+  with session.get(href, headers=headers, stream=True, timeout=HTTP_TIMEOUT_S) as r:
     r.raise_for_status()
     if have and r.status_code != 206:
       have = 0
@@ -300,7 +292,6 @@ def _fetch_part(session, base_url: str, obj: dict, path: str, auth, progress) ->
 
 def download_lfs_bundle(objects: list, dst: str, sha256: str, size: int, progress_cb=None) -> str:
   import requests
-  auth = _requests_auth()
   os.makedirs(dst + ".parts", exist_ok=True)
   total = int(size) or sum(int(o["size"]) for o in objects)
   done_bytes = sum(int(o["size"]) for o in objects if _part_complete(_part_path(dst, o["oid"]), o["oid"], int(o["size"])))
@@ -318,30 +309,26 @@ def download_lfs_bundle(objects: list, dst: str, sha256: str, size: int, progres
     with lock:
       progress(n)
 
-  def fetch(base_url: str, obj: dict) -> None:
+  def fetch(obj: dict) -> None:
     path = _part_path(dst, obj["oid"])
     if _part_complete(path, obj["oid"], int(obj["size"])):
       return
-    _fetch_part(requests.Session(), base_url, obj, path, auth, locked_progress)
+    _fetch_part(requests.Session(), obj, path, locked_progress)
     if not _part_complete(path, obj["oid"], int(obj["size"])):
       if os.path.getsize(path) >= int(obj["size"]):
         os.remove(path)
       raise RuntimeError(f"part {obj['oid'][:12]} incomplete or failed verification")
 
-  for base_url in MODELS_BASE_URLS:
-    for _attempt in range(STREAM_RETRIES):
-      try:
-        pending = [o for o in objects if not _part_complete(_part_path(dst, o["oid"]), o["oid"], int(o["size"]))]
-        got[0] = total - sum(int(o["size"]) for o in pending)
-        with ThreadPoolExecutor(max_workers=max(1, min(PARALLEL_PARTS, len(pending) or 1))) as pool:
-          for _ in pool.map(functools.partial(fetch, base_url), pending):
-            pass
-        break
-      except Exception as e:
-        last_error = e
-    else:
-      continue
-    break
+  for _attempt in range(STREAM_RETRIES):
+    try:
+      pending = [o for o in objects if not _part_complete(_part_path(dst, o["oid"]), o["oid"], int(o["size"]))]
+      got[0] = total - sum(int(o["size"]) for o in pending)
+      with ThreadPoolExecutor(max_workers=max(1, min(PARALLEL_PARTS, len(pending) or 1))) as pool:
+        for _ in pool.map(fetch, pending):
+          pass
+      break
+    except Exception as e:
+      last_error = e
   else:
     raise RuntimeError(f"model bundle download failed: {last_error}")
 

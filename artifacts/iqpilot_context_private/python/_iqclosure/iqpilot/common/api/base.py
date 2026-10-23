@@ -7,9 +7,43 @@ from functools import lru_cache
 from iqpilot.system.hardware.hw import Paths
 from iqpilot.system.version import get_version
 
-# name: jwt signature algorithm
 KEYS = {"id_rsa": "RS256",
         "id_ecdsa": "ES256"}
+
+_CUSTODIAN_KEY = object()
+_IQKEEPER_SOCKET = "/run/iqkeeper/iqkeeper.sock"
+
+
+def _custodian_available() -> bool:
+  import stat
+  try:
+    return stat.S_ISSOCK(os.stat(_IQKEEPER_SOCKET).st_mode)
+  except OSError:
+    return False
+
+
+def _custodian_sign_jwt(dongle_id: str, payload: dict, alg: str) -> str:
+  import base64
+  import json
+  import socket
+  nonce = base64.b64encode(os.urandom(16)).decode()
+  packet = json.dumps({
+    "v": 1,
+    "op": "sign",
+    "dongle_id": dongle_id,
+    "payload": payload,
+    "alg": alg,
+    "nonce": nonce,
+  }).encode()
+  with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as sock:
+    sock.settimeout(25.0)
+    sock.connect(_IQKEEPER_SOCKET)
+    sock.send(packet)
+    reply_data = sock.recv(8192)
+  reply = json.loads(reply_data) if reply_data else {}
+  if reply.get("nonce") != nonce or not reply.get("ok"):
+    raise PermissionError(f"custodian sign failed: {reply.get('error', 'unknown')}")
+  return reply["token"]
 
 
 @lru_cache(maxsize=4)
@@ -60,6 +94,9 @@ class BaseApi:
     }
     if payload_extra is not None:
       payload.update(payload_extra)
+    if self.private_key is _CUSTODIAN_KEY:
+      serializable = {k: v.isoformat() if isinstance(v, datetime) else v for k, v in payload.items()}
+      return _custodian_sign_jwt(self.dongle_id, serializable, self.jwt_algorithm)
     key = load_signing_key(self.private_key) if self.private_key else self.private_key
     token = jwt.encode(payload, key, algorithm=self.jwt_algorithm)
     if isinstance(token, bytes):
@@ -73,9 +110,25 @@ class BaseApi:
     return self.request(method, endpoint, timeout, access_token, session=session, json=json, **params)
 
   @staticmethod
-  def get_key_pair() -> tuple[str, str, str] | tuple[None, None, None]:
+  def get_key_pair() -> tuple[str, str | object, str] | tuple[None, None, None]:
     for key in KEYS:
-      if os.path.isfile(Paths.persist_root() + f'/comma/{key}') and os.path.isfile(Paths.persist_root() + f'/comma/{key}.pub'):
-        with open(Paths.persist_root() + f'/comma/{key}') as private, open(Paths.persist_root() + f'/comma/{key}.pub') as public:
-          return KEYS[key], private.read(), public.read()
+      priv_path = Paths.persist_root() + f'/comma/{key}'
+      pub_path = priv_path + '.pub'
+      if not os.path.isfile(priv_path) or not os.path.isfile(pub_path):
+        continue
+      try:
+        with open(pub_path) as public:
+          pub = public.read()
+      except OSError:
+        continue
+      try:
+        with open(priv_path) as private:
+          return KEYS[key], private.read(), pub
+      except PermissionError:
+        import time
+        for _attempt in range(10):
+          if _custodian_available():
+            return KEYS[key], _CUSTODIAN_KEY, pub
+          time.sleep(0.5)
+        continue
     return None, None, None

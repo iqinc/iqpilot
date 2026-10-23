@@ -31,24 +31,44 @@ class Timer:
     realtime = f"{duration/total:.1f}x realtime" if total > 0 else "N/A"
     return f"{duration}s in {total:.1f}s ({realtime}) | {parts}"
 
+_sudo_available: bool | None = None
+
+
 def sudo_write(val: str, path: str) -> None:
+  global _sudo_available
   try:
     with open(path, 'w') as f:
       f.write(str(val))
-  except PermissionError:
-    os.system(f"sudo chmod a+w {path}")
-    try:
+    return
+  except OSError:
+    pass
+  # AGNOS 4.9.9.2 removes owner root; a privileged boot step opens these nodes to the stack so a direct write normally works. Only probe a non-interactive escalation once (interactive sudo blocks with no tty, and sudo -n itself can stall), and never let its failure or timeout propagate.
+  if _sudo_available is False:
+    return
+  try:
+    _sudo_available = subprocess.run(["sudo", "-n", "chmod", "a+w", path], timeout=2, capture_output=True).returncode == 0
+    if _sudo_available:
       with open(path, 'w') as f:
         f.write(str(val))
-    except PermissionError:
-      # fallback for debugfs files
-      os.system(f"sudo su -c 'echo {val} > {path}'")
+  except Exception:
+    _sudo_available = False
 
 
 def sudo_read(path: str) -> str:
+  global _sudo_available
   try:
-    return subprocess.check_output(f"sudo cat {path}", shell=True, encoding='utf8').strip()
+    with open(path, encoding='utf8') as f:
+      return f.read().strip()
+  except OSError:
+    pass
+  if _sudo_available is False:
+    return ""
+  try:
+    result = subprocess.run(["sudo", "-n", "cat", path], timeout=2, capture_output=True, text=True)
+    _sudo_available = result.returncode == 0
+    return result.stdout.strip()
   except Exception:
+    _sudo_available = False
     return ""
 
 

@@ -138,16 +138,18 @@ def create_blinker_control(packer, bus, leftBlinker, rightBlinker):
   return packer.make_can_msg("Blinkmodi_02", bus, values)
 
 
-def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive,
+def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, lead_index, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive,
                            *, priority_boost=False):
   priodisp = 0 if (fcw_alert or decel or d_unresponsive or acc_hud_status in (6, 7)) else 1 if priority_boost else 2 if acc_hud_status in (3, 4) else 3
+  # The same gap notches as MQB, see mqbcan.create_acc_hud_control. The field is 4 bits but the stock radar
+  # uses the low notch numbers (a stock Sharan sends 1 and 2)
   leadDistanceBars = distanceBars + 1 if distanceBars in (1, 2, 3) else 2
   values = {
     "ACA_StaACC": acc_hud_status,
     "ACA_AnzDisplay": 1 if acc_hud_status in (3, 4) else 0,
     "ACA_Zeitluecke": leadDistanceBars,
     "ACA_V_Wunsch": set_speed,
-    "ACA_gemZeitl": min(15, max(1, int(round(leadDistance)))) if leadVisible else 0,
+    "ACA_gemZeitl": lead_index if leadVisible else 0,
     "ACA_PrioDisp": priodisp,
     "ACA_Akustik1": d_unresponsive,
     "ACA_Akustik2": fcw_alert,

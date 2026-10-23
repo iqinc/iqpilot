@@ -2,11 +2,18 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 """
 
+import pyray as rl
+
+from iqpilot.common.ui_settings import NO_NUDGE_WARNING
 from iqpilot.selfdrive.ui.mici.widgets.stock_button import BigButton, BigParamControl
+from iqpilot.selfdrive.ui.mici.widgets.stock_dialog import BigDialogBase
 from iqpilot.selfdrive.ui.mici.layouts.settings.iq_widgets import MappedParamToggle
 from iqpilot.selfdrive.ui.ui_state import ui_state
-from iqpilot.system.ui.lib.application import gui_app
+from iqpilot.system.ui.lib.application import FontWeight, gui_app
+from iqpilot.system.ui.widgets.button import SmallButton
+from iqpilot.system.ui.widgets.label import MiciLabel
 from iqpilot.system.ui.widgets.scroller import NavScroller
+from iqpilot.system.ui.widgets.slider import SmallSlider
 from iqpilot.system.ui.lib.multilang import tr
 
 
@@ -48,11 +55,56 @@ class SabSettingsPanel(NavScroller):
     self._steer_override.set_enabled(offroad)
 
 
+class NoNudgeConfirmation(BigDialogBase):
+  def __init__(self, confirm_callback):
+    super().__init__()
+    self._title = MiciLabel(tr("Are you sure?"), font_size=32, font_weight=FontWeight.BOLD)
+    self._warning = MiciLabel(tr(NO_NUDGE_WARNING), font_size=24, width=int(self.rect.width - 40),
+                              line_height=26, wrap_text=True, elide_right=False)
+    self._cancel = self._child(SmallButton(tr("cancel")))
+    self._cancel.set_click_callback(self.dismiss)
+    self._slider = self._child(SmallSlider(tr("slide to\nenable"), lambda: self.dismiss(confirm_callback), right_to_left=False))
+    self._cancel.set_enabled(lambda: self.enabled and not self.is_dismissing and not self._slider.confirmed)
+    self._slider.set_enabled(lambda: self.enabled and not self.is_dismissing)
+
+  def _update_state(self):
+    super()._update_state()
+    if self.is_dismissing and not self._slider.confirmed:
+      self._slider.reset()
+
+  def _render(self, rect):
+    self._title.render(rl.Rectangle(rect.x + 20, rect.y + 18, rect.width - 40, 38))
+    self._warning.set_width(int(rect.width - 40))
+    self._warning.render(rl.Rectangle(rect.x + 20, rect.y + 58, rect.width - 40, 78))
+    self._cancel.set_opacity(1.0 - self._slider.slider_percentage)
+    self._cancel.set_visible(self._slider.slider_percentage < 0.8)
+    self._cancel.set_position(rect.x + 8, rect.y + rect.height - self._cancel.rect.height)
+    self._cancel.render()
+    self._slider.set_position(rect.x + rect.width - self._slider.rect.width, rect.y + rect.height - self._slider.rect.height)
+    self._slider.render()
+
+
+class LaneChangeSelector(MappedParamToggle):
+  def __init__(self):
+    super().__init__(tr("Auto Lane Change"), "IQLaneChangeTimer", [tr("nudge"), tr("no nudge")], [0, 1])
+
+  def _enable_no_nudge(self):
+    self._params.put(self._param, 1)
+    self.refresh()
+
+  def _handle_mouse_release(self, mouse_pos):
+    BigButton._handle_mouse_release(self, mouse_pos)
+    if self._params.get(self._param, return_default=True) == 1:
+      self._params.put(self._param, 0)
+      self.refresh()
+    else:
+      gui_app.push_widget(NoNudgeConfirmation(self._enable_no_nudge))
+
+
 class LaneChangePanel(NavScroller):
   def __init__(self):
     super().__init__()
-    self._timer = MappedParamToggle(tr("Auto Lane Change"), "IQLaneChangeTimer",
-                                    [tr("nudge"), tr("no nudge")], [0, 1])
+    self._timer = LaneChangeSelector()
     self._edge_guard = BigParamControl(tr("Lane Edge Guard"), "IQEdgeGuard")
     self._scroller.add_widgets([self._timer, self._edge_guard])
 

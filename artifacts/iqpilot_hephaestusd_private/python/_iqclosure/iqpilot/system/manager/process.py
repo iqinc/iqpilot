@@ -34,36 +34,33 @@ except ModuleNotFoundError:
     return _VERIFIED_RUNNER_PATH
 
 
-def launcher(proc: str, name: str) -> None:
+def launcher(proc: str, name: str, env: dict[str, str] | None = None) -> None:
   try:
-    # import the process
+    if env:
+      os.environ.update(env)
+
     mod = importlib.import_module(proc)
 
-    # rename the process
     setproctitle(proc)
 
-    # create new context since we forked
     messaging.reset_context()
 
-    # add daemon name tag to logs
     cloudlog.bind(daemon=name)
     sentry.set_tag("daemon", name)
 
-    # exec the process
     mod.main()
   except KeyboardInterrupt:
     cloudlog.warning(f"child {proc} got SIGINT")
   except Exception:
-    # can't install the crash handler because sys.excepthook doesn't play nice
-    # with threads, so catch it here.
     sentry.capture_exception()
     raise
 
 
-def nativelauncher(pargs: list[str], cwd: str, name: str) -> None:
+def nativelauncher(pargs: list[str], cwd: str, name: str, env: dict[str, str] | None = None) -> None:
+  if env:
+    os.environ.update(env)
   os.environ['MANAGER_DAEMON'] = name
 
-  # exec the process
   os.chdir(cwd)
   os.environ['PWD'] = cwd
   os.execvp(pargs[0], pargs)
@@ -162,7 +159,7 @@ class ManagerProcess(ABC):
 
 
 class NativeProcess(ManagerProcess):
-  def __init__(self, name, cwd, cmdline, should_run, enabled=True, sigkill=False, restart_if_crash=False):
+  def __init__(self, name, cwd, cmdline, should_run, enabled=True, sigkill=False, restart_if_crash=False, env=None):
     self.name = name
     self.cwd = cwd
     self.cmdline = cmdline
@@ -171,12 +168,12 @@ class NativeProcess(ManagerProcess):
     self.sigkill = sigkill
     self.launcher = nativelauncher
     self.restart_if_crash = restart_if_crash
+    self.env = env
 
   def prepare(self) -> None:
     pass
 
   def start(self) -> None:
-    # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
 
@@ -185,7 +182,7 @@ class NativeProcess(ManagerProcess):
 
     cwd = os.path.join(BASEDIR, self.cwd)
     cloudlog.info(f"starting process {self.name}")
-    self.proc = Process(name=self.name, target=self.launcher, args=(self.cmdline, cwd, self.name))
+    self.proc = Process(name=self.name, target=self.launcher, args=(self.cmdline, cwd, self.name, self.env))
     self.proc.start()
     self.shutting_down = False
 
@@ -217,7 +214,7 @@ def _normalize_bundle_modes(bundle: str) -> None:
 
 
 class BundleProcess(NativeProcess):
-  def __init__(self, name, bundle, entry, should_run, enabled=True, sigkill=False, restart_if_crash=False):
+  def __init__(self, name, bundle, entry, should_run, enabled=True, sigkill=False, restart_if_crash=False, env=None):
     self.bundle = bundle
     self.entry = entry
     runner_path = preferred_runner_path()
@@ -237,6 +234,7 @@ class BundleProcess(NativeProcess):
       enabled=enabled,
       sigkill=sigkill,
       restart_if_crash=restart_if_crash,
+      env=env,
     )
 
   def start(self) -> None:
@@ -249,7 +247,7 @@ class BundleProcess(NativeProcess):
 
 
 class PythonProcess(ManagerProcess):
-  def __init__(self, name, module, should_run, enabled=True, sigkill=False, restart_if_crash=False):
+  def __init__(self, name, module, should_run, enabled=True, sigkill=False, restart_if_crash=False, env=None):
     self.name = name
     self.module = module
     self.should_run = should_run
@@ -257,6 +255,7 @@ class PythonProcess(ManagerProcess):
     self.sigkill = sigkill
     self.launcher = launcher
     self.restart_if_crash = restart_if_crash
+    self.env = env
 
   def prepare(self) -> None:
     if self.enabled:
@@ -264,7 +263,6 @@ class PythonProcess(ManagerProcess):
       importlib.import_module(self.module)
 
   def start(self) -> None:
-    # In case we only tried a non blocking stop we need to stop it before restarting
     if self.shutting_down:
       self.stop()
 
@@ -272,7 +270,7 @@ class PythonProcess(ManagerProcess):
       return
 
     cloudlog.info(f"starting python {self.module}")
-    self.proc = Process(name=self.name, target=self.launcher, args=(self.module, self.name))
+    self.proc = Process(name=self.name, target=self.launcher, args=(self.module, self.name, self.env))
     self.proc.start()
     self.shutting_down = False
 

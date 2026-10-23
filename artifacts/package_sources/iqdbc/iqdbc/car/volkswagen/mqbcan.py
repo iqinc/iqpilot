@@ -342,9 +342,12 @@ def create_acc_accel_control(packer, bus, acc_type, accel, acc_control, stopping
   return commands
 
 
-def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive,
+def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, lead_index, distanceBars, fcw_alert, leadVisible, unavailable, decel, d_unresponsive,
                            *, priority_boost):
   priodisp = 0 if fcw_alert else 1 if priority_boost else 2 if acc_hud_status in (3, 4) else 3
+  # The cluster draws the stock 1.0, 1.3, 1.8, 2.4 and 3.6 s gaps as notches 1-5. Aggressive, standard and relaxed
+  # (1.25, 1.45 and 1.75 s plus 3 m, about 1.37, 1.57 and 1.87 s at highway speed) take notches 2, 3 and 4:
+  # of the assignments that keep each personality distinct, it reads closest to how they actually follow.
   leadDistanceBars = distanceBars + 1 if distanceBars in (1, 2, 3) else 2
   values = {
     "ACC_Status_Anzeige": acc_hud_status,
@@ -353,7 +356,7 @@ def create_acc_hud_control(packer, bus, acc_hud_status, set_speed, leadDistance,
     "ACC_Optischer_Fahrerhinweis": 1 if fcw_alert else 0,
     "ACC_Display_Prio": priodisp,
     "ACC_Relevantes_Objekt": leadDistanceBars,
-    "ACC_Abstandsindex": leadDistance if leadVisible else 0,
+    "ACC_Abstandsindex": lead_index if leadVisible else 0,
     "ACC_Akustik_02": fcw_alert,
   }
 

@@ -56,3 +56,19 @@ def test_prefetch_downloads_the_warp_on_dock_build_when_offered(egpu_prefetch, m
   monkeypatch.setattr(egpu_prefetch, "download_precompiled", lambda m, progress_cb=None, field=None: asked.append(field) or "ok")
   assert egpu_prefetch.prefetch_once(P()) is True
   assert asked == ["egpu_model_oob_artifact"]
+
+
+def test_frozen_feed_warp_on_dock_builds_are_never_loaded(monkeypatch, tmp_path):
+  from iqpilot.selfdrive.iqmodeld import egpu_helpers
+  from iqpilot.selfdrive.iqmodeld.model_cache import is_runtime_artifact
+  from iqpilot.system.hardware.hw import Paths
+  monkeypatch.setattr(Paths, "model_root", staticmethod(lambda: str(tmp_path)))
+  meta = {"key": "big_nav", "sha256": "8a5bc46c" + "0" * 56}
+  stale = tmp_path / "egpu_big_nav_8a5bc46c_amd_model_oob.pkl"
+  stale.write_bytes(b"frozen")
+  live = egpu_helpers.egpu_model_oob_pkl_path(meta)
+  assert live != str(stale) and live.endswith("_amd_model_oob2.pkl")
+  egpu_helpers.drop_frozen_model_oob(meta)
+  egpu_helpers.drop_frozen_model_oob(meta)
+  assert not stale.exists()
+  assert is_runtime_artifact("egpu_big_nav_8a5bc46c_amd_model_oob2.pkl") and not is_runtime_artifact(stale.name)

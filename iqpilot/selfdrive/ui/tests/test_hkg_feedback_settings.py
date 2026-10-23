@@ -8,20 +8,38 @@ from iqpilot.cereal import car
 from iqpilot.selfdrive.ui.mici.layouts.settings import vehicle
 
 
-def test_feedback_selection_disables_nnff(monkeypatch):
-  params = Params()
+def test_feedback_selection_disables_nnff(monkeypatch, mocker, tmp_path):
+  params = Params(str(tmp_path))
   params.put_bool("NeuralNetworkFeedForward", True)
-  monkeypatch.setattr(vehicle, "ui_state", SimpleNamespace(params=params))
-  vehicle.VehicleLayoutMici._on_hkg_reduced_feedback(None, True)
+  monkeypatch.setattr(vehicle, "ui_state", SimpleNamespace(params=params, is_offroad=lambda: True))
+  layout = mocker.Mock()
+  vehicle.VehicleLayoutMici._on_hkg_reduced_feedback(layout, True)
   assert not params.get_bool("NeuralNetworkFeedForward")
+  assert params.get_bool("IQHkgReducedTorqueFeedback")
+  assert params.get_bool("OnroadCycleRequested")
+  layout._nnff.refresh.assert_called_once()
 
 
-def test_feedback_deselection_preserves_nnff(monkeypatch):
-  params = Params()
+def test_feedback_deselection_preserves_nnff(monkeypatch, mocker, tmp_path):
+  params = Params(str(tmp_path))
   params.put_bool("NeuralNetworkFeedForward", True)
-  monkeypatch.setattr(vehicle, "ui_state", SimpleNamespace(params=params))
-  vehicle.VehicleLayoutMici._on_hkg_reduced_feedback(None, False)
+  monkeypatch.setattr(vehicle, "ui_state", SimpleNamespace(params=params, is_offroad=lambda: True))
+  vehicle.VehicleLayoutMici._on_hkg_reduced_feedback(mocker.Mock(), False)
   assert params.get_bool("NeuralNetworkFeedForward")
+  assert not params.get_bool("IQHkgReducedTorqueFeedback")
+  assert params.get_bool("OnroadCycleRequested")
+
+
+def test_feedback_cannot_change_onroad(monkeypatch, mocker, tmp_path):
+  params = Params(str(tmp_path))
+  params.put_bool("NeuralNetworkFeedForward", True)
+  monkeypatch.setattr(vehicle, "ui_state", SimpleNamespace(params=params, is_offroad=lambda: False))
+  layout = mocker.Mock()
+  vehicle.VehicleLayoutMici._on_hkg_reduced_feedback(layout, True)
+  assert params.get_bool("NeuralNetworkFeedForward")
+  assert not params.get_bool("IQHkgReducedTorqueFeedback")
+  assert not params.get_bool("OnroadCycleRequested")
+  layout._hkg_reduced_feedback.refresh.assert_called_once()
 
 
 @pytest.mark.parametrize("brand,angle,tuning,offroad,visible", [

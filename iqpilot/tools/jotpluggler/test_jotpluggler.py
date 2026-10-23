@@ -34,10 +34,10 @@ class TestJotpluggler:
     # reads this exact path instead of upstream's BOOTSTRAP_ICONS_TTF define
     assert (JOTPLUGGLER_DIR / "assets" / "bootstrap-icons.ttf").is_file()
 
-  def test_no_comma_connect_links(self):
-    # iqpilot routes live on konn3kt; the comma connect / useradmin buttons are gone
+  def test_konn3kt_route_links(self):
+    # iqpilot routes live on konn3kt; the useradmin buttons are gone
     common = (JOTPLUGGLER_DIR / "common.cc").read_text()
-    assert "connect.comma.ai" not in common
+    assert '"https://konn3kt.com"' in common
     assert "useradmin.comma.ai" not in common
     assert "route_konn3kt_url" in common
 

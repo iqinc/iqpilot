@@ -5,7 +5,7 @@ from iqpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
 from iqpilot.common.filter_simple import FirstOrderFilter
 from iqpilot.common.pid import PIDController
 from iqpilot.selfdrive.iqmodeld.config import ModelConstants
-from iqpilot.selfdrive.controls.lib.smooth_stops import SmoothStopController
+from iqpilot.selfdrive.controls.lib.smooth_stops import SMOOTH_STOP_MAX_SPEED, SmoothStopController
 
 CONTROL_N_T_IDX = ModelConstants.T_IDXS[:CONTROL_N]
 
@@ -83,7 +83,7 @@ class LongControl:
       self.smooth.reset()
 
     else:
-      if self.smooth.enabled and active and should_stop:
+      if self.smooth.enabled and active and should_stop and CS.vEgo <= SMOOTH_STOP_MAX_SPEED:
         output_accel = self.smooth.settle(a_target, CS.vEgo, lead_distance, has_lead, self.last_output_accel)
         self.reset()
       else:

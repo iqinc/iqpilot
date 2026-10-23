@@ -27,18 +27,21 @@ from iqpilot.system.hardware.hw import Paths
 
 
 MODELD_WATCHDOG_TIMEOUT = 30.0
+MODELD_FIRST_PUBLISH_TIMEOUT = 120.0
 
 
 def update_modeld_watchdog(deadline: float | None, started: bool, model_updated: bool, process, now: float) -> float | None:
   running = process.proc is not None and process.proc.is_alive()
   if not started or not running:
     return None
-  if deadline is None or model_updated:
+  if model_updated:
     return now + MODELD_WATCHDOG_TIMEOUT
+  if deadline is None:
+    return now + MODELD_FIRST_PUBLISH_TIMEOUT
   if now >= deadline:
     cloudlog.error("iqmodeld is alive but not publishing modelV2; restarting")
     process.restart()
-    return now + MODELD_WATCHDOG_TIMEOUT
+    return None
   return deadline
 
 
@@ -48,7 +51,31 @@ def apply_curvature_controller_default(params: Params) -> None:
     params.put_bool("EnableCurvatureControllerDefaultApplied", True)
 
 
+_drm_broker_conn = None
+
+def _acquire_drm_fd() -> None:
+  global _drm_broker_conn
+  if os.environ.get('DRM_FD') or not os.path.exists('/tmp/drmfd.sock'):
+    return
+  import socket, struct, array
+  try:
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect('/tmp/drmfd.sock')
+    _, ancdata, _, _ = s.recvmsg(8, socket.CMSG_SPACE(4))
+    for level, typ, data in ancdata:
+      if level == socket.SOL_SOCKET and typ == socket.SCM_RIGHTS:
+        fd = struct.unpack('i', data[:4])[0]
+        os.set_inheritable(fd, True)
+        os.environ['DRM_FD'] = str(fd)
+        _drm_broker_conn = s
+        return
+    s.close()
+  except Exception:
+    cloudlog.exception("DRM fd acquisition failed")
+
+
 def manager_init() -> None:
+  _acquire_drm_fd()
   heal_param_perms()
   save_bootlog()
 

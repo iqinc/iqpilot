@@ -29,3 +29,13 @@ def test_gate_still_accepts_older_bundles():
 
 def test_gate_rejects_a_bundle_from_the_future():
   assert not is_bundle_version_compatible({"minimumSelectorVersion": EMAC_BUNDLE_MIN_SELECTOR_VERSION + 5})
+
+
+def test_gate_accepts_encrypted_iqc_bundles():
+  assert is_bundle_version_compatible({"minimumSelectorVersion": 20})
+
+
+def test_bundles_kept_only_for_older_builds_are_hidden():
+  assert not is_bundle_version_compatible({"minimumSelectorVersion": 18, "maximum_selector_version": "19"})
+  assert not is_bundle_version_compatible({"minimumSelectorVersion": 18, "maximumSelectorVersion": 19})
+  assert is_bundle_version_compatible({"minimumSelectorVersion": 18, "maximum_selector_version": 20})

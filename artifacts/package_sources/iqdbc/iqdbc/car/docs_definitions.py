@@ -143,6 +143,10 @@ class CarHarness(EnumBase):
   tesla_a = BaseCarHarness("Tesla A connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
   tesla_b = BaseCarHarness("Tesla B connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
   tesla_c = BaseCarHarness("Tesla C connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
+  tesla_model_s_hw1 = BaseCarHarness("Tesla Model S HW1 connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
+  tesla_model_x_hw1 = BaseCarHarness("Tesla Model X HW1 connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
+  tesla_model_sx_hw2 = BaseCarHarness("Tesla Model S/X HW2 connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
+  tesla_model_sx_hw3 = BaseCarHarness("Tesla Model S/X HW3 connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
   psa_a = BaseCarHarness("PSA A connector", parts=[Accessory.harness_box, Cable.long_obdc_cable])
 
   # custom harness

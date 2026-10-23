@@ -22,7 +22,7 @@ from iqdbc.car.volkswagen.values import VolkswagenFlags
 
 from iqpilot.cereal import custom
 from iqpilot.common.params import Params
-from iqpilot.common.ui_settings import DISPLAY_BRIGHTNESS_VALUES, SLEEP_TIMER_VALUES
+from iqpilot.common.ui_settings import DISPLAY_BRIGHTNESS_VALUES, NO_NUDGE_WARNING, SLEEP_TIMER_VALUES
 from iqpilot.common.swaglog import cloudlog
 from iqpilot.selfdrive.car.vehicle_catalog import load_catalog
 from iqpilot.selfdrive.iqmodeld.model_cache import bundle_matches, clear_model_cache, model_cache_size, remove_bundle_files
@@ -42,6 +42,7 @@ from iqpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
 from iqpilot.selfdrive.ui.layouts.settings.device import DeviceLayout
 from iqpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
 from iqpilot.selfdrive.ui.layouts.settings.toggles import TogglesLayout
+from iqpilot.selfdrive.ui.lib.nnff_settings import nnff_availability
 from iqpilot.selfdrive.ui.ui_state import device, ui_state
 from iqpilot.system.hardware import HARDWARE
 from iqpilot.system.hardware.hw import Paths
@@ -260,7 +261,7 @@ class SteeringLayout(Widget):
       buttons=[lambda: tr("Confirmation (Nudge)"), lambda: tr("No Confirmation (No Nudge)")],
       button_width=480,
       selected_index=int(ui_state.params.get("IQLaneChangeTimer", return_default=True)),
-      callback=lambda selected: ui_state.params.put("IQLaneChangeTimer", selected),
+      callback=self._set_lane_change_mode,
     )
     self._lane_turn_desire_toggle = toggle_item(
       lambda: tr("Blinker-Initiated Turn Planning"),
@@ -296,6 +297,24 @@ class SteeringLayout(Widget):
       self._delay_control,
     ]
     return items
+
+  def _set_lane_change_mode(self, selected: int):
+    current = int(ui_state.params.get("IQLaneChangeTimer", return_default=True))
+    if selected == current:
+      return
+    if selected == 0:
+      ui_state.params.put("IQLaneChangeTimer", 0)
+      return
+
+    self._lane_change_setting.action_item.set_selected_button(current)
+
+    def confirm(result):
+      if result == DialogResult.CONFIRM:
+        ui_state.params.put("IQLaneChangeTimer", 1)
+        self._lane_change_setting.action_item.set_selected_button(1)
+
+    dialog = ConfirmDialog(tr(NO_NUDGE_WARNING), tr("Enable No Nudge"), large=True, title=tr("Are you sure?"))
+    gui_app.set_modal_overlay(dialog, callback=confirm)
 
   @staticmethod
   def _has_limited_sab_options() -> bool:
@@ -1618,8 +1637,18 @@ class VehicleLayout(Widget):
                                     callback=self._platform_selector._on_clicked)
     self._legend_widget = LegendWidget(self._platform_selector)
     self._refresh_vehicle_row()
+    self._nnff_available = False
+    self._nnff_status = ""
+    self._nnff_vehicle_key = None
+    self._nnff = toggle_item(
+      title=lambda: tr("NNFF Steering"),
+      description=lambda: tr("Use a vehicle-specific neural network for steering feedforward.") + "<br><br>" + self._nnff_status,
+      initial_state=ui_state.params.get_bool("NeuralNetworkFeedForward"),
+      callback=self._on_nnff,
+    )
+    self._refresh_nnff(force=True)
 
-    self.items = [self._vehicle_item, self._legend_widget]
+    self.items = [self._vehicle_item, self._legend_widget, self._nnff]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
   @staticmethod
@@ -1645,12 +1674,41 @@ class VehicleLayout(Widget):
     self._current_brand = brand
     self._brand_settings = brand_settings_for(brand)
     brand_rows = self._brand_settings.items if self._brand_settings else []
-    self.items = [self._vehicle_item, self._legend_widget, *brand_rows]
+    self.items = [self._vehicle_item, self._legend_widget, self._nnff, *brand_rows]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
+
+  def _refresh_nnff(self, force=False):
+    cp = ui_state.CP
+    key = (id(cp), cp.carFingerprint if cp else None, cp.brand if cp else None, cp.steerControlType if cp else None,
+           cp.lateralTuning.which() if cp else None, cp.flags if cp else None,
+           ui_state.params.get("CarPlatformBundle"))
+    if force or key != self._nnff_vehicle_key:
+      self._nnff_vehicle_key = key
+      self._nnff_available, self._nnff_status = nnff_availability(cp, ui_state.params)
+    self._sync_nnff_state()
+
+  def _sync_nnff_state(self):
+    saved = ui_state.params.get_bool("NeuralNetworkFeedForward")
+    self._nnff.action_item.set_state(saved)
+    self._nnff.action_item.set_enabled(ui_state.is_offroad() and (self._nnff_available or saved))
+
+  def _on_nnff(self, enabled):
+    if not ui_state.is_offroad():
+      self._sync_nnff_state()
+      return
+    if enabled:
+      self._refresh_nnff(force=True)
+      if not self._nnff_available:
+        return
+      ui_state.params.put_bool("IQHkgReducedTorqueFeedback", False)
+    ui_state.params.put_bool("NeuralNetworkFeedForward", enabled)
+    ui_state.params.put_bool("OnroadCycleRequested", True)
+    self._sync_nnff_state()
 
   def _on_vehicle_changed(self):
     self._refresh_vehicle_row()
     self._sync_brand_panel()
+    self._refresh_nnff()
 
   def _update_state(self):
     self._on_vehicle_changed()
@@ -1662,4 +1720,5 @@ class VehicleLayout(Widget):
     self._scroller.render(rect)
 
   def show_event(self):
+    self._refresh_nnff(force=True)
     self._scroller.show_event()

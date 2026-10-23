@@ -17,6 +17,10 @@ if sys.executable != _VENV_PY and os.path.exists(_VENV_PY):
   except ImportError:
     os.execv(_VENV_PY, [_VENV_PY, os.path.abspath(__file__), *sys.argv[1:]])
 
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", ".."))
+if _REPO_ROOT not in sys.path:
+  sys.path.insert(0, _REPO_ROOT)
+
 import requests
 
 import iqpilot.system.updated.casync.casync as casync
@@ -58,6 +62,86 @@ def _image_auth_module():
     pass
   return None
 
+def _is_private_os_image(url: str) -> bool:
+  return "/iq.lvbs/iqos/" in url.lower()
+
+def _read_dongle_id() -> str | None:
+  import re
+  for path in ("/persist/comma/dongle_id", "/data/params/d/DongleId"):
+    try:
+      v = open(path).read().strip()
+      if re.fullmatch(r"[a-fA-F0-9]{16}", v):
+        return v.lower()
+    except Exception:
+      pass
+  return None
+
+def _sign_device_jwt(dongle_id: str) -> str | None:
+  import jwt
+  from datetime import datetime, timedelta, timezone
+  for key_path in ("/persist/comma/id_rsa", "/persist/comma/id_ecdsa"):
+    try:
+      with open(key_path) as f:
+        private_key = f.read()
+      now = datetime.now(timezone.utc).replace(tzinfo=None)
+      alg = "ES256" if "EC" in private_key[:40] else "RS256"
+      return jwt.encode({"identity": dongle_id, "nbf": now, "iat": now, "exp": now + timedelta(hours=1)}, private_key, algorithm=alg)
+    except PermissionError:
+      continue
+    except Exception:
+      continue
+  return None
+
+def _extract_image_path(url: str) -> str:
+  if "/raw/branch/" in url:
+    after_branch = url.split("/raw/branch/", 1)[1]
+    return after_branch.split("/", 1)[1] if "/" in after_branch else after_branch
+  if "/raw/" in url:
+    return url.rsplit("/raw/", 1)[1]
+  return url.rsplit("/", 1)[-1]
+
+def _k3_proxy_url(url: str) -> tuple[str, dict] | None:
+  mod = _image_auth_module()
+  try:
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
+    if root not in sys.path:
+      sys.path.insert(0, root)
+    from iqpilot.konn3kt.registration import get_cached_dongle_id, is_valid_dongle_id, register
+    dongle_id = get_cached_dongle_id()
+    if not is_valid_dongle_id(dongle_id):
+      import threading
+      registered: list = [None]
+      worker = threading.Thread(target=lambda: registered.__setitem__(0, register()), daemon=True)
+      worker.start()
+      worker.join(timeout=90)
+      dongle_id = registered[0]
+    if not is_valid_dongle_id(dongle_id):
+      raise RuntimeError("device is not registered")
+    from iqpilot.common.api import Api
+    from iqpilot.common.api.konn3kt import API_HOST
+    token = Api(dongle_id).get_token(expiry_hours=1)
+    if not token:
+      raise RuntimeError("could not sign device token")
+    if mod is not None and hasattr(mod, 'os_image_proxy'):
+      return mod.os_image_proxy(url, dongle_id, token, API_HOST)
+    proxy_url = f"{API_HOST.rstrip('/')}/v1/devices/{dongle_id}/assets/iqos/{_extract_image_path(url)}"
+    return proxy_url, {"Authorization": f"JWT {token}"}
+  except Exception as e:
+    print(f"IQ.OS proxy: primary path failed ({type(e).__name__}: {e}), trying minimal fallback", flush=True)
+
+  dongle_id = _read_dongle_id()
+  if not dongle_id:
+    print("Error: IQ.OS proxy unavailable: no dongle_id on /persist or /data", flush=True)
+    return None
+  token = _sign_device_jwt(dongle_id)
+  if not token:
+    print("Error: IQ.OS proxy unavailable: could not sign JWT (key unreadable)", flush=True)
+    return None
+  api_host = os.environ.get("API_HOST", "https://api-iqlabs.konn3kt.com")
+  proxy_url = f"{api_host.rstrip('/')}/v1/devices/{dongle_id}/assets/iqos/{_extract_image_path(url)}"
+  print(f"IQ.OS proxy: minimal fallback → {proxy_url}", flush=True)
+  return proxy_url, {"Authorization": f"JWT {token}"}
+
 def _download_headers(url: str) -> dict:
   mod = _image_auth_module()
   if mod is not None:
@@ -90,6 +174,20 @@ def _ranged_get(url: str, headers: dict, offset: int) -> requests.Response:
   return req
 
 def _open_image_response(url: str, offset: int = 0) -> requests.Response:
+  proxy = _k3_proxy_url(url)
+  if proxy is not None:
+    proxy_url, proxy_headers = proxy
+    if offset:
+      resp = _ranged_get(proxy_url, {'Accept-Encoding': None, **proxy_headers}, offset)
+    else:
+      resp = requests.get(proxy_url, stream=True, headers={'Accept-Encoding': None, **proxy_headers}, timeout=120)
+    resp.raise_for_status()
+    return resp
+  if _is_private_os_image(url):
+    auth = _download_headers(url)
+    if not auth:
+      raise RuntimeError(f"IQ.OS image requires authentication and no credentials are available: {url}")
+
   auth = _download_headers(url)
   req = requests.get(url, stream=True, headers={'Accept-Encoding': None, **auth}, timeout=60)
   req.raise_for_status()
@@ -255,7 +353,7 @@ def get_raw_hash(path: str, partition_size: int) -> str:
   raw_hash = hashlib.sha256()
   pos, chunk_size = 0, 1024 * 1024
 
-  with open(path, 'rb+') as out:
+  with open(path, 'rb') as out:
     while pos < partition_size:
       n = min(chunk_size, partition_size - pos)
       raw_hash.update(out.read(n))
@@ -280,45 +378,55 @@ def verify_partition(target_slot_number: int, partition: dict[str, str | int], f
   if full_check:
     return get_raw_hash(path, partition_size) == partition_hash.lower()
   else:
-    with open(path, 'rb+') as out:
+    with open(path, 'rb') as out:
       out.seek(partition_size)
       return out.read(64) == partition_hash.lower().encode()
 
+def _sudo_write_at(path: str, offset: int, data: bytes) -> None:
+  subprocess.run(f"sudo -n dd of={path} bs=1 seek={offset} count={len(data)} conv=notrunc 2>/dev/null",
+                 input=data, shell=True, check=True)
+
 def clear_partition_hash(target_slot_number: int, partition: dict) -> None:
   path = get_partition_path(target_slot_number, partition)
-  with open(path, 'wb+') as out:
-    partition_size = partition['size']
-
-    out.seek(partition_size)
-    out.write(b"\x00" * 64)
-    os.sync()
+  _sudo_write_at(path, partition['size'], b"\x00" * 64)
+  os.sync()
 
 def extract_compressed_image(target_slot_number: int, partition: dict, cloudlog):
   path = get_partition_path(target_slot_number, partition)
   downloader = StreamingDecompressor(partition['url'], parts=int(partition.get('url_parts', 0)))
 
-  with open(path, 'wb+') as out:
-    last_p = 0
-    raw_hash = hashlib.sha256()
-    f = unsparsify if partition['sparse'] else noop
-    for chunk in f(downloader):
-      raw_hash.update(chunk)
-      out.write(chunk)
-      p = int(out.tell() / partition['size'] * 100)
-      if p != last_p:
-        last_p = p
-        print(f"Installing {partition['name']}: {p}", flush=True)
+  try:
+    out = open(path, 'wb+')
+  except PermissionError:
+    out = subprocess.Popen(["sudo", "-n", "dd", f"of={path}", "bs=1M", "conv=notrunc", "iflag=fullblock"],
+                           stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    out = out.stdin
 
-    if raw_hash.hexdigest().lower() != partition['hash_raw'].lower():
-      raise Exception(f"Raw hash mismatch '{raw_hash.hexdigest().lower()}'")
+  last_p = 0
+  written = 0
+  raw_hash = hashlib.sha256()
+  f = unsparsify if partition['sparse'] else noop
+  for chunk in f(downloader):
+    raw_hash.update(chunk)
+    out.write(chunk)
+    written += len(chunk)
+    p = int(written / partition['size'] * 100)
+    if p != last_p:
+      last_p = p
+      print(f"Installing {partition['name']}: {p}", flush=True)
 
-    if downloader.sha256.hexdigest().lower() != partition['hash'].lower():
-      raise Exception("Uncompressed hash mismatch")
+  out.close()
 
-    if out.tell() != partition['size']:
-      raise Exception("Uncompressed size mismatch")
+  if raw_hash.hexdigest().lower() != partition['hash_raw'].lower():
+    raise Exception(f"Raw hash mismatch '{raw_hash.hexdigest().lower()}'")
 
-    os.sync()
+  if downloader.sha256.hexdigest().lower() != partition['hash'].lower():
+    raise Exception("Uncompressed hash mismatch")
+
+  if written != partition['size']:
+    raise Exception("Uncompressed size mismatch")
+
+  os.sync()
 
 def extract_casync_image(target_slot_number: int, partition: dict, cloudlog):
   path = get_partition_path(target_slot_number, partition)
@@ -379,9 +487,7 @@ def flash_partition(target_slot_number: int, partition: dict, cloudlog, standalo
     extract_compressed_image(target_slot_number, partition, cloudlog)
 
   if not full_check:
-    with open(path, 'wb+') as out:
-      out.seek(partition['size'])
-      out.write(partition['hash_raw'].lower().encode())
+    _sudo_write_at(path, partition['size'], partition['hash_raw'].lower().encode())
 
 def swap(manifest_path: str, target_slot_number: int, cloudlog) -> None:
   verify_manifest_signature(manifest_path)
@@ -391,7 +497,7 @@ def swap(manifest_path: str, target_slot_number: int, cloudlog) -> None:
       clear_partition_hash(target_slot_number, partition)
 
   while True:
-    out = subprocess.check_output(f"abctl --set_active {target_slot_number}", shell=True, stderr=subprocess.STDOUT, encoding='utf8')
+    out = subprocess.check_output(f"sudo -n abctl --set_active {target_slot_number}", shell=True, stderr=subprocess.STDOUT, encoding='utf8')
     if ("No such file or directory" not in out) and ("lun as boot lun" in out):
       cloudlog.info(f"Swap successful {out}")
       break
@@ -404,7 +510,7 @@ def flash_agnos_update(manifest_path: str, target_slot_number: int, cloudlog, st
 
   cloudlog.info(f"Target slot {target_slot_number}")
 
-  os.system(f"abctl --set_unbootable {target_slot_number}")
+  os.system(f"sudo -n abctl --set_unbootable {target_slot_number}")
 
   for partition in update:
     success = False

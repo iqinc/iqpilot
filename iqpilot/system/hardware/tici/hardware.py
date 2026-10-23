@@ -469,8 +469,10 @@ class Tici(HardwareBase):
     if self.amplifier is not None:
       self.amplifier.initialize_configuration(self.get_device_type())
 
-    # Allow hardwared to write engagement status to kmsg
-    os.system("sudo chmod a+w /dev/kmsg")
+    try:
+      subprocess.run(["sudo", "-n", "chmod", "a+w", "/dev/kmsg"], timeout=2, capture_output=True, check=False)
+    except Exception:
+      pass
 
     # Ensure fan gpio is enabled so fan runs until shutdown, also turned on at boot by the ABL
     gpio_init(GPIO.SOM_ST_IO, True)
@@ -514,10 +516,10 @@ class Tici(HardwareBase):
       affine_irq(3, "xhci-hcd:usb1")
     try:
       pid = subprocess.check_output(["pgrep", "-f", "spi0"], encoding='utf8').strip()
-      subprocess.call(["sudo", "chrt", "-f", "-p", "1", pid])
-      subprocess.call(["sudo", "taskset", "-pc", "3", pid], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except subprocess.CalledProcessException as e:
-      print(str(e))
+      subprocess.run(["sudo", "-n", "chrt", "-f", "-p", "1", pid], timeout=2, capture_output=True, check=False)
+      subprocess.run(["sudo", "-n", "taskset", "-pc", "3", pid], timeout=2, capture_output=True, check=False)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+      pass
 
   def configure_modem(self):
     from iqpilot.common.params import Params

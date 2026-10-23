@@ -305,7 +305,40 @@ def get_runtime_bundle_upgrade(bundle, params: Params = None, available_bundles=
   return _find_runtime_upgrade(bundle, params, available_bundles)
 
 
+_forced_bundle = None
+
+
+def load_default_model_session():
+  """Stage the shipped default model files and return a decoded default bundle
+  WITHOUT persisting it as the active selection, so the next boot retries the
+  user's own model instead of staying on the default forever."""
+  bundle_dict = _load_default_bundle_dict()
+  ensure_default_model_files(bundle_dict)
+  return ModelBundle(**bundle_dict)
+
+
+class forced_active_bundle:
+  """Make get_active_bundle return `bundle` for the duration of the block, used to
+  build a runner for a session-only fallback bundle without touching Params."""
+  def __init__(self, bundle):
+    self._bundle = bundle
+
+  def __enter__(self):
+    global _forced_bundle
+    self._prev = _forced_bundle
+    _forced_bundle = self._bundle
+    return self._bundle
+
+  def __exit__(self, *exc):
+    global _forced_bundle
+    _forced_bundle = self._prev
+    return False
+
+
 def get_active_bundle(params: Params = None):
+  if _forced_bundle is not None:
+    return _forced_bundle
+
   params = Params() if params is None else params
 
   try:

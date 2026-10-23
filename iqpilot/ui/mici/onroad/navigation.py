@@ -32,18 +32,20 @@ class MiciNavigation:
 
   def update(self):
     self.active = False
+    navigation_active = (ui_state.started and ui_state.params.get_bool("NavigationEnabled") and
+                         ui_state.params.get_bool("NavigationActive"))
     destination = ui_state.params.get("NavigationDestination")
     try:
       lat, lon = float(destination['latitude']), float(destination['longitude'])
       destination = (lat, lon) if -90 <= lat <= 90 and -180 <= lon <= 180 else None
     except (KeyError, TypeError, ValueError, OverflowError):
       destination = None
-    if destination != self._destination or not ui_state.started or not ui_state.params.get_bool("NavigationActive"):
+    if destination != self._destination or not navigation_active:
       self._dismissed = False
       self._dismissed_maneuver = None
       self._last_tap = -math.inf
     self._destination = destination
-    if destination is None or not ui_state.started or not ui_state.params.get_bool("NavigationActive"):
+    if destination is None or not navigation_active:
       return
 
     sm = ui_state.sm

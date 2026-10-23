@@ -4,7 +4,7 @@ import numpy as np
 from iqdbc.car import CanBusBase
 from iqdbc.car.carlog import carlog
 from iqdbc.car.crc import CRC16_XMODEM
-from iqdbc.car.hyundai.values import HyundaiFlags, HyundaiExtFlags
+from iqdbc.car.hyundai.values import Buttons, HyundaiFlags, HyundaiExtFlags
 from iqpilot.common.params import Params
 from iqdbc.car.common.conversions import Conversions as CV
 from iqpilot.cereal import log
@@ -334,18 +334,15 @@ def create_acc_cancel(packer, CP, CAN, cruise_info_copy):
   })
   return packer.make_can_msg("SCC_CONTROL", CAN.ECAN, values)
 
-def create_lfahda_cluster(packer, CS, CAN, long_active, lat_active):
-
-
+def create_lfahda_cluster(packer, CS, CAN, long_active, lat_active, synthesize=False):
   if CS.lfahda_cluster is not None:
     values = copy.copy(CS.lfahda_cluster)
     rx_counter = values.pop("COUNTER", None)
+  elif synthesize:
+    values = {"HDA_OptUsmSta": 2}
+    rx_counter = None
   else:
     return []
-    values = {}
-    rx_counter = None
-    values["LFA_OptUsmSta"] = 2
-    values["HDA_OptUsmSta"] = 2
   values["HDA_CntrlModSta"] = 2 if long_active else 0
   values["HDA_LFA_SymSta"] = 2 if lat_active else 0
   return [packer.make_can_msg("LFAHDA_CLUSTER", CAN.ECAN, values, rx_counter=rx_counter)]
@@ -588,7 +585,7 @@ def create_adrv_messages(CP, packer, CAN, frame):
   ret = []
 
   if not CP.flags & HyundaiFlags.CAMERA_SCC.value:
-    values = {}
+    ret.append(packer.make_can_msg("ADRV_0x51", CAN.ACAN, {}))
 
     ret.extend(create_fca_warning_light(CP, packer, CAN, frame))
     if frame % 5 == 0:
@@ -770,6 +767,9 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         values = copy.copy(CS.cruise_buttons_msg)
         # Keep the physical long press on ECAN for CarState, but don't forward it to CAM.
         values["NORMAL_CRUISE_MAIN_BTN"] = 0
+        # the camera's own SCC cancels when SET- is held ~2 s; openpilot sets speed from the ECAN copy
+        if CC.enabled and values["CRUISE_BUTTONS"] in (Buttons.RES_ACCEL, Buttons.SET_DECEL):
+          values["CRUISE_BUTTONS"] = Buttons.NONE
 
         if  HDA_LFA_SymSta == 0 and 0 < frame % 200 < 12:
           values["LFA_BTN"] = 1

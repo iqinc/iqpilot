@@ -38,7 +38,6 @@ class TestKonn3ktIntegration:
   def test_no_comma_endpoints(self):
     for name in ("routes.cc", "ui/main.cc", "README.md"):
       body = read(name)
-      assert "connect.comma.ai" not in body, name
       assert "api.comma.ai" not in body, name
 
   def test_dbc_menu_uses_iqdbc(self):

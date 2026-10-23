@@ -62,10 +62,23 @@ def config_background_thread() -> None:
     set_core_affinity(list(range(os.cpu_count() or 1)))
 
 
+def _swap_active() -> bool:
+  try:
+    with open("/proc/swaps") as f:
+      return len(f.read().splitlines()) > 1
+  except Exception:
+    return False
+
+
 def lock_memory() -> None:
-  """mlockall this process so memory reclaim/compaction can't stall it. RT control
-  procs only (locking ui/modeld would worsen pressure). Best-effort."""
-  if sys.platform != 'linux' or PC:
+  """mlockall this process so swap can't evict its pages and stall the RT loop.
+  RT control procs only (locking ui/modeld would worsen pressure). Best-effort.
+
+  No-op without active swap: with none, anonymous pages (thread stacks, heap)
+  are already unreclaimable, so mlockall buys nothing — it only pins every 8 MB
+  thread stack and MCL_FUTURE allocation in full (~400 MB/proc here) and, being
+  non-migratable, starves CMA. The device runs swapless by design (iqos-zram)."""
+  if sys.platform != 'linux' or PC or not _swap_active():
     return
   try:
     import ctypes

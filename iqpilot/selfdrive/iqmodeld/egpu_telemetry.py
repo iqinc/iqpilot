@@ -21,6 +21,7 @@ class EgpuDockTelemetry:
     self.metrics: dict[str, float] = {}
     self._power_limit: int | None = None
     self._asm_usb = None
+    self._asic_logged = False
 
   def _device(self):
     from tinygrad.device import Device
@@ -61,6 +62,24 @@ class EgpuDockTelemetry:
       self._power_limit = smu._send_msg(smu.smu_mod.PPSMC_MSG_GetPptLimit, 0, read_back_arg=True, timeout=100)
     return self._power_limit
 
+  def _log_detail(self, metrics, smu) -> None:
+    def g(name):
+      return getattr(metrics, name, None)
+    try:
+      if not self._asic_logged:
+        cloudlog.warning(f"iqegpumodeld dock smu={getattr(smu.smu_mod, '__name__', '?')}")
+        self._asic_logged = True
+      throttle = g("ThrottlingPercentage")
+      cloudlog.event("egpu_dock_detail",
+                     gfxclk_running=g("AverageGfxclkFrequencyPreDs"), gfxclk_idle=g("AverageGfxclkFrequencyPostDs"),
+                     gfxclk_target=g("AverageGfxclkFrequencyTarget"), gfx_activity=g("AverageGfxActivity"),
+                     uclk_activity=g("AverageUclkActivity"), pcie_busy=g("PCIeBusy"),
+                     pcie_rate=g("PcieRate"), pcie_width=g("PcieWidth"),
+                     throttle_max=(max(throttle) if throttle is not None else None),
+                     board_w=g("AverageTotalBoardPower"))
+    except Exception:
+      pass
+
   def send(self) -> None:
     Device = self._device()
     msg = messaging.new_message("egpuDockState")
@@ -79,6 +98,7 @@ class EgpuDockTelemetry:
                         "gpuUsagePercent": metrics.AverageGfxActivity,
                         "gpuClockMhz": metrics.AverageGfxclkFrequencyPostDs,
                         "fanSpeedRpm": metrics.AvgFanRpm}
+        self._log_detail(metrics, smu)
         self.valid = True
       except Exception:
         if self.valid:

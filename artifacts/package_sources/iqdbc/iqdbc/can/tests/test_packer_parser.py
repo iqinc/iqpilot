@@ -10,10 +10,13 @@ MAX_BAD_COUNTER = 5
 class TestCanParserPacker:
   def test_seen_addresses(self):
     parser = CANParser(TEST_DBC, [], 0)
-    parser.update([0, [(0x123, b'\x00', 0), (0x124, b'\x00', 1)]])
+    parser.update([0, [(0x122, b'\x00', 0)]])
+    assert parser.seen_addresses == set()
+    parser.controls_ready = True
+    parser.update([1, [(0x123, b'\x00', 0), (0x124, b'\x00', 1)]])
     assert parser.seen_addresses == {0x123}
     parser.enable_capture = False
-    parser.update([1, [(0x125, b'\x00', 0)]])
+    parser.update([2, [(0x125, b'\x00', 0)]])
     assert parser.seen_addresses == {0x123}
 
   def test_packer(self):

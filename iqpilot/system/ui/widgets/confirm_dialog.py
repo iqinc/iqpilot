@@ -11,6 +11,7 @@ from iqpilot.system.ui.widgets.scroller_tici import Scroller
 OUTER_MARGIN = 200
 RICH_OUTER_MARGIN = 100
 BUTTON_HEIGHT = 160
+TITLE_HEIGHT = 140
 MARGIN = 50
 TEXT_PADDING = 10
 BACKGROUND_COLOR = rl.Color(27, 27, 27, 255)
@@ -29,18 +30,20 @@ def _is_destructive(confirm_text) -> bool:
 
 class ConfirmDialog(Widget):
   def __init__(self, text: str, confirm_text: str, cancel_text: str | None = None, rich: bool = False,
-               destructive: bool | None = None):
+               destructive: bool | None = None, large: bool = False, title: str | None = None):
     super().__init__()
     if cancel_text is None:
       cancel_text = tr("Cancel")
     self._confirm_color = DANGER_COLOR if (destructive if destructive is not None else _is_destructive(confirm_text)) else CONFIRM_COLOR
     self._label = Label(text, 70, FontWeight.BOLD, text_color=rl.Color(201, 201, 201, 255))
+    self._title_label = Label(title, 90, FontWeight.BOLD) if title else None
     self._html_renderer = HtmlRenderer(text=text, text_size={ElementType.P: 50}, center_text=True)
     self._cancel_button = Button(cancel_text, self._cancel_button_callback)
     self._confirm_button = Button(confirm_text, self._confirm_button_callback, button_style=ButtonStyle.TRANSPARENT_WHITE_TEXT)
     self._cancel_button._border_radius = BUTTON_RADIUS
     self._confirm_button._border_radius = BUTTON_RADIUS
     self._rich = rich
+    self._large = large
     self._dialog_result = DialogResult.NO_ACTION
     self._cancel_text = cancel_text
     self._scroller = Scroller([self._html_renderer], line_separator=False, spacing=0)
@@ -61,8 +64,8 @@ class ConfirmDialog(Widget):
     self._dialog_result = DialogResult.CONFIRM
 
   def _render(self, rect: rl.Rectangle):
-    dialog_x = OUTER_MARGIN if not self._rich else RICH_OUTER_MARGIN
-    dialog_y = OUTER_MARGIN if not self._rich else RICH_OUTER_MARGIN
+    dialog_x = RICH_OUTER_MARGIN if self._rich or self._large else OUTER_MARGIN
+    dialog_y = dialog_x
     dialog_width = gui_app.width - 2 * dialog_x
     dialog_height = gui_app.height - 2 * dialog_y
     dialog_rect = rl.Rectangle(dialog_x, dialog_y, dialog_width, dialog_height)
@@ -79,6 +82,11 @@ class ConfirmDialog(Widget):
 
     text_rect = rl.Rectangle(dialog_rect.x + MARGIN, dialog_rect.y + TEXT_PADDING,
                              dialog_rect.width - 2 * MARGIN, dialog_rect.height - BUTTON_HEIGHT - MARGIN - TEXT_PADDING * 2)
+    if self._title_label is not None:
+      title_rect = rl.Rectangle(text_rect.x, dialog_rect.y + MARGIN, text_rect.width, TITLE_HEIGHT)
+      self._title_label.render(title_rect)
+      text_rect.y = title_rect.y + title_rect.height + MARGIN
+      text_rect.height = button_y - MARGIN - text_rect.y
     if not self._rich:
       self._label.render(text_rect)
     else:

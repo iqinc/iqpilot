@@ -5,6 +5,7 @@ Unit checks for the NNFF model loader against the shipped model files.
 """
 import json
 import os
+from copy import deepcopy
 
 import numpy as np
 import pytest
@@ -82,10 +83,11 @@ class TestModelBehavior:
     assert m.evaluate(vec) == m.evaluate(list(vec))
 
 
-def test_activation_registry_rejects_unknown(tmp_path):
+@pytest.mark.parametrize("activation", ["not_a_real_activation", None, 1, []])
+def test_activation_registry_rejects_unknown(tmp_path, activation):
   with open(_path(SAMPLE[0])) as model_file:
     base = json.load(model_file)
-  base["layers"][-1]["activation"] = "not_a_real_activation"
+  base["layers"][-1]["activation"] = activation
   bad = tmp_path / "bad.json"
   bad.write_text(json.dumps(base))
   with pytest.raises(ValueError):
@@ -96,3 +98,24 @@ def test_sigmoid_identity_helpers():
   assert NNTorqueModel.identity(3.5) == 3.5
   assert 0.0 < float(NNTorqueModel.sigmoid(np.array([0.0]))[0]) < 1.0
   assert abs(float(NNTorqueModel.sigmoid(np.array([0.0]))[0]) - 0.5) < 1e-6
+
+
+@pytest.mark.parametrize("invalid", ["zero_std", "nan_mean", "nan_weight", "bias_shape", "layer_shape", "output_shape"])
+def test_invalid_model_rejected(tmp_path, invalid):
+  model = deepcopy(_SYNTHETIC_MODEL)
+  if invalid == "zero_std":
+    model["input_std"][0][0] = 0.0
+  elif invalid == "nan_mean":
+    model["input_mean"][0][0] = float("nan")
+  elif invalid == "nan_weight":
+    model["layers"][0]["dense_1_W"][0][0] = float("nan")
+  elif invalid == "bias_shape":
+    model["layers"][0]["dense_1_b"] = [[0.0]]
+  elif invalid == "layer_shape":
+    model["layers"][0]["dense_1_W"] = [[0.0]]
+  else:
+    model["output_size"] = 2
+  path = tmp_path / "invalid.json"
+  path.write_text(json.dumps(model))
+  with pytest.raises(ValueError):
+    NNTorqueModel(path)

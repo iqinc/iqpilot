@@ -8,7 +8,7 @@ from importlib.resources import files
 
 import numpy as np
 
-from iqpilot.cereal import log, custom
+from iqpilot.cereal import log
 from iqdbc.car import structs
 from iqdbc.car.lateral import FRICTION_THRESHOLD, get_friction
 from iqdbc.car.toyota.values import ToyotaFlags
@@ -19,7 +19,7 @@ from iqpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from iqpilot.common.filter_simple import FirstOrderFilter
 from iqpilot.common.params import Params
 from iqpilot.common.pid import PIDController
-from iqpilot.selfdrive.controls.lib.drive_helpers import CONTROL_N
+from iqpilot.common.swaglog import cloudlog
 from iqpilot.selfdrive.controls.lib.lateral_acceleration_slew_limiter import LateralAccelerationSlewLimiter
 from iqpilot.selfdrive.controls.lib.latcontrol import LatControl
 from iqpilot.selfdrive.iqmodeld.config import ModelConstants
@@ -40,14 +40,17 @@ def _score(a: str, b: str) -> float:
   return SequenceMatcher(None, a, b).ratio()
 
 
-def _best_model_for(candidate: str) -> tuple[str | None, float]:
+def _best_model_for(candidate: str, fingerprint: str) -> tuple[str | None, float]:
   best_path, best_score = None, -1.0
   if not os.path.isdir(TORQUE_NN_MODEL_PATH):
     return best_path, best_score
-  for entry in os.listdir(TORQUE_NN_MODEL_PATH):
+  for entry in sorted(os.listdir(TORQUE_NN_MODEL_PATH)):
     if not entry.endswith(".json"):
       continue
-    score = _score(os.path.splitext(entry)[0], candidate)
+    stem = os.path.splitext(entry)[0]
+    if stem != fingerprint and not stem.startswith(fingerprint + " "):
+      continue
+    score = _score(stem, candidate)
     if score > best_score:
       best_path, best_score = os.path.join(TORQUE_NN_MODEL_PATH, entry), score
   return best_path, best_score
@@ -65,21 +68,22 @@ def _eps_suffix(CP: structs.CarParams) -> str:
 
 
 def get_nn_model_path(CP: structs.CarParams) -> tuple[str, str, bool]:
-  if CP.steerControlType == structs.CarParams.SteerControlType.angle:
+  if CP.steerControlType != structs.CarParams.SteerControlType.torque:
     return MOCK_MODEL_PATH, "MOCK", False
 
   fingerprint = CP.carFingerprint
   suffix = _eps_suffix(CP)
   if suffix:
-    path, score = _best_model_for(f"{fingerprint} {suffix}")
+    path, score = _best_model_for(f"{fingerprint} {suffix}", fingerprint)
     if path is not None and fingerprint in path and score >= _ACCEPT_THRESHOLD:
       name = os.path.splitext(os.path.basename(path))[0]
       return path, name, score >= _EXACT_THRESHOLD
-  path, score = _best_model_for(fingerprint)
+  path, score = _best_model_for(fingerprint, fingerprint)
   if path is not None and fingerprint in path and score >= _ACCEPT_THRESHOLD:
     name = os.path.splitext(os.path.basename(path))[0]
     return path, name, score >= _EXACT_THRESHOLD
-  path, _ = _best_model_for(_substitute_for(fingerprint))
+  substitute = _substitute_for(fingerprint)
+  path, _ = _best_model_for(substitute, substitute) if substitute != fingerprint else (None, -1.0)
   name = os.path.splitext(os.path.basename(path))[0] if path else "MOCK"
   return (path or MOCK_MODEL_PATH), name, False
 
@@ -102,6 +106,8 @@ _ACTIVATIONS = {"sigmoid": _sigmoid, "identity": _identity}
 
 
 def _resolve_activation(name: str):
+  if not isinstance(name, str):
+    raise ValueError("NNFF activation must be a string")
   for symbol, canonical in _ACTIVATION_ALIASES.items():
     name = name.replace(symbol, canonical)
   fn = _ACTIVATIONS.get(name)
@@ -124,16 +130,26 @@ class NNTorqueModel:
     self.output_size = params["output_size"]
     self.input_mean = np.array(params["input_mean"], dtype=np.float32).T
     self.input_std = np.array(params["input_std"], dtype=np.float32).T
+    if (self.input_mean.shape != (1, self.input_size) or self.input_std.shape != self.input_mean.shape or
+        not np.isfinite(self.input_mean).all() or not np.isfinite(self.input_std).all() or np.any(self.input_std <= 0)):
+      raise ValueError("Invalid NNFF input normalization")
 
     self._weights = []
     self._biases = []
     self._activations = []
+    width = self.input_size
     for layer in params["layers"]:
       weight = _pick(layer, "_W")
       bias = np.zeros_like(_pick(layer, "_b")) if zero_bias else _pick(layer, "_b")
+      if (weight.ndim != 2 or weight.shape[0] != width or bias.shape != (1, weight.shape[1]) or
+          not np.isfinite(weight).all() or not np.isfinite(bias).all()):
+        raise ValueError("Invalid NNFF layer dimensions or weights")
       self._weights.append(weight)
       self._biases.append(bias)
       self._activations.append(_resolve_activation(layer["activation"]))
+      width = weight.shape[1]
+    if not self._weights or width != self.output_size:
+      raise ValueError("Invalid NNFF output dimensions")
 
     self.friction_override = self.evaluate(list(_FRICTION_PROBE)) < _FRICTION_THRESHOLD
 
@@ -241,8 +257,11 @@ class PilotLateralBrain:
     self.desired_lat_jerk_time = cp.steerActuatorDelay + LAG_EXTRA_S
 
   def update_model_v2(self, model_packet):
-    self.model_v2 = model_packet
-    self.model_valid = model_packet is not None and len(model_packet.orientation.x) >= CONTROL_N
+    self.model_valid = False
+    if model_packet is not None:
+      traces = (model_packet.orientation.x, model_packet.orientation.y, model_packet.acceleration.y)
+      self.model_valid = all(len(trace) == len(ModelConstants.T_IDXS) and np.isfinite(trace).all() for trace in traces)
+    self.model_v2 = model_packet if self.model_valid else None
 
   def update_lateral_lag(self, lag):
     self.desired_lat_jerk_time = max(0.01, lag) + LAG_EXTRA_S
@@ -345,9 +364,17 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     super().__init__(lac_torque, CP, CP_IQ, CI)
     self.params = Params()
     self.enabled = self.params.get_bool("NeuralNetworkFeedForward")
-    self.has_nn_model = (CP_IQ.iqLateralNet.model.path != MOCK_MODEL_PATH
-                         and os.path.isfile(CP_IQ.iqLateralNet.model.path))
-    self.model = NNTorqueModel(CP_IQ.iqLateralNet.model.path) if self.has_nn_model else None
+    self.model = None
+    model_path = CP_IQ.iqLateralNet.model.path
+    if model_path != MOCK_MODEL_PATH and os.path.isfile(model_path):
+      try:
+        model = NNTorqueModel(model_path)
+        if model.input_size != 18 or model.output_size != 1 or not np.isfinite(model.evaluate([0.0] * 18)):
+          raise ValueError("NNFF requires a finite 18-input, 1-output model")
+        self.model = model
+      except (OSError, ValueError, TypeError, KeyError, IndexError, StopIteration):
+        cloudlog.exception("Unable to load NNFF model; using standard torque control")
+    self.has_nn_model = self.model is not None
     self.pitch = FirstOrderFilter(0.0, 0.5, 0.01)
     self.pitch_last = 0.0
 
@@ -376,6 +403,14 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     super().update_lateral_lag(lag)
     self._window.refresh_lag(self.desired_lat_jerk_time)
 
+  def reset_history(self):
+    self._window.roll.clear()
+    self._window.lat_accel_desired.clear()
+    self._jerk_lp.x = 0.0
+    self.pitch.x = 0.0
+    self.pitch_last = 0.0
+    self.lat_accel_friction_factor = 0.7
+
   def _torque_space(self, lateral_accel, CS, gravity_adjusted):
     return self.torque_from_lateral_accel_in_torque_space(
       LatControlInputs(lateral_accel, self._roll_g, CS.vEgo, CS.aEgo),
@@ -391,6 +426,8 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
                                              self.lac_torque.torque_params)
 
   def update_output_torque(self, CS):
+    if not np.isfinite((self._pid_log.error, self._ff)).all():
+      raise ValueError("Nonfinite NNFF torque request")
     freeze_integrator = self._capped or CS.steeringPressed or CS.vEgo < 5
     self._out_tq = self._pid.update(self._pid_log.error, feedforward=self._ff,
                                            speed=CS.vEgo, freeze_integrator=freeze_integrator)
@@ -413,7 +450,13 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
 
   def _query(self, lead_scalar, jerk_scalar, tail):
     head = [self._v, lead_scalar, jerk_scalar, self._roll]
-    return self.model.evaluate(head + tail)
+    return self._evaluate(head + tail)
+
+  def _evaluate(self, inputs):
+    output = self.model.evaluate(inputs)
+    if not np.isfinite(output):
+      raise ValueError("Nonfinite NNFF model output")
+    return output
 
   def update_neural_network_feedforward(self, CS, params, calibrated_pose) -> None:
     if not self._nnff_enabled:
@@ -449,7 +492,7 @@ class NeuralNetworkFeedForward(PilotLateralBrain):
     blend = float(np.interp(abs(self._want_la), _ERROR_BLEND_BP, _ERROR_BLEND_V))
     if blend <= 0.0:
       return
-    from_error = self.model.evaluate([self._v, self._accel_goal - self._accel_obs,
+    from_error = self._evaluate([self._v, self._accel_goal - self._accel_obs,
                                       self.jerk_goal - self.jerk_obs, 0.0])
     live = self._pid_log.error
     if sign(live) == sign(from_error) and abs(live) < abs(from_error):
@@ -512,6 +555,7 @@ class LatControlTorque(LatControl):
     p_gains = [gain * 0.8 for gain in KP_INTERP] if self.hkg_reduced_torque_feedback else KP_INTERP
     self.friction_scale = 0.7 if self.hkg_reduced_torque_feedback else 1.0
     self.pid = PIDController([INTERP_SPEEDS, p_gains], KI, rate=1/self.dt)
+    self._nnff_active = False
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)
@@ -531,10 +575,20 @@ class LatControlTorque(LatControl):
     self.update_limits()
 
   def update_limits(self):
-    self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
-                        self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
+    if self._nnff_active:
+      self.pid.set_limits(self.steer_max, -self.steer_max)
+    else:
+      self.pid.set_limits(self.lateral_accel_from_torque(self.steer_max, self.torque_params),
+                          self.lateral_accel_from_torque(-self.steer_max, self.torque_params))
 
   def update(self, active, CS, VM, params, steer_limited_by_safety, desired_curvature, calibrated_pose, curvature_limited, lat_delay):
+    nnff_active = active and self.nnff_assist._nnff_enabled
+    if nnff_active != self._nnff_active:
+      # The shared PID operates in torque units for NNFF and acceleration units otherwise.
+      self.pid.reset()
+      self.nnff_assist.reset_history()
+      self._nnff_active = nnff_active
+      self.update_limits()
     pid_log = log.ControlsState.LateralTorqueState.new_message()
     pid_log.version = VERSION
     measured_curvature = -VM.calc_curvature(math.radians(CS.steeringAngleDeg - params.angleOffsetDeg), CS.vEgo, params.roll)
@@ -573,13 +627,31 @@ class LatControlTorque(LatControl):
     else:
       pid_log.error = float(error)
 
-      freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
-      output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
-      output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
+      output_torque = 0.0
+      if not nnff_active:
+        freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
+        output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
+        output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
 
-      pid_log, output_torque = self.nnff_assist.update(CS, VM, self.pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
-                                                       future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
-                                                       limited_curvature, measured_curvature, steer_limited_by_safety, output_torque)
+      try:
+        pid_log, output_torque = self.nnff_assist.update(
+          CS, VM, self.pid, params, ff, pid_log, setpoint, measurement, calibrated_pose, roll_compensation,
+          future_desired_lateral_accel, measurement, lateral_accel_deadzone, gravity_adjusted_future_lateral_accel,
+          limited_curvature, measured_curvature, steer_limited_by_safety, output_torque)
+      except (ValueError, FloatingPointError):
+        if not nnff_active:
+          raise
+        cloudlog.exception("NNFF inference failed; using standard torque control for this drive")
+        self.nnff_assist.has_nn_model = False
+        self.nnff_assist.reset_history()
+        self._nnff_active = False
+        self.pid.reset()
+        self.update_limits()
+        pid_log.error = float(error)
+        freeze_integrator = steer_limited_by_safety or CS.steeringPressed or CS.vEgo < 5
+        output_lataccel = self.pid.update(pid_log.error, speed=CS.vEgo, feedforward=ff, freeze_integrator=freeze_integrator)
+        output_torque = self.torque_from_lateral_accel(output_lataccel, self.torque_params)
+        output_torque = self.nnff_assist.nav_torque_pulse.nudge_output_torque(True, CS, output_torque)
 
       pid_log.active = True
       pid_log.p = float(self.pid.p)

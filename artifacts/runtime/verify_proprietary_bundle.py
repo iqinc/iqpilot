@@ -34,7 +34,7 @@ def main() -> None:
   failures: list[str] = []
 
   for rel, meta in manifest.items():
-    if rel in {"signatures", "runtime"}:
+    if rel in {"signatures", "runtime", "bundle_version"} or not isinstance(meta, dict):
       continue
     f = root / rel
     if not f.exists():

@@ -1,5 +1,7 @@
 [
+  "iqpilot.common.api",
   "iqpilot.common.api.base",
+  "iqpilot.common.api.konn3kt",
   "iqpilot.common.basedir",
   "iqpilot.common.gpio",
   "iqpilot.common.i2c",
@@ -8,7 +10,6 @@
   "iqpilot.common.swaglog",
   "iqpilot.common.time_helpers",
   "iqpilot.common.utils",
-  "iqpilot.konn3kt.cloud_client",
   "iqpilot.selfdrive.iqmodeld.config",
   "iqpilot.selfdrive.iqmodeld.model_cache",
   "iqpilot.selfdrive.iqmodeld.models.fetcher",

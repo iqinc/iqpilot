@@ -17,6 +17,8 @@ from iqpilot.common.pid import PIDController
 FRICTION_THRESHOLD_PQ = 1.0
 KP = 0.8
 KI = 0.15
+KI_HIGHWAY = 0.3
+KI_SPEEDS = [10.0, 15.0]
 
 INTERP_SPEEDS = [1, 1.5, 2.0, 3.0, 5, 7.5, 10, 15, 30]
 KP_INTERP = [250, 120, 65, 30, 11.5, 5.5, 3.5, 2.0, KP]
@@ -30,7 +32,11 @@ VERSION = 1
 DEFAULT_LAT_ACCEL_FACTOR = 2.2
 DEFAULT_LAT_ACCEL_OFFSET = -0.13
 DEFAULT_FRICTION = 0.1
-FREEZE_LIVE_TORQUE_PARAMS = True
+FREEZE_LIVE_TORQUE_PARAMS = False
+LIVE_LAT_ACCEL_FACTOR_GAIN = 1.1
+LIVE_LAT_ACCEL_FACTOR_BOUNDS = (1.2, 3.5)
+LIVE_LAT_ACCEL_OFFSET_BOUNDS = (-0.3, 0.3)
+LIVE_TORQUE_PARAMS_TAU_S = 5.0
 
 ASSIST_COMPENSATION = True
 ASSIST_SPEEDS_KPH = [0.0, 50.0, 120.0]
@@ -56,7 +62,10 @@ class LatControlTorquePQ(LatControl):
     self.torque_params.friction = DEFAULT_FRICTION
     self.torque_from_lateral_accel = CI.torque_from_lateral_accel()
     self.lateral_accel_from_torque = CI.lateral_accel_from_torque()
-    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], KI, rate=1/self.dt)
+    self.pid = PIDController([INTERP_SPEEDS, KP_INTERP], [KI_SPEEDS, [KI, KI_HIGHWAY]], rate=1/self.dt)
+    self.live_torque_valid = False
+    self.lat_accel_factor_filter = FirstOrderFilter(DEFAULT_LAT_ACCEL_FACTOR, LIVE_TORQUE_PARAMS_TAU_S, self.dt)
+    self.lat_accel_offset_filter = FirstOrderFilter(DEFAULT_LAT_ACCEL_OFFSET, LIVE_TORQUE_PARAMS_TAU_S, self.dt)
     self.update_limits()
     self.steering_angle_deadzone_deg = self.torque_params.steeringAngleDeadzoneDeg
     self.lat_accel_request_buffer_len = int(LAT_ACCEL_REQUEST_BUFFER_SECONDS / self.dt)
@@ -65,12 +74,20 @@ class LatControlTorquePQ(LatControl):
     self.jerk_filter = FirstOrderFilter(0.0, 1 / (2 * np.pi * LP_FILTER_CUTOFF_HZ), self.dt)
     self.lateral_acceleration_slew_limiter = LateralAccelerationSlewLimiter(Params().get_bool("IQLateralAccelSlew"))
 
+  def set_live_torque_valid(self, valid):
+    self.live_torque_valid = bool(valid)
+
   def update_live_torque_params(self, latAccelFactor, latAccelOffset, friction):
     if FREEZE_LIVE_TORQUE_PARAMS:
       return
-    self.torque_params.latAccelFactor = latAccelFactor
-    self.torque_params.latAccelOffset = latAccelOffset
-    self.torque_params.friction = friction
+    if self.live_torque_valid and math.isfinite(latAccelFactor) and math.isfinite(latAccelOffset):
+      target_factor = float(np.clip(latAccelFactor * LIVE_LAT_ACCEL_FACTOR_GAIN, *LIVE_LAT_ACCEL_FACTOR_BOUNDS))
+      target_offset = float(np.clip(latAccelOffset, *LIVE_LAT_ACCEL_OFFSET_BOUNDS))
+    else:
+      target_factor = DEFAULT_LAT_ACCEL_FACTOR
+      target_offset = DEFAULT_LAT_ACCEL_OFFSET
+    self.torque_params.latAccelFactor = self.lat_accel_factor_filter.update(target_factor)
+    self.torque_params.latAccelOffset = self.lat_accel_offset_filter.update(target_offset)
     self.update_limits()
 
   def update_limits(self):

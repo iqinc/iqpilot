@@ -68,7 +68,7 @@ if not os.environ.get('TEST_AUTH_CANCEL'):
   callback = parse_qs(urlsplit(sys.argv[1]).query)['redirect'][0]
   state = parse_qs(urlsplit(callback).query)['state'][0]
   request = Request(callback, data=urlencode({{'state': state, 'token': 'process-test-token'}}).encode())
-  urlopen(request, timeout=3).read()
+  urlopen(request, timeout=30).read()
 ''')
   opener.chmod(0o700)
   env = {**os.environ, 'HOME': str(tmp_path), 'PATH': f'{tmp_path}:{os.environ["PATH"]}',
@@ -81,10 +81,13 @@ if not os.environ.get('TEST_AUTH_CANCEL'):
     server.server_close()
 
 
+# The runner and the fake browser cold-start from TMPDIR, which is a USB disk on the Mac mini CI runner.
+AUTH_RUNNER_TIMEOUT_S = 60
+
 @pytest.mark.parametrize('provider', ['google', 'github', 'apple', 'microsoft'])
 def test_native_auth_completes_from_another_directory(auth_runner, auth_environment, provider):
   env, home = auth_environment
-  result = subprocess.run([auth_runner, provider], cwd=home, env=env, capture_output=True, text=True, timeout=10)
+  result = subprocess.run([auth_runner, provider], cwd=home, env=env, capture_output=True, text=True, timeout=AUTH_RUNNER_TIMEOUT_S)
   assert result.returncode == 0, result.stderr
   assert json.loads(result.stdout) == {'success': True}, result.stderr
   assert json.loads((home / '.iq/auth.json').read_text()) == {'access_token': 'process-test-token'}
@@ -93,7 +96,7 @@ def test_native_auth_completes_from_another_directory(auth_runner, auth_environm
 def test_native_auth_cancellation(auth_runner, auth_environment):
   env, home = auth_environment
   env['TEST_AUTH_CANCEL'] = '1'
-  result = subprocess.run([auth_runner, 'google', 'cancel'], cwd=home, env=env, capture_output=True, text=True, timeout=5)
+  result = subprocess.run([auth_runner, 'google', 'cancel'], cwd=home, env=env, capture_output=True, text=True, timeout=AUTH_RUNNER_TIMEOUT_S)
   assert result.returncode == 0, result.stderr
   assert result.stdout == ''
   assert not (home / '.iq/auth.json').exists()

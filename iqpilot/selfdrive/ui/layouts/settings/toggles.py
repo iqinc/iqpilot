@@ -45,8 +45,8 @@ DESCRIPTIONS = {
   ),
   "RecordAudio": tr_noop("Record and store microphone audio while driving. The audio will be included in the dashcam video in Konn3kt."),
   "LongitudinalControlMode": tr_noop(
-    "Choose longitudinal behavior: IQ.Pilot (IQ longitudinal + end-to-end), "
-    "IQ.Chill (IQ longitudinal + relaxed personality), or Stock ACC."
+    "Choose longitudinal behavior: IQ.Pilot (IQ longitudinal + end-to-end), " +
+    "IQ.Chill (IQ longitudinal + traffic-aware cruise), or Stock ACC."
   ),
   "IQTelemetryEnabled": tr_noop(
     "Once a day, sends settings, versions, car model and coarse usage counts under a random install ID. " +
@@ -82,8 +82,10 @@ class TogglesLayout(Widget):
       ),
       "IQGasOverrideBoost": (
         lambda: tr("Gas Override Boost"),
-        tr_noop("Off by default. Holding the gas above 10 mph while engaged slowly raises IQ.Pilot's acceleration by up to " +
-                "1.0 m/s², kept until you disengage; it bleeds off below 10 mph. Takes effect on the next drive."),
+        tr_noop("Off by default. When the end-to-end model limits acceleration, holding the gas above 10 mph while engaged " +
+                "adds up to 0.05 m/s² per press, at 0.025 m/s² per second, up to 0.2 m/s² total. " +
+                "Boost fades during stronger braking, bleeds off below 10 mph, and resets when you disengage. " +
+                "Takes effect on the next drive."),
         "disengage_on_accelerator.png",
         False,
       ),
@@ -226,7 +228,7 @@ class TogglesLayout(Widget):
       description += "<br><br><i>" + availability_note + "</i>"
     longitudinal_control_item.set_description(description)
 
-    personality_enabled = iq_modes_selectable and mode_index == 2
+    personality_enabled = iq_modes_selectable and mode_index != 0
     self._long_personality_setting.action_item.set_enabled(personality_enabled)
 
     # TODO: make a param control list item so we don't need to manage internal state as much here

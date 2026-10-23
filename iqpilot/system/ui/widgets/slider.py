@@ -12,16 +12,18 @@ class SmallSlider(Widget):
   HORIZONTAL_PADDING = 8
   CONFIRM_DELAY = 0.2
 
-  def __init__(self, title: str, confirm_callback: Callable | None = None):
+  def __init__(self, title: str, confirm_callback: Callable | None = None, *, right_to_left: bool = True):
     # TODO: unify this with BigConfirmationDialogV2
     super().__init__()
     self._confirm_callback = confirm_callback
+    self._right_to_left = right_to_left
+    self._direction = -1 if right_to_left else 1
 
     self._font = gui_app.font(FontWeight.DISPLAY)
 
     self._load_assets()
 
-    self._drag_threshold = -self._rect.width // 2
+    self._drag_threshold = self._rect.width / 2
 
     # State
     self._opacity_filter = FirstOrderFilter(1.0, 0.1, 1 / gui_app.target_fps)
@@ -34,7 +36,7 @@ class SmallSlider(Widget):
     self._is_dragging_circle = False
 
     self._label = UnifiedLabel(title, font_size=36, font_weight=FontWeight.MEDIUM, text_color=rl.Color(255, 255, 255, int(255 * 0.65)),
-                               alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT,
+                               alignment=rl.GuiTextAlignment.TEXT_ALIGN_RIGHT if right_to_left else rl.GuiTextAlignment.TEXT_ALIGN_LEFT,
                                alignment_vertical=rl.GuiTextAlignmentVertical.TEXT_ALIGN_MIDDLE, line_height=0.9)
 
   def _load_assets(self):
@@ -62,8 +64,8 @@ class SmallSlider(Widget):
 
   @property
   def slider_percentage(self):
-    activated_pos = -self._bg_txt.width + self._circle_bg_txt.width
-    return min(max(-self._scroll_x_circle_filter.x / abs(activated_pos), 0.0), 1.0)
+    distance = self._bg_txt.width - self._circle_bg_txt.width
+    return min(max(self._direction * self._scroll_x_circle_filter.x / distance, 0.0), 1.0)
 
   def _on_confirm(self):
     if self._confirm_callback:
@@ -74,8 +76,9 @@ class SmallSlider(Widget):
 
     if mouse_event.left_pressed:
       # touch rect goes to the padding
+      circle_offset = self._rect.width - self._circle_bg_txt.width - self.HORIZONTAL_PADDING * 2 if self._right_to_left else 0
       circle_button_rect = rl.Rectangle(
-        self._rect.x + (self._rect.width - self._circle_bg_txt.width) + self._scroll_x_circle_filter.x - self.HORIZONTAL_PADDING * 2,
+        self._rect.x + circle_offset + self._scroll_x_circle_filter.x,
         self._rect.y,
         self._circle_bg_txt.width + self.HORIZONTAL_PADDING * 2,
         self._rect.height,
@@ -85,8 +88,7 @@ class SmallSlider(Widget):
         self._is_dragging_circle = True
 
     elif mouse_event.left_released:
-      # swiped to left
-      if self._scroll_x_circle_filter.x < self._drag_threshold:
+      if self._direction * self._scroll_x_circle_filter.x > self._drag_threshold:
         self._confirmed_time = rl.get_time()
 
       self._is_dragging_circle = False
@@ -97,21 +99,19 @@ class SmallSlider(Widget):
   def _update_state(self):
     super()._update_state()
     # TODO: this math can probably be cleaned up to remove duplicate stuff
-    activated_pos = int(-self._bg_txt.width + self._circle_bg_txt.width)
-    self._scroll_x_circle = max(min(self._scroll_x_circle, 0), activated_pos)
+    activated_pos = self._direction * (self._bg_txt.width - self._circle_bg_txt.width)
+    self._scroll_x_circle = self._direction * min(max(self._direction * self._scroll_x_circle, 0), abs(activated_pos))
 
     if self._confirmed_time > 0:
-      # swiped left to confirm
       self._scroll_x_circle_filter.update(activated_pos)
 
       # activate once animation completes, small threshold for small floats
-      if self._scroll_x_circle_filter.x < (activated_pos + 1):
+      if abs(self._scroll_x_circle_filter.x - activated_pos) < 1:
         if not self._confirm_callback_called and (rl.get_time() - self._confirmed_time) >= self.CONFIRM_DELAY:
           self._on_confirm()
           self._confirm_callback_called = True
 
     elif not self._is_dragging_circle:
-      # reset back to right
       self._scroll_x_circle_filter.update(0)
     else:
       # not activated yet, keep movement 1:1
@@ -135,13 +135,14 @@ class SmallSlider(Widget):
     bg_txt_y = self._rect.y + (self._rect.height - self._bg_txt.height) / 2
     rl.draw_texture_ex(self._bg_txt, rl.Vector2(bg_txt_x, bg_txt_y), 0.0, 1.0, bg_tint)
 
-    btn_x = bg_txt_x + self._bg_txt.width - self._circle_bg_txt.width + self._scroll_x_circle_filter.x
+    circle_offset = self._bg_txt.width - self._circle_bg_txt.width if self._right_to_left else 0
+    btn_x = bg_txt_x + circle_offset + self._scroll_x_circle_filter.x
     btn_y = self._rect.y + (self._rect.height - self._circle_bg_txt.height) / 2
 
-    if self._confirmed_time == 0.0 or self._scroll_x_circle > 0:
+    if self._confirmed_time == 0.0:
       self._label.set_text_color(rl.Color(255, 255, 255, int(255 * 0.65 * (1.0 - self.slider_percentage) * self._opacity_filter.x)))
       label_rect = rl.Rectangle(
-        self._rect.x + 20,
+        self._rect.x + (20 if self._right_to_left else self._circle_bg_txt.width + 30),
         self._rect.y,
         self._rect.width - self._circle_bg_txt.width - 20 * 2.5,
         self._rect.height,
@@ -153,7 +154,10 @@ class SmallSlider(Widget):
 
     arrow_x = btn_x + (self._circle_bg_txt.width - self._circle_arrow_txt.width) / 2
     arrow_y = btn_y + (self._circle_bg_txt.height - self._circle_arrow_txt.height) / 2
-    rl.draw_texture_ex(self._circle_arrow_txt, rl.Vector2(arrow_x, arrow_y), 0.0, 1.0, white)
+    arrow_width = self._circle_arrow_txt.width
+    arrow_height = self._circle_arrow_txt.height
+    source = rl.Rectangle(0, 0, arrow_width if self._right_to_left else -arrow_width, arrow_height)
+    rl.draw_texture_pro(self._circle_arrow_txt, source, rl.Rectangle(arrow_x, arrow_y, arrow_width, arrow_height), rl.Vector2(0, 0), 0, white)
 
 
 class LargerSlider(SmallSlider):

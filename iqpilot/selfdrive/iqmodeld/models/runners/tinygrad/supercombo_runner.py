@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import pickle
 import re
 from typing import Any
 
@@ -17,6 +16,7 @@ from iqpilot.selfdrive.iqmodeld.models.runners.model_runner import ModelRunner
 from iqpilot.selfdrive.iqmodeld.models.split_model_constants import SplitModelConstants
 from iqpilot.selfdrive.iqmodeld.parser import PhaseParser
 from iqpilot.selfdrive.iqmodeld.models.runners.tinygrad.supercombo_runtime import TinygradSupercomboRuntime
+from iqpilot.selfdrive.iqmodeld.models.iqc import load_pickle
 
 
 def _captured_queue_depth(warp_jit: Any) -> int | None:
@@ -77,8 +77,7 @@ class TinygradSupercomboRunner(TinygradSupercomboRuntime, ModelRunner):
         self._pkl_path = pkl_path
         self._expected_sha256 = getattr(getattr(self._model_data.model.artifact, "downloadUri", None), "sha256", "") or ""
         self._verify_artifact_file()
-        with open(pkl_path, 'rb') as f:
-            self._m: dict[Any, Any] = pickle.load(f)
+        self._m: dict[Any, Any] = load_pickle(pkl_path)
 
         self._meta = self._m['metadata']
         self._ish = self._meta['input_shapes']

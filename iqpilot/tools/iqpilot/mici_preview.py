@@ -168,7 +168,7 @@ def _patch_mock_state():
   # ── Models ────────────────────────────────────────────────────────────────
   mp.put("IQLiveSteerDelay",      False)
   mp.put("IQLaneTurnDesire",  False)
-  mp.put("IQLaneTurnValue",   "19.0")
+  mp.put("IQLaneTurnValue",   "20.0")
 
   # ── Cruise ────────────────────────────────────────────────────────────────
   mp.put("ExperimentalMode",      False)

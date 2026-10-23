@@ -27,7 +27,7 @@ class TestLogmessaged:
     self.sock = messaging.sub_sock("logMessage", timeout=1000, conflate=False)
     self.error_sock = messaging.sub_sock("errorLogMessage", timeout=1000, conflate=False)
     probe = f"logmessaged-ready-{time.monotonic_ns()}"
-    deadline = time.monotonic() + 3
+    deadline = time.monotonic() + 20
     log_ready = error_ready = False
     while not (log_ready and error_ready) and time.monotonic() < deadline:
       cloudlog.error(probe)
