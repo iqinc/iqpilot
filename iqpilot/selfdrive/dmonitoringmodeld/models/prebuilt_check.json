@@ -1,0 +1,9 @@
+{
+  "dmonitoring_model": {
+    "outputs": {
+      "dmonitoring_model_metadata.pkl": "31a86ab7a92dc0af088b15787a440dd3b210aa662e445a15145900e559a1b5c3",
+      "dmonitoring_model_tinygrad.pkl": "72757faf4828b7b574b9090c299fcad3e80d56ecfb4f5afa30d2355e556fb9c1"
+    },
+    "signature": "9543c19c46808bc00d7ba72b5dc3156272b6dfe68a90b38c1b9e978b0d4937f2"
+  }
+}
