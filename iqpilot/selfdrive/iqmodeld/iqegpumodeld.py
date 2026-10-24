@@ -12,6 +12,8 @@ import time
 from iqpilot.system.hardware import TICI
 
 os.environ.setdefault("GMMU", "0")
+from iqpilot.selfdrive.iqmodeld.egpu_helpers import apply_dock_power_limit
+apply_dock_power_limit()
 if TICI:
   os.environ.setdefault("DEV", "QCOM")
 else:
@@ -39,11 +41,12 @@ from iqpilot.selfdrive.iqmodeld.driving_action import (
 )
 from iqpilot.selfdrive.iqmodeld.egpu_sched import MODEL_CORE, CpuBudgetGuard, enter_realtime, enter_setup
 from iqpilot.selfdrive.iqmodeld.egpu_helpers import (
-  die_with_parent, download_onnx, download_precompiled, egpu_model_oob_pkl_path, egpu_oob_pkl_path, egpu_pkl_path, egpu_policy_pkl_path,
-  egpu_present_consented, egpu_selected, free_dock_lock, local_onnx,
+  die_with_parent, download_onnx, download_precompiled, drop_frozen_model_oob, egpu_model_oob_pkl_path, egpu_oob_pkl_path, egpu_pkl_path,
+  egpu_policy_pkl_path, egpu_present_consented, egpu_selected, free_dock_lock, local_onnx,
   patch_tinygrad_fetch_fw, patch_usb_signal_wait, quarantine_artifact, resolve_backend, usbgpu_present,
 )
 from iqpilot.selfdrive.iqmodeld.egpu_model import resolve_egpu_model
+from iqpilot.selfdrive.iqmodeld.aux_inputs import AuxModelInputs
 from iqpilot.selfdrive.iqmodeld.egpu_pipeline import EgpuOutputInvalid, EgpuPipeline, EgpuPipelineError, make_big_channel_payload
 from iqpilot.selfdrive.iqmodeld.egpu_telemetry import EgpuDockTelemetry
 from iqpilot.selfdrive.iqmodeld.messaging import DrivePacketMemory, populate_drive_messages, populate_odometry_message
@@ -177,6 +180,7 @@ _model_precompiled_tried = False
 
 def _ensure_artifact(params: Params, meta: dict, cam_size: tuple[int, int]) -> str:
   global _precompiled_tried, _model_precompiled_tried
+  drop_frozen_model_oob(meta)
   model_path = egpu_model_oob_pkl_path(meta)
   if os.path.isfile(model_path):
     return model_path
@@ -449,13 +453,14 @@ def main(demo: bool = False) -> None:
   cloudlog.warning(f"iqegpumodeld model up (warmup {warm_s * 1e3:.0f}ms, {'warp on dock' if warp is None else 'warp on device'})")
 
   pipeline = EgpuPipeline(meta, infer_fn)
+  aux_inputs = AuxModelInputs(input_spec)
   warmup_frames = int(meta.get("warmup_frames") or STATEFUL_WARMUP_FRAMES)
   telemetry_pm = messaging.PubMaster(["egpuDockState"])
   telemetry = EgpuDockTelemetry(telemetry_pm, big=True)
   telemetry_every = max(1, round((1.0 / DT_MDL) / SERVICE_LIST["egpuDockState"].frequency))
 
   sub = SubMaster(["deviceState", "carState", "roadCameraState", "extrinsicsCalibration",
-                   "driverMonitoringState", "carControl", "lateralDelay", "iqNavState", "radarState"])
+                   "driverMonitoringState", "carControl", "controlsState", "lateralDelay", "iqNavState", "radarState"])
   if demo:
     CP = get_demo_car_params()
   else:
@@ -535,18 +540,21 @@ def main(demo: bool = False) -> None:
     long_action_t = long_delay + frame_delay + action_delay
     action_t = np.array([lat_action_t, long_action_t], dtype=np.float32)
 
+    aux_inputs.poll()
+    aux_extras = aux_inputs.extras()
+
     started_at = time.perf_counter()
     t_warp = started_at
     try:
       if warp is None:
-        output = pipeline.run_frames(main_buf.data, extra_buf.data, main_tfm, extra_tfm, desire_vec, traffic, action_t)
+        output = pipeline.run_frames(main_buf.data, extra_buf.data, main_tfm, extra_tfm, desire_vec, traffic, action_t, aux_extras)
       else:
         try:
           warped = warp.run(main_buf, extra_buf, main_tfm, extra_tfm)
         except Exception as e:
           park(f"warp run failed: {e}")
         t_warp = time.perf_counter()
-        output = pipeline.run(warped, desire_vec, traffic, action_t)
+        output = pipeline.run(warped, desire_vec, traffic, action_t, aux_extras)
     except EgpuOutputInvalid as e:
       invalid_streak += 1
       if invalid_streak == 1 or invalid_streak % MAX_INVALID_STREAK == 0:
@@ -574,7 +582,8 @@ def main(demo: bool = False) -> None:
     outputs = parser.parse_vision_outputs(sliced)
 
     action = get_action_from_model(outputs, prev_action, v_ego, float(lat_action_t), float(long_action_t),
-                                   lat_smooth_seconds=meta.get("lat_smooth_seconds"))
+                                   lat_smooth_seconds=meta.get("lat_smooth_seconds"),
+                                   lat_active=sub["carControl"].latActive, current_curvature=sub["controlsState"].curvature)
     prev_action = action
 
     model_msg = messaging.new_message("modelV2")

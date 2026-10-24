@@ -130,7 +130,7 @@ class TestSpiDevice(unittest.TestCase):
       spi.SpiDevice()
 
   def test_ack_is_copied_before_next_transfer(self):
-    handle = spi.PandaSpiHandle()
+    handle = spi.LegacyPandaSpiHandle()
     self.response = bytes([spi.DACK, 0, 0])
     ack = handle._wait_for_ack(self.device, spi.DACK, 100, 0x13, length=3)
     self.response = b'xyz'

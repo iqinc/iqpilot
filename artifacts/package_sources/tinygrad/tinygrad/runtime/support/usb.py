@@ -4,6 +4,9 @@ from tinygrad.helpers import DEBUG, DEV, to_mv, round_up, ceildiv
 from tinygrad.runtime.support.hcq import MMIOInterface
 from tinygrad.runtime.support import c
 
+# the custom ASM24 firmware breaks on 0xF0 mode 1 streaming writes longer than 1 MiB
+USB_MAX_STREAM = 1 << 20
+
 def alloc_cbuffer(sz:int) -> tuple[ctypes.Array, memoryview]: return (buf:=(ctypes.c_ubyte * sz)()), to_mv(ctypes.addressof(buf), sz)
 def checked(fn, msg=None):
   @functools.wraps(fn)
@@ -76,7 +79,8 @@ class USB3:
   def bulk_read(self, length:int, timeout:int=1000) -> memoryview:
     if length > len(self._bulk_mv): self._bulk_buf, self._bulk_mv = alloc_cbuffer(length)
     checked(libusb.libusb_bulk_transfer, "bulk IN 0x81 failed")(self.handle, 0x81, self._bulk_buf, length, self._transferred, timeout)
-    return self._bulk_mv[:self._transferred.value]
+    if self._transferred.value != length: raise RuntimeError(f"bulk IN short read: {self._transferred.value}/{length} bytes")
+    return self._bulk_mv[:length]
 
   # NOTE: keep it for flash.py
   def send_batch(self, cdbs:list[bytes], odata:list[bytes|None]|None=None):
@@ -139,8 +143,10 @@ class CustomASM24Controller:
     """Streaming PCIe memory write via 0xF0 mode 1 + bulk OUT. Data is little-endian dwords on the wire."""
     if not data: return
     assert len(data) % 4 == 0, f"pcie_mem_write requires 4-byte aligned size, got {len(data)}"
-    self._f0_out(0x60, 0x0F, address, len(data) // 4, mode=1)
-    self.usb.bulk_write(data)
+    for off in range(0, len(data), USB_MAX_STREAM):
+      chunk = data[off:off+USB_MAX_STREAM]
+      self._f0_out(0x60, 0x0F, address + off, len(chunk) // 4, mode=1)
+      self.usb.bulk_write(chunk)
 
   def pcie_mem_read(self, address:int, nbytes:int) -> memoryview:
     """Streaming PCIe memory read via 0xF0 mode 2 + bulk IN. Returns little-endian bytes."""

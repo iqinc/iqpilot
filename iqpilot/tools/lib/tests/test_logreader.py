@@ -62,6 +62,8 @@ class TestLogReader:
     (f"{TEST_ROUTE}/-4:-2", ALL_SEGS[-4:-2]),
     (f"{TEST_ROUTE}/:10:2", ALL_SEGS[:10:2]),
     (f"{TEST_ROUTE}/5::2", ALL_SEGS[5::2]),
+    (f"https://konn3kt.com/{TEST_ROUTE}", ALL_SEGS),
+    (f"https://konn3kt.com/{TEST_ROUTE}/60/180", ALL_SEGS[1:4]),
     (f"https://useradmin.comma.ai/?onebox={TEST_ROUTE}", ALL_SEGS),
     (f"https://useradmin.comma.ai/?onebox={TEST_ROUTE.replace('/', '|')}", ALL_SEGS),
     (f"https://useradmin.comma.ai/?onebox={TEST_ROUTE.replace('/', '%7C')}", ALL_SEGS),

@@ -19,6 +19,7 @@ STATEFUL_POLICY_FORMAT = 4
 STATEFUL_MODEL_FORMAT = 5
 STATEFUL_IMAGE_INPUT = "new_img"
 STATEFUL_OUTPUT = "outputs"
+STATEFUL_BASE_FEEDS = ("desire", "traffic_convention", "action_t")
 OOB_MAGIC = b"IQEGPUOOB1"
 QUEUE_NAMES = ("img_q", "big_img_q", "feat_q", "desire_q")
 PACKED_ORDER = ("desire", "traffic_convention", "action_t", "prev_feat")
@@ -339,6 +340,7 @@ def _state_kwargs(cur: dict, nxt: dict) -> dict:
 def make_run_stateful(model_runner, input_spec: dict, pairs: dict[str, str], device: str):
   from tinygrad.tensor import Tensor
   shapes, sizes = stateful_packed_layout(input_spec, pairs)
+  dtypes = {name: input_spec[name][1] for name in shapes}
   img_shape = tuple(input_spec[STATEFUL_IMAGE_INPUT][0])
 
   def run_stateful(warped, packed_npy_inputs, **states):
@@ -346,7 +348,8 @@ def make_run_stateful(model_runner, input_spec: dict, pairs: dict[str, str], dev
     warped = warped.to(device)
     Tensor.realize(packed_npy_inputs, warped)
     inputs = {STATEFUL_IMAGE_INPUT: warped.reshape(img_shape)}
-    inputs.update((name, t.reshape(shape)) for name, t, shape in zip(shapes, packed_npy_inputs.split(sizes), shapes.values(), strict=True))
+    inputs.update((name, t.reshape(shape).cast(dtypes[name])) for name, t, shape in zip(shapes, packed_npy_inputs.split(sizes), shapes.values(),
+                                                                                       strict=True))
     inputs.update((name, states[name]) for name in pairs)
     outs = model_runner(inputs)
     # next state lands in the other buffer of the pair: writing the queue it is read from races inside the shift kernel
@@ -363,6 +366,8 @@ class _StatefulState:
     self.pairs = pairs
     self._cur, self._nxt = make_state_buffers(input_spec, pairs, device)
     self._prev_desire = np.zeros(input_spec["desire"][0], dtype=np.float32) if "desire" in input_spec else None
+    self._extra_names = tuple(name for name in input_spec
+                              if name not in pairs and name not in (STATEFUL_IMAGE_INPUT, *STATEFUL_BASE_FEEDS))
     self.warm_frames = 0
 
   def reset(self) -> None:
@@ -380,11 +385,14 @@ class _StatefulState:
     self._prev_desire[:] = cur
     return pulse
 
-  def _fill(self, views: dict, desire_pulse, traffic_convention, action_t) -> None:
+  def _fill(self, views: dict, desire_pulse, traffic_convention, action_t, extras: dict | None = None) -> None:
     if "desire" in views:
       views["desire"][:] = self._pulse(desire_pulse).reshape(views["desire"].shape)
     views["traffic_convention"][:] = np.asarray(traffic_convention, dtype=np.float32).reshape(views["traffic_convention"].shape)
     views["action_t"][:] = np.asarray(action_t, dtype=np.float32).reshape(views["action_t"].shape)
+    for name in self._extra_names:
+      value = extras.get(name) if extras else None
+      views[name][:] = 0 if value is None else np.asarray(value, dtype=np.float32).reshape(views[name].shape)
 
   def _step(self, jit, **kw) -> np.ndarray:
     out, = jit(**kw, **_state_kwargs(self._cur, self._nxt))
@@ -403,8 +411,8 @@ class StatefulPolicyRunner(_StatefulState, PolicyRunner):
     self._init_state(input_spec, pairs, device)
 
   def run(self, warped: np.ndarray, desire_pulse: np.ndarray, traffic_convention: np.ndarray,
-          action_t: np.ndarray) -> np.ndarray:
-    self._fill(self._packed.views, desire_pulse, traffic_convention, action_t)
+          action_t: np.ndarray, extras: dict | None = None) -> np.ndarray:
+    self._fill(self._packed.views, desire_pulse, traffic_convention, action_t, extras)
     warped_t = self._Tensor(np.ascontiguousarray(warped, dtype=np.uint8).reshape(self._warped_shape), device="NPY").realize()
     return self._step(self._jit, warped=warped_t, packed_npy_inputs=self._packed.tensor)
 
@@ -461,7 +469,7 @@ class StatefulModelRunner(_StatefulState, ModelRunner):
     self._init_state(input_spec, pairs, device)
 
   def run(self, main_frame, extra_frame, tfm: np.ndarray, big_tfm: np.ndarray, desire_pulse: np.ndarray,
-          traffic_convention: np.ndarray, action_t: np.ndarray) -> np.ndarray:
+          traffic_convention: np.ndarray, action_t: np.ndarray, extras: dict | None = None) -> np.ndarray:
     n = self.frame_copy_size
     v = self._packed.views
     f = self._packed.frames
@@ -469,7 +477,7 @@ class StatefulModelRunner(_StatefulState, ModelRunner):
     np.copyto(f["big_img"], np.frombuffer(extra_frame, dtype=np.uint8, count=n))
     v["tfm"][:, :] = tfm
     v["big_tfm"][:, :] = big_tfm
-    self._fill(v, desire_pulse, traffic_convention, action_t)
+    self._fill(v, desire_pulse, traffic_convention, action_t, extras)
     return self._step(self._jit, packed_npy_inputs=self._packed.tensor)
 
 

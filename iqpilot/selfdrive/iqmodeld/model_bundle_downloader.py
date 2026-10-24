@@ -41,6 +41,20 @@ def _resolve_hf(hf_path: str) -> tuple[str | None, dict]:
   return m.resolve_hf(hf_path)
 
 
+def nutcracker_challenge() -> str:
+  m = _git_auth()
+  return m.nutcracker_challenge() if m is not None and hasattr(m, "nutcracker_challenge") else ""
+
+
+def nutcracker_link_nonce(challenge: str) -> str:
+  return _git_auth().nutcracker_link_nonce(challenge)
+
+
+def request_nutcracker_grant(**proof) -> bool:
+  m = _git_auth()
+  return m.request_nutcracker_grant(**proof) if m is not None and hasattr(m, "request_nutcracker_grant") else False
+
+
 def requests_get(url: str, **kwargs):
   m = _git_auth()
   if m is None:

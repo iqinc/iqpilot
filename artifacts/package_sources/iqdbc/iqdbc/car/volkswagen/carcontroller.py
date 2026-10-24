@@ -87,8 +87,11 @@ def ea_blinker_command(left_request, right_request, left_active, right_active):
 
 class CarController(CarControllerBase):
   def __init__(self, dbc_names, CP, CP_IQ):
-    from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
-    self._iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
+    try:
+      from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
+      self._iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
+    except Exception:
+      self._iq_lvbs_alc = None
     super().__init__(dbc_names, CP, CP_IQ)
     self._params = Params()
     self.CCP = CarControllerParams(CP)
@@ -238,7 +241,8 @@ class CarController(CarControllerBase):
       self._pq_patch_checked = True
       self.eps_timer_workaround = not self._params.get_bool("VwPqEpsPatched")
     blend_active = bool(self.blend_stock_radar and self.radar_handler is not None and self.CP.openpilotLongitudinalControl)
-    AngleLateralControl = self._iq_lvbs_alc.angle_lateral_control_enabled(self, CS)
+    AngleLateralControl = self._iq_lvbs_alc.angle_lateral_control_enabled(self, CS) if self._iq_lvbs_alc else False
+    aol_active = CC_IQ.aol.available and CC_IQ.aol.enabled and CC_IQ.aol.active
     self.entering = CS.vw_iq_lvbs_alc_entering
     self.active = CS.vw_iq_lvbs_alc_active
 
@@ -254,6 +258,11 @@ class CarController(CarControllerBase):
     CS.enable_pred_react_to_curves = getattr(CC.cruiseControl, "speedLimitPredReactToCurves", False)
 
     if self.frame % self.CCP.STEER_STEP == 0:
+      if self.CCS is pqcan and self._iq_lvbs_alc is None:
+        # Stock torque steering needs APD even without the optional ALC bundle.
+        # Send it first so Panda sees the current authorization before HCA.
+        can_sends.append(pqcan.create_apd_control(self.packer_pt, self.CAN.aux, self.CP, CC_IQ.angleOffsetDeg,
+                                                CC.latActive and aol_active))
       if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO):
         if CC.latActive:
           hca_enabled = True
@@ -289,7 +298,9 @@ class CarController(CarControllerBase):
         self.apply_curvature_last = apply_curvature
         self.steering_power_last = steering_power
       else:
-        if CC.latActive and not AngleLateralControl:
+        # A paused AOL session is still enabled; only active AOL authorizes torque
+        # without cruise. Keep the immediate cutoff when both authorities drop.
+        if CC.latActive and (CC.enabled or aol_active) and not AngleLateralControl:
           torque_scale = self._get_mqb_steering_torque_scale(CS.out.vEgo, iq_mqb_steering_lockout)
           new_torque = int(round(actuators.torque * self.CCP.STEER_MAX * torque_scale))
           apply_torque = apply_driver_steer_torque_limits(new_torque, self.apply_torque_last, CS.out.steeringTorque, self.CCP)
@@ -345,8 +356,9 @@ class CarController(CarControllerBase):
           ea_simulated_torque = CS.out.steeringTorque
         can_sends.append(self.CCS.create_eps_update(self.packer_pt, self.CAN.cam, CS.eps_stock_values, ea_simulated_torque))
 
-    self._iq_lvbs_alc.update_vw_alc(self, CC, CS, actuators, can_sends, apply_torque)
-    if self.frame % self.CCP.STEER_STEP == 0:
+    if self._iq_lvbs_alc:
+      self._iq_lvbs_alc.update_vw_alc(self, CC, CS, actuators, can_sends, apply_torque)
+    if self._iq_lvbs_alc and self.frame % self.CCP.STEER_STEP == 0:
       self._iq_lvbs_alc.append_private_apd(self, CC_IQ, can_sends)
 
     if self.CP.flags & (VolkswagenFlags.MEB | VolkswagenFlags.MQB_EVO) and self.CP.flags & VolkswagenFlags.STOCK_KLR_PRESENT:
@@ -532,7 +544,7 @@ class CarController(CarControllerBase):
                                                          self.leadDistanceBars, fcw_alert, lead_visible or fcw_alert, self.unavailable,
                                                          decel, d_unresponsive, **hud_kwargs))
 
-    if self.CP.flags & VolkswagenFlags.PQ:
+    if self._iq_lvbs_alc and self.CP.flags & VolkswagenFlags.PQ:
       self._iq_lvbs_alc.update_turn_signals(self, CC, CS, can_sends)
 
     if self.CP.openpilotLongitudinalControl and (self.CP.flags & VolkswagenFlags.PQ):

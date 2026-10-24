@@ -12,8 +12,8 @@ import time
 
 from iqpilot.common.params import Params
 from iqpilot.common.swaglog import cloudlog
-from iqpilot.selfdrive.iqmodeld.egpu_helpers import (ARTIFACT_PATHS, die_with_parent, download_precompiled, patch_tinygrad_fetch_fw,
-                                                     usbgpu_present)
+from iqpilot.selfdrive.iqmodeld.egpu_helpers import (ARTIFACT_PATHS, apply_dock_power_limit, die_with_parent, download_precompiled,
+                                                     patch_tinygrad_fetch_fw, usbgpu_present)
 from iqpilot.selfdrive.iqmodeld.egpu_model import resolve_egpu_model
 
 POLL_S = 30.0
@@ -35,6 +35,7 @@ def _selected_meta(params: Params) -> dict | None:
 def _drop_stale_partials(keep: str) -> None:
   root = os.path.dirname(keep)
   partial_globs = ("egpu_*_amd_policy.pkl.part", "egpu_*_amd_policy_oob.pkl.part", "egpu_*_amd_model_oob.pkl.part",
+                   "egpu_*_amd_model_oob2.pkl.part",
                    "big_driving_supercombo_*.onnx.part")
   for path in [p for g in partial_globs for p in glob.glob(os.path.join(root, g))]:
     if not path.startswith(keep):
@@ -78,6 +79,7 @@ _firmware_warm = False
 def _open_dock_once() -> None:
   os.environ.setdefault("DEV", "USB+AMD:LLVM")
   os.environ.setdefault("GMMU", "0")
+  apply_dock_power_limit()
   patch_tinygrad_fetch_fw()
   from tinygrad.device import Device
   Device["AMD"]

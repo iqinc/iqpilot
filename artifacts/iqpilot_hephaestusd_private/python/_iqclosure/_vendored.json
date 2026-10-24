@@ -1,7 +1,7 @@
 [
   "iqpilot.common.api",
   "iqpilot.common.api.base",
-  "iqpilot.common.api.comma_connect",
+  "iqpilot.common.api.konn3kt",
   "iqpilot.common.basedir",
   "iqpilot.common.file_helpers",
   "iqpilot.common.git_creds",

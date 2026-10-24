@@ -2,6 +2,18 @@
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 """
 
+def create_apd_control(packer, bus, CP, angle_offset, aol_active):
+  """Publish vehicle parameters and the AOL authorization required by PQ safety."""
+  values = {
+    "APD_Version": 1,
+    "APD_Flags": 0x01 | (0x08 if aol_active else 0),
+    "APD_SteerRatio": CP.steerRatio,
+    "APD_Wheelbase": CP.wheelbase * 1000,
+    "APD_AngleOffSet": angle_offset,
+  }
+  return packer.make_can_msg("APD_1", bus, values)
+
+
 def create_hca_steering_control(packer, bus, apply_torque, HCA_Status):
   values = {
     "LM_Offset": abs(apply_torque),

@@ -536,7 +536,7 @@ class AMDCopyQueue(HWQueue):
       tail_blit_dword += cmdsz
 
     # Force align of submits to hit our usb layer write cache.
-    if (rem_packet_cnt := len(cmds) - tail_blit_dword) > 0 and dev.is_usb(): tail_blit_dword = 0
+    if (rem_packet_cnt := len(cmds) - tail_blit_dword) > 0 and dev.is_usb(): tail_blit_dword, rem_packet_cnt = 0, len(cmds)
 
     # USB devices run in single-step mode, so they can't overrun the queue.
     total_bytes = (tail_blit_dword * 4 if rem_packet_cnt == 0 else -sdma_queue.put_value % sdma_queue.ring.nbytes) + rem_packet_cnt * 4

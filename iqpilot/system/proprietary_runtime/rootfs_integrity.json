@@ -4,7 +4,7 @@
       "mode": 493,
       "path": "iqpilot_bundle_runner",
       "relative_to": "runtime_root",
-      "sha256": "13af5da8a783b2f2e20464187e468a2acb58fbbf03340ced6f9b8a69874fe7ed",
+      "sha256": "88292e63a6d296fa6635c7a66ae46e9e3890af9bb0247f36bb5316f20122ce6b",
       "size": 134160
     },
     {
@@ -32,15 +32,15 @@
       "mode": 493,
       "path": "python/openpilot/system/proprietary_runtime/_verified_import.so",
       "relative_to": "runtime_root",
-      "sha256": "cd8cf31c11742d4f2079b398a9dec9e6df60f5a79dfe42c1d6888614bd8e500b",
-      "size": 200416
+      "sha256": "9df590fe9f6509a213f6e15f014be66f24e20175ba161f6b429caf757a30b53b",
+      "size": 200424
     },
     {
       "mode": 420,
       "path": "/usr/lib/systemd/system/hephaestusd.service",
       "relative_to": "absolute",
-      "sha256": "3b70e8873c7eb813e70798300b76c153dddda9947c1301cbba7e103962461fa2",
-      "size": 1627
+      "sha256": "2115fdce5bea7323ddf3251223a79a7aba36346f7603cc68e4ea5cd1aa0c72bd",
+      "size": 1694
     },
     {
       "mode": 420,

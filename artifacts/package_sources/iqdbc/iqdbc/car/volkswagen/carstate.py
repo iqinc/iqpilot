@@ -32,8 +32,11 @@ class CarState(CarStateBase):
   DRIVER_TORQUE_TAU = 0.10
 
   def __init__(self, CP, CP_IQ):
-    from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
-    self._iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
+    try:
+      from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
+      self._iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
+    except Exception:
+      self._iq_lvbs_alc = None
     super().__init__(CP, CP_IQ)
     self._params = Params()
     self.frame = 0
@@ -102,10 +105,11 @@ class CarState(CarStateBase):
     self.motor1_stock = {}
     self.motor3_frame = 0
     self.motor1_frame = 0
-    self._odometer_store = self._iq_lvbs_alc.create_vehicle_odometer_store(CP, self._params)
+    self._odometer_store = self._iq_lvbs_alc.create_vehicle_odometer_store(CP, self._params) if self._iq_lvbs_alc else None
 
   def _update_odometer(self, ret: structs.CarState, raw_km: float) -> None:
-    """Publish the cluster value while proprietary Konn3kt code owns persistence."""
+    if self._odometer_store is None:
+      return
     odometer_km = self._odometer_store.record(raw_km)
     if odometer_km is not None:
       ret.odometer = odometer_km
@@ -138,13 +142,16 @@ class CarState(CarStateBase):
     return button_events
 
   def _update_mqb_iq_alc_state(self, pt_cp):
-    self._iq_lvbs_alc.update_mqb_carstate_alc_state(self, pt_cp)
+    if self._iq_lvbs_alc:
+      self._iq_lvbs_alc.update_mqb_carstate_alc_state(self, pt_cp)
 
   def _update_mlb_iq_alc_state(self, pt_cp):
-    self._iq_lvbs_alc.update_mlb_carstate_alc_state(self, pt_cp)
+    if self._iq_lvbs_alc:
+      self._iq_lvbs_alc.update_mlb_carstate_alc_state(self, pt_cp)
 
   def _update_pq_iq_alc_state(self, pt_cp):
-    self._iq_lvbs_alc.update_pq_carstate_alc_state(self, pt_cp)
+    if self._iq_lvbs_alc:
+      self._iq_lvbs_alc.update_pq_carstate_alc_state(self, pt_cp)
 
   def update(self, can_parsers) -> tuple[structs.CarState, structs.IQCarState]:
     pt_cp = can_parsers[Bus.pt]
@@ -317,7 +324,7 @@ class CarState(CarStateBase):
     ret.steeringAngleDeg = pt_cp.vl["LWI_01"]["LWI_Lenkradwinkel"] * (1, -1)[int(pt_cp.vl["LWI_01"]["LWI_VZ_Lenkradwinkel"])]
     ret.steeringRateDeg = pt_cp.vl["LWI_01"]["LWI_Lenkradw_Geschw"] * (1, -1)[int(pt_cp.vl["LWI_01"]["LWI_VZ_Lenkradw_Geschw"])]
     ret.steeringTorque = pt_cp.vl["LH_EPS_03"]["EPS_Lenkmoment"] * (1, -1)[int(pt_cp.vl["LH_EPS_03"]["EPS_VZ_Lenkmoment"])]
-    driver_override_threshold = self._iq_lvbs_alc.vw_driver_override_threshold_cnm(self, "mqb", self.CCP.STEER_DRIVER_ALLOWANCE)
+    driver_override_threshold = self._iq_lvbs_alc.vw_driver_override_threshold_cnm(self, "mqb", self.CCP.STEER_DRIVER_ALLOWANCE) if self._iq_lvbs_alc else self.CCP.STEER_DRIVER_ALLOWANCE
     ret.steeringPressed = abs(self.driver_torque_filter.update(ret.steeringTorque)) > driver_override_threshold
 
     self.curvature = -pt_cp.vl["QFK_01"]["Curvature"] * (1, -1)[int(pt_cp.vl["QFK_01"]["Curvature_VZ"])]
@@ -528,7 +535,7 @@ class CarState(CarStateBase):
     self.LH_3_Sign = pt_cp.vl["Lenkhilfe_3"]["LH3_BLWSign"]
     self.LH2_steeringState = pt_cp.vl["Lenkhilfe_2"]["LH2_aktLenkeingriff"]
     self._update_pq_iq_alc_state(pt_cp)
-    driver_override_threshold = self._iq_lvbs_alc.vw_driver_override_threshold_cnm(self, "pq", self.CCP.STEER_DRIVER_ALLOWANCE)
+    driver_override_threshold = self._iq_lvbs_alc.vw_driver_override_threshold_cnm(self, "pq", self.CCP.STEER_DRIVER_ALLOWANCE) if self._iq_lvbs_alc else self.CCP.STEER_DRIVER_ALLOWANCE
     ret.steeringPressed = abs(ret.steeringTorque) > driver_override_threshold
 
     # Consume blind-spot monitoring info/warning LED states, if available.

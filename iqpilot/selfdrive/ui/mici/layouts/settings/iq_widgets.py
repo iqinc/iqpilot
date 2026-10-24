@@ -91,13 +91,11 @@ class FollowDistanceSelector(BigMultiToggle):
     self.set_enabled(enabled)
 
   def _handle_mouse_release(self, mouse_pos):
-    if get_longitudinal_mode(self._params) != LONGITUDINAL_MODE_PILOT:
-      return
-    BigButton._handle_mouse_release(self, mouse_pos)
-    selection, _ = get_follow_distance_state(self._params)
-    if selection is None:
+    selection, enabled = get_follow_distance_state(self._params)
+    if not enabled:
       self.refresh()
       return
+    BigButton._handle_mouse_release(self, mouse_pos)
     next_selection = self.VALUES[(self.VALUES.index(selection) + 1) % len(self.VALUES)]
     set_valid_personality(self._params, next_selection)
     self.set_value(self._display_options[self.VALUES.index(next_selection)])

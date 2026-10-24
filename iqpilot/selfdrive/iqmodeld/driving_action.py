@@ -17,7 +17,10 @@ DESIRE_LEN = 8
 
 def get_action_from_model(outputs: dict[str, np.ndarray], prev_action: log.ModelDataV2.Action,
                           v_ego: float, lat_action_t: float, long_action_t: float,
-                          lat_smooth_seconds: float | None = None) -> log.ModelDataV2.Action:
+                          lat_smooth_seconds: float | None = None, *,
+                          lat_active: bool = True, current_curvature: float = 0.0) -> log.ModelDataV2.Action:
+  if not lat_active:
+    prev_action.desiredCurvature = current_curvature
   if "action" in outputs:
     desired_accel = float(outputs["action"][0, 1])
     desired_curvature = float(outputs["action"][0, 0]) / (max(1.0, v_ego)) ** 2

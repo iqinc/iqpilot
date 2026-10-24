@@ -4,7 +4,6 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 
 from __future__ import annotations
 
-import pickle
 from dataclasses import dataclass
 
 import numpy as np
@@ -32,6 +31,7 @@ from iqpilot.selfdrive.iqmodeld.models.split_model_constants import SplitModelCo
 from iqpilot.selfdrive.iqmodeld.config import ModelConstants
 from iqpilot.selfdrive.iqmodeld.runtime.tinygrad import qcom_tensor_from_opencl_address
 from iqpilot.system.hardware import TICI
+from iqpilot.selfdrive.iqmodeld.models.iqc import load_pickle
 
 
 @dataclass(frozen=True)
@@ -45,12 +45,11 @@ def _artifact_path(filename: str) -> str:
 
 
 def _load_program_blob(filename: str):
-  with open(_artifact_path(filename), "rb") as artifact:
-    try:
-      return pickle.load(artifact)
-    except FileNotFoundError as exc:
-      assert "/dev/kgsl-3d0" not in str(exc), "Model was built on C3 or C3X, but is being loaded on PC"
-      raise
+  try:
+    return load_pickle(_artifact_path(filename))
+  except FileNotFoundError as exc:
+    assert "/dev/kgsl-3d0" not in str(exc), "Model was built on C3 or C3X, but is being loaded on PC"
+    raise
 
 
 def _compile_input_plan(captured) -> dict[str, _TensorShapePlan]:
@@ -81,7 +80,7 @@ class TinygradRunner(ModelRunner, SupercomboTinygrad, PolicyTinygrad, VisionTiny
       raise ValueError(f"Model data for type {model_type} not available.")
 
     asset_name = self._model_data.model.artifact.fileName
-    assert asset_name.endswith("_tinygrad.pkl"), f"Invalid model file {asset_name} for TinygradRunner"
+    assert asset_name.removesuffix(".iqc").endswith("_tinygrad.pkl"), f"Invalid model file {asset_name} for TinygradRunner"
 
     self.model_run = _load_program_blob(asset_name)
     self._input_plan = _compile_input_plan(self.model_run.captured)

@@ -79,16 +79,16 @@ def test_transport_failures_remain_visible_to_callers(client):
     api.get('route', session=SimpleNamespace(request=fail))
 
 
-@pytest.mark.parametrize('client_type', ['comma', 'konn3kt', 'facade'])
+@pytest.mark.parametrize('client_type', ['common', 'device', 'facade'])
 def test_existing_clients_keep_their_wire_identity(client, monkeypatch, client_type):
   from iqpilot.common.api import Api
-  from iqpilot.common.api.comma_connect import CommaConnectApi
-  from iqpilot.konn3kt.cloud_client import Konn3ktApi
+  from iqpilot.common.api.konn3kt import Konn3ktApi
+  from iqpilot.konn3kt.cloud_client import Konn3ktApi as DeviceApi
 
   _, calls, response = client
   monkeypatch.setattr(base.requests, 'request', lambda **options: calls.append(options) or response)
-  api = {'comma': CommaConnectApi, 'konn3kt': Konn3ktApi, 'facade': Api}[client_type]('device')
+  api = {'common': Konn3ktApi, 'device': DeviceApi, 'facade': Api}[client_type]('device')
   assert api.get('status', access_token='test-token', include='routes') is response
-  assert calls[0]['headers']['User-Agent'] == ('konn3kt-device-' if client_type == 'konn3kt' else 'openpilot-') + '1.2-beta'
+  assert calls[0]['headers']['User-Agent'] == ('konn3kt-device-' if client_type == 'device' else 'openpilot-') + '1.2-beta'
   assert calls[0]['headers']['Authorization'] == 'JWT test-token'
   assert calls[0]['params'] == {'include': 'routes'}

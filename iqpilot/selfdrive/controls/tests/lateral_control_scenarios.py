@@ -57,7 +57,7 @@ class ScenarioMessages(dict):
     self.alive = defaultdict(bool)
 
   def all_checks(self, services):
-    return False
+    return all(self.valid[service] and self.alive[service] for service in services)
 
 
 class ScenarioNetwork:
@@ -147,7 +147,8 @@ def set_frame(controls, frame):
     controls.sm["modelV2"].orientation.x = (0.003 * np.sin(times)).tolist()
     controls.sm["modelV2"].orientation.y = (0.002 * np.cos(times)).tolist()
     controls.sm["modelV2"].acceleration.y = (0.1 * np.sin(times)).tolist()
-    nnff.update_model_v2(controls.sm["modelV2"])
+  controls.sm.valid["modelV2"] = True
+  controls.sm.alive["modelV2"] = True
   controls.steer_limited_by_safety = 140 <= frame < 160
 
 

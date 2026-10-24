@@ -125,16 +125,32 @@ class Amplifier:
           print(f"  Changed {hex(config.register)}: {hex(old_value)} -> {hex(new_value)}")
 
   def set_configs(self, configs: list[AmpConfig]) -> bool:
+    import threading
+
     tries = 15
     backoff = 0.
     for i in range(tries):
-      try:
-        self._set_configs(configs)
-        return True
-      except OSError:
+      result = [None]
+      error = [None]
+      def _worker():
+        try:
+          self._set_configs(configs)
+          result[0] = True
+        except OSError as e:
+          error[0] = e
+      t = threading.Thread(target=_worker, daemon=True)
+      t.start()
+      t.join(timeout=2)
+      if t.is_alive():
         backoff += 0.1
         time.sleep(backoff)
-        print(f"Failed to set amp config, {tries - i - 1} retries left")
+        print(f"Failed to set amp config (timeout), {tries - i - 1} retries left")
+        continue
+      if result[0]:
+        return True
+      backoff += 0.1
+      time.sleep(backoff)
+      print(f"Failed to set amp config, {tries - i - 1} retries left")
     return False
 
   def set_global_shutdown(self, amp_disabled: bool) -> bool:

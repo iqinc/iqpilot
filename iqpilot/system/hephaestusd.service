@@ -8,7 +8,9 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 User=comma
-AmbientCapabilities=CAP_SYS_NICE
+AmbientCapabilities=CAP_SYS_NICE CAP_NET_ADMIN
+RuntimeDirectory=wireguard
+RuntimeDirectoryMode=0750
 Environment="IQPILOT_SOURCE_ROOT=/data/openpilot/iqpilot"
 Environment="PYTHONPATH=/usr/libexec/iqpilot/python:/data/openpilot/.venv/lib/python3.12/site-packages:/data/openpilot"
 Environment="PYTHONSAFEPATH=1"

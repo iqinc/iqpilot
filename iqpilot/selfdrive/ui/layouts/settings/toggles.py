@@ -36,6 +36,10 @@ DESCRIPTIONS = {
     "without a turn signal activated while driving over 31 mph (50 km/h)."
   ),
   "AlwaysOnDM": tr_noop("Enable driver monitoring even when IQ.Pilot is not engaged."),
+  "DashcamMode": tr_noop(
+    "Keep IQ.Pilot off the harness and let the stock ADAS handle lateral and longitudinal control. " +
+    "IQ.Pilot will not engage and the road view shows Dashcam Mode."
+  ),
   "DashcamEnabled": tr_noop("Record and upload driving data and video. Disabling this stops all recording! No logs, no video, no audio."),
   'RecordFront': tr_noop("Upload data from the driver facing camera and help improve the driver monitoring algorithm."),
   "IsMetric": tr_noop("Display speed in km/h instead of mph."),
@@ -45,8 +49,8 @@ DESCRIPTIONS = {
   ),
   "RecordAudio": tr_noop("Record and store microphone audio while driving. The audio will be included in the dashcam video in Konn3kt."),
   "LongitudinalControlMode": tr_noop(
-    "Choose longitudinal behavior: IQ.Pilot (IQ longitudinal + end-to-end), "
-    "IQ.Chill (IQ longitudinal + relaxed personality), or Stock ACC."
+    "Choose longitudinal behavior: IQ.Pilot (IQ longitudinal + end-to-end), " +
+    "IQ.Chill (IQ longitudinal + traffic-aware cruise), or Stock ACC."
   ),
   "IQTelemetryEnabled": tr_noop(
     "Once a day, sends settings, versions, car model and coarse usage counts under a random install ID. " +
@@ -67,6 +71,12 @@ class TogglesLayout(Widget):
         DESCRIPTIONS["IsLdwEnabled"],
         "warning.png",
         False,
+      ),
+      "DashcamMode": (
+        lambda: tr("Dashcam Mode"),
+        DESCRIPTIONS["DashcamMode"],
+        "monitoring.png",
+        True,
       ),
       "RecordFront": (
         lambda: tr("Record and Upload Driver Camera"),
@@ -228,7 +238,7 @@ class TogglesLayout(Widget):
       description += "<br><br><i>" + availability_note + "</i>"
     longitudinal_control_item.set_description(description)
 
-    personality_enabled = iq_modes_selectable and mode_index == 2
+    personality_enabled = iq_modes_selectable and mode_index != 0
     self._long_personality_setting.action_item.set_enabled(personality_enabled)
 
     # TODO: make a param control list item so we don't need to manage internal state as much here

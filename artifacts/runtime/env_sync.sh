@@ -12,6 +12,15 @@
 # Variables assigned here (VENV_SITE_PACKAGES, BASE_SITE_PACKAGES, ...) are
 # intentionally global: the sourced caller composes PYTHONPATH from them.
 
+_iq_maybe_sudo() {
+  # On IQ.OS 4.9.9.2+ the boot-prepare oneshot already owns .venv to iq, so these defensive ops run unprivileged; pre-4.9.9.2 keeps sudo.
+  if [ -f /run/iqpilot-boot-prepare.done ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
 sync_python_env() {
   local DIR
   DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../.." >/dev/null && pwd )"
@@ -45,7 +54,7 @@ sync_python_env() {
   BASE_SITE_PACKAGES="$(/usr/local/venv/bin/python3 -c 'import site; print(site.getsitepackages()[0])')"
   PROJECT_RAYLIB="$("$DIR/.venv/bin/python3" -c 'import importlib.metadata; print(importlib.metadata.distribution("raylib").locate_file(""))' 2>/dev/null || true)"
   if [[ "$PROJECT_RAYLIB" = "$DIR/.venv"/* ]]; then
-    sudo rm -rf "$DIR/.venv"
+    _iq_maybe_sudo rm -rf "$DIR/.venv"
     rm -f "$DIR/.iqpilot-package-lock-sha256" "$DIR/.iqpilot-runtime-wheel-lock-sha256"
     INSTALLED_PACKAGE_LOCK_SHA=""
     INSTALLED_RUNTIME_WHEEL_LOCK_SHA=""
@@ -72,12 +81,37 @@ sync_python_env() {
     RUNTIME_WHEELS_READY=0
   fi
   if [ "$PACKAGES_READY" != "1" ] || [ "$RUNTIME_WHEELS_READY" != "1" ]; then
+    # A source install fetches git+https packages from git.konn3kt.com; at early boot DNS, connectivity, or the device's stale RTC (months behind until NTP syncs, which fails TLS cert validity) make the fetch die and abort launch with no venv. Wait until the host actually answers over TLS before uv reaches the network.
+    for _ in $(seq 1 90); do curl -sS --max-time 8 -o /dev/null https://git.konn3kt.com/ 2>/dev/null && break; sleep 2; done
+    # Private components (git.konn3kt.com/teal/*) need auth; inject the device credential as an https extraHeader via GIT_CONFIG_* (HOME-independent, never persisted) so the uv git fetch authenticates. GitAuthBlob is decoded standalone because the Params->cereal chain is unavailable mid-bootstrap.
+    IQ_GIT_AUTH_ENV="$(/usr/local/venv/bin/python3 - 2>/dev/null <<'PY'
+import base64, json
+try:
+  from cryptography.fernet import Fernet
+  key = open("/data/konn3kt/git_auth.key", "rb").read().strip()
+  blob = open("/data/params/d/GitAuthBlob", "rb").read()
+  d = json.loads(Fernet(key).decrypt(blob).decode())
+  u, t = d.get("u", ""), d.get("t", "")
+  if u and t:
+    hdr = "Authorization: Basic " + base64.b64encode(("%s:%s" % (u, t)).encode()).decode()
+    hosts = ("git.konn3kt.com", "gitlvb.teallvbs.xyz")
+    print("export GIT_CONFIG_COUNT=%d" % len(hosts))
+    for i, h in enumerate(hosts):
+      print("export GIT_CONFIG_KEY_%d=%r" % (i, "http.https://%s/.extraHeader" % h))
+      print("export GIT_CONFIG_VALUE_%d=%r" % (i, hdr))
+except Exception:
+  pass
+PY
+)"
+    [ -n "$IQ_GIT_AUTH_ENV" ] && eval "$IQ_GIT_AUTH_ENV"
     UV_CACHE_DIR="$DIR/.uv-cache"
+    # AGNOS removes owner root, so the /usr/comma/shims/uv wrapper (it sudo-remounts / and /tmp) cannot run; force uv off the PATH shim and keep its cache and TMPDIR on writable /data so the venv and wheels build unprivileged.
+    mkdir -p "$UV_CACHE_DIR" "$DIR/.uv-tmp"
     if [ ! -x "$DIR/.venv/bin/python3" ]; then
-      UV_CACHE_DIR="$UV_CACHE_DIR" uv venv --python /usr/local/venv/bin/python3 "$DIR/.venv" || return 1
+      UV_CACHE_DIR="$UV_CACHE_DIR" TMPDIR="$DIR/.uv-tmp" PATH="/usr/local/venv/bin:/usr/bin:$PATH" uv venv --python /usr/local/venv/bin/python3 "$DIR/.venv" || return 1
       VENV_SITE_PACKAGES="$("$DIR/.venv/bin/python3" -c 'import site; print(site.getsitepackages()[0])')"
     fi
-    sudo chown -R "$(id -u):$(id -g)" "$DIR/.venv" "$UV_CACHE_DIR" "$DIR/artifacts/package_sources" 2>/dev/null || true
+    _iq_maybe_sudo chown -R "$(id -u):$(id -g)" "$DIR/.venv" "$UV_CACHE_DIR" "$DIR/artifacts/package_sources" 2>/dev/null || true
     if [ "${#RUNTIME_WHEELS[@]}" = "0" ] || [ "${#RUNTIME_WHEEL_SOURCES[@]}" = "0" ]; then
       return 1
     fi
@@ -109,16 +143,16 @@ sync_python_env() {
       if [ -n "$EIGEN_INCLUDE_ROOT" ]; then
         PACKAGE_BUILD_CPATH="$EIGEN_INCLUDE_ROOT${PACKAGE_BUILD_CPATH:+:$PACKAGE_BUILD_CPATH}"
       fi
-      UV_CACHE_DIR="$UV_CACHE_DIR" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
+      UV_CACHE_DIR="$UV_CACHE_DIR" TMPDIR="$DIR/.uv-tmp" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
         uv pip install --python "$DIR/.venv/bin/python" --no-build-isolation --no-deps --reinstall "$PYCAPNP_PACKAGE_SOURCE" || return 1
-      UV_CACHE_DIR="$UV_CACHE_DIR" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" CPATH="$PACKAGE_BUILD_CPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
+      UV_CACHE_DIR="$UV_CACHE_DIR" TMPDIR="$DIR/.uv-tmp" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" CPATH="$PACKAGE_BUILD_CPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
         uv pip install --python "$DIR/.venv/bin/python" --no-build-isolation --no-deps --reinstall "$IQDBC_PACKAGE_SOURCE" || return 1
-      UV_CACHE_DIR="$UV_CACHE_DIR" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" CPATH="$PACKAGE_BUILD_CPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
+      UV_CACHE_DIR="$UV_CACHE_DIR" TMPDIR="$DIR/.uv-tmp" PYTHONPATH="$PACKAGE_BUILD_PYTHONPATH" CPATH="$PACKAGE_BUILD_CPATH" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
         uv pip install --python "$DIR/.venv/bin/python" --no-build-isolation --no-deps --reinstall "${PACKAGE_SOURCES[@]}" || return 1
       printf '%s\n' "$PACKAGE_LOCK_SHA" > "$DIR/.iqpilot-package-lock-sha256"
     fi
     if [ "$RUNTIME_WHEELS_READY" != "1" ]; then
-      UV_CACHE_DIR="$UV_CACHE_DIR" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
+      UV_CACHE_DIR="$UV_CACHE_DIR" TMPDIR="$DIR/.uv-tmp" PATH="/usr/local/venv/bin:/usr/bin:$PATH" \
         uv pip install --python "$DIR/.venv/bin/python" --no-deps --reinstall "${RUNTIME_WHEEL_SOURCES[@]}" || return 1
       "$DIR/.venv/bin/python3" -c "import libdatachannel" || return 1
       PYTHONPATH="$DIR" "$DIR/.venv/bin/python3" "$DIR/iqpilot/system/runtime_wheels_verify.py" || return 1
@@ -129,7 +163,7 @@ sync_python_env() {
     return 1
   fi
   if [ -n "$VENV_SITE_PACKAGES" ]; then
-    printf 'import site; site.addsitedir("%s")\n' "$BASE_SITE_PACKAGES" | sudo tee "$VENV_SITE_PACKAGES/iqpilot-system-venv.pth" >/dev/null
+    printf 'import site; site.addsitedir("%s")\n' "$BASE_SITE_PACKAGES" | _iq_maybe_sudo tee "$VENV_SITE_PACKAGES/iqpilot-system-venv.pth" >/dev/null
   fi
 }
 

@@ -325,7 +325,7 @@ def parse_indirect(identifier: str) -> str:
   if "useradmin.comma.ai" in identifier:
     query = parse_qs(urlparse(identifier).query)
     identifier = query["onebox"][0]
-  elif "connect.comma.ai" in identifier or "konn3kt.com" in identifier:
+  elif "konn3kt.com" in identifier:
     path = urlparse(identifier).path.strip("/").split("/")
     if path and path[0] == "connectdata":
       # signed data URL from the API host (api-*.konn3kt.com/connectdata/...), not a share link

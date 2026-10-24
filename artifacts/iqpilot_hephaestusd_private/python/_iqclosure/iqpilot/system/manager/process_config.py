@@ -166,6 +166,8 @@ def big_model_enabled(started, params, CP: car.CarParams) -> bool:
 def hephaestus_ready_shim(started, params, CP: car.CarParams) -> bool:
   return hephaestus_ready(params)
 
+_IQCORE_ARMED_ENV = {"IQCORE_ARMED": "1"}
+
 def not_low_power(started: bool, params: Params, CP: car.CarParams) -> bool:
   # FastSleep deep standby: heavy processes are shed offroad while DevicePowerState is low_power
   return started or params.get("DevicePowerState") != "low_power"
@@ -195,13 +197,11 @@ procs = [
   PythonProcess("micd", "iqpilot.system.micd", or_(iscar, livestream)),
   PythonProcess("timed", "iqpilot.system.timed", always_run, enabled=not PC),
   PythonProcess("wireguardd", "iqpilot.system.wireguard.wireguardd", wireguard_installed, enabled=TICI, restart_if_crash=True),
-  BundleProcess("k3wgd", "iqpilot_hephaestusd_private", "iqpilot_private.konn3kt.hephaestus.k3wgd", always_run, enabled=TICI,
-                restart_if_crash=True),
   BundleProcess("iqsentryd", "iqpilot_hephaestusd_private", "iqpilot_private.konn3kt.hephaestus.iqsentryd", sentry_enabled,
                 enabled=TICI, restart_if_crash=True),
   BundleProcess("navassistd", "iqpilot_navassist_private", "iqpilot_private.navassist.daemon", nav_assist, enabled=TICI, restart_if_crash=True),
 
-  PythonProcess("dmonitoringmodeld", "iqpilot.selfdrive.dmonitoringmodeld.dmonitoringmodeld", driver_monitoring, enabled=not PC),
+  PythonProcess("dmonitoringmodeld", "iqpilot.selfdrive.dmonitoringmodeld.dmonitoringmodeld", driver_monitoring, enabled=not PC, env=_IQCORE_ARMED_ENV),
 
   PythonProcess("sensord", "iqpilot.system.sensord.sensord", only_onroad, enabled=not PC),
   PythonProcess("ui", "iqpilot.selfdrive.ui.ui", not_low_power, restart_if_crash=True),
@@ -244,16 +244,16 @@ procs = [
 procs += [
   # Models
   BundleProcess("models_manager", "iqpilot_model_selector_private", "iqpilot_private.models.manager", and_(only_offroad, not_low_power), restart_if_crash=True),
-  NativeProcess("iqmodeld", "iqpilot/selfdrive/iqmodeld", ["./iqmodeld"], and_(only_onroad, is_tinygrad_model), restart_if_crash=True),
+  NativeProcess("iqmodeld", "iqpilot/selfdrive/iqmodeld", ["./iqmodeld"], and_(only_onroad, is_tinygrad_model), restart_if_crash=True, env=_IQCORE_ARMED_ENV),
   # big-model backends: iqmodeld self-demotes to the small channel worker when
   # either backend is enabled; the selector publishes, and exactly one big
   # worker (Mac or eGPU, eMac wins) feeds the BIG channel
   PythonProcess("modeld_selector", "iqpilot.selfdrive.iqmodeld.modeld_selector",
                 and_(only_onroad, and_(is_tinygrad_model, big_model_enabled)), restart_if_crash=True),
   BundleProcess("maciqmodeld", "iqpilot_emac_private", "iqpilot_private.emac.maciqmodeld",
-                and_(only_onroad, and_(is_tinygrad_model, emac_enabled)), restart_if_crash=True),
+                and_(only_onroad, and_(is_tinygrad_model, emac_enabled)), restart_if_crash=True, env=_IQCORE_ARMED_ENV),
   PythonProcess("iqegpumodeld", "iqpilot.selfdrive.iqmodeld.iqegpumodeld",
-                and_(only_onroad, and_(is_tinygrad_model, egpu_enabled)), restart_if_crash=True),
+                and_(only_onroad, and_(is_tinygrad_model, egpu_enabled)), restart_if_crash=True, env=_IQCORE_ARMED_ENV),
   PythonProcess("egpu_prefetch", "iqpilot.selfdrive.iqmodeld.egpu_prefetch",
                 and_(only_offroad, and_(is_tinygrad_model, egpu_prefetch_enabled)), restart_if_crash=True),
 

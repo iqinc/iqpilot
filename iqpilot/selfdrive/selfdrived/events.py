@@ -181,8 +181,8 @@ def invalid_lkas_setting_alert(CP: car.CarParams, CS: car.CarState, sm: messagin
   title = "Invalid LKAS setting"
   text = "Toggle stock LKAS on or off to engage"
   if CP.brand == "tesla":
-    title = "Dashcam Mode"
-    text = "FSD / Autosteer is active"
+    title = "Autosteer / FSD Active"
+    text = "IQ.Pilot is standing by"
   elif CP.brand == "mazda":
     text = "Enable your car's LKAS to engage"
   elif CP.brand == "nissan":
@@ -193,7 +193,7 @@ def invalid_lkas_setting_alert(CP: car.CarParams, CS: car.CarState, sm: messagin
 def invalid_lkas_setting_no_entry_alert(CP: car.CarParams, CS: car.CarState, sm: messaging.SubMaster,
                                         metric: bool, soft_disable_time: int, personality) -> Alert:
   if CP.brand == "tesla":
-    return NoEntryAlert("FSD / Autosteer is active", alert_text_1="Dashcam Mode")
+    return NoEntryAlert("IQ.Pilot is standing by", alert_text_1="Autosteer / FSD Active")
   return NoEntryAlert("Invalid LKAS setting")
 
 

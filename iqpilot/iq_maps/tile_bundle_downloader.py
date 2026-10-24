@@ -16,23 +16,22 @@ from iqpilot.common.swaglog import cloudlog
 from iqpilot.ui.onroad.offline_tiles import offline_map_root
 
 try:
-  from iqpilot.iq_maps.tiles_auth import get_base_urls as _private_base_urls, get_requests_auth as _private_auth
-except Exception:  # ProprietaryModuleMissing or import errors in stripped builds
-  _private_base_urls = None
-  _private_auth = None
+  from iqpilot.models_private_src.git_auth import (
+    broker_headers as _broker_headers,
+    broker_iqmaps_url as _broker_iqmaps_url,
+    broker_iqmaps_lfs_url as _broker_iqmaps_lfs_url,
+    IQMAPS_RAW_PREFIXES as _IQMAPS_RAW_PREFIXES,
+  )
+except ImportError:
+  _broker_headers = None
+  _broker_iqmaps_url = None
+  _broker_iqmaps_lfs_url = None
+  _IQMAPS_RAW_PREFIXES = ()
 
-# Tile bundles live as LFS objects in the PRIVATE repo IQ.Lvbs/iqmaps (R2 is gone).
-# Anonymous access 404s by design; devices authenticate with the embedded read-only PAT
-# carried by the closed-source updater bundle (same fetch account as the OS images).
-# Hugging Face is primary: it is CDN-served, so device downloads no longer come off the
-# gitea box's home uplink. The gitea copies stay as failover -- if HF ever suspends the
-# repo the fleet silently falls back instead of losing maps entirely.
 HF_TILE_BUNDLE_BASE_URL = "https://huggingface.co/datasets/T3vl/iqmaps/resolve/main"
 DEFAULT_TILE_BUNDLE_BASE_URL = "https://git.konn3kt.com/IQ.Lvbs/iqmaps/raw/branch/master"
 FALLBACK_TILE_BUNDLE_BASE_URL = "https://gitlvb.teallvbs.xyz/IQ.Lvbs/iqmaps/raw/branch/master"
 
-# Gitea /raw NEVER returns LFS content -- it returns this pointer, and the real bytes come
-# from the LFS batch API (see _resolve_object_url).
 LFS_POINTER_MAGIC = b"version https://git-lfs"
 BASE_URL_PARAM = "OfflineTilesBaseUrl"
 PROGRESS_PARAM = "OfflineTilesDownloadProgress"
@@ -44,6 +43,18 @@ HTTP_TIMEOUT_S = 30.0
 STREAM_RETRIES = 8
 
 
+_BROKER_SENTINEL = "broker://"
+
+
+def _broker_base_url() -> str:
+  if _broker_headers is None:
+    return ""
+  headers = _broker_headers()
+  if not headers:
+    return ""
+  return _BROKER_SENTINEL
+
+
 def candidate_base_urls(params: Params) -> list[str]:
   override = params.get(BASE_URL_PARAM)
   if isinstance(override, bytes):
@@ -51,14 +62,11 @@ def candidate_base_urls(params: Params) -> list[str]:
   override = (override or "").strip()
   if override:
     return [override.rstrip("/")]
-  # HF first (CDN, and it keeps device traffic off the gitea box's uplink); the bundle's
-  # own endpoints and the self-hosted defaults follow as failover.
-  urls: list[str] = [HF_TILE_BUNDLE_BASE_URL]
-  if _private_base_urls is not None:
-    try:
-      urls.extend(url.rstrip("/") for url in _private_base_urls())
-    except Exception:
-      pass
+  urls: list[str] = []
+  broker = _broker_base_url()
+  if broker:
+    urls.append(broker)
+  urls.append(HF_TILE_BUNDLE_BASE_URL)
   urls.append(DEFAULT_TILE_BUNDLE_BASE_URL)
   urls.append(FALLBACK_TILE_BUNDLE_BASE_URL)
   seen: set[str] = set()
@@ -69,76 +77,36 @@ def _is_hf(url: str) -> bool:
   return "huggingface.co" in url.lower()
 
 
-def _maps_auth_module():
-  """The read PAT lives in the compiled updater bundle (never in this open file)."""
-  try:
-    from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
-    return import_verified_module("iqpilot_updater_private", "iqpilot_private.updater.git_remote")
-  except Exception:
-    pass
-  try:
-    import importlib
-    import os
-    import sys
-    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    bundle_python = os.path.join(root, "artifacts", "iqpilot_updater_private", "python")
-    if os.path.isdir(bundle_python):
-      if bundle_python not in sys.path:
-        sys.path.insert(0, bundle_python)
-      return importlib.import_module("iqpilot_private.updater.git_remote")
-  except Exception:
-    pass
-  return None
+def _is_broker(url: str) -> bool:
+  return url.startswith(_BROKER_SENTINEL)
 
 
 def request_headers(url: str) -> dict:
-  mod = _maps_auth_module()
-  if mod is not None:
-    if _is_hf(url):
-      # HF wants a bearer token, not basic auth; a build whose bundle predates HF
-      # hosting simply gets nothing here and falls through to the gitea mirrors.
-      try:
-        token = mod.map_tiles_hf_token()
-        if token:
-          return {"Authorization": f"Bearer {token}"}
-      except Exception:
-        pass
-      return {}
-    try:
-      headers = mod.map_tiles_headers(url)
-      if headers:
-        return headers
-    except Exception:
-      pass
-  try:
-    from iqpilot.common.git_creds import get_credentials
-    creds = get_credentials()
-    if creds and all(creds) and "/iq.lvbs/iqmaps" in url.lower():
-      import base64
-      return {"Authorization": "Basic " + base64.b64encode(f"{creds[0]}:{creds[1]}".encode()).decode()}
-  except Exception:
-    pass
+  if _is_broker(url) and _broker_headers is not None:
+    return _broker_headers()
   return {}
 
 
-def request_auth() -> tuple[str, str] | None:
-  if _private_auth is None:
-    return None
-  try:
-    return _private_auth()
-  except Exception:
-    return None
-
-
 def _lfs_endpoint(base_url: str) -> str:
-  """<host>/<owner>/<repo>/raw/branch/<b> -> <host>/<owner>/<repo>.git/info/lfs"""
   return base_url.split("/raw/", 1)[0] + ".git/info/lfs"
+
+
+def _resolve_oid_url_broker(oid: str, size: int) -> tuple[str, dict]:
+  if _broker_iqmaps_lfs_url is None:
+    raise requests.RequestException("broker LFS unavailable")
+  url = _broker_iqmaps_lfs_url(oid, size)
+  if not url:
+    raise requests.RequestException("broker LFS URL empty")
+  headers = _broker_headers() if _broker_headers is not None else {}
+  if not headers:
+    raise requests.RequestException("broker headers unavailable")
+  return url, headers
 
 
 def _resolve_oid_url(session: requests.Session, base_url: str, oid: str, size: int,
                      headers: dict) -> tuple[str, dict]:
-  """Bundles are stored as bare LFS objects addressed by oid from the index -- no pointer
-  files, because committing one per part meant hundreds of concurrent commits per branch."""
+  if _is_broker(base_url):
+    return _resolve_oid_url_broker(oid, size)
   batch = session.post(f"{_lfs_endpoint(base_url)}/objects/batch",
                        data=json.dumps({"operation": "download", "transfers": ["basic"],
                                         "objects": [{"oid": oid, "size": size}]}),
@@ -153,17 +121,18 @@ def _resolve_oid_url(session: requests.Session, base_url: str, oid: str, size: i
   return action["href"], action.get("header", {})
 
 
-def _resolve_object_url(session: requests.Session, url: str, headers: dict) -> tuple[str, dict]:
-  """Follow a Gitea LFS pointer to the real (pre-signed) object URL.
+def _resolve_object_url_broker(url: str) -> tuple[str, dict]:
+  headers = _broker_headers() if _broker_headers is not None else {}
+  return url, headers
 
-  Returns the URL to stream plus any extra headers it needs. A plain host that serves the
-  bytes directly (local test server, static mirror) resolves to itself unchanged."""
+
+def _resolve_object_url(session: requests.Session, url: str, headers: dict) -> tuple[str, dict]:
+  if _is_broker(url):
+    return _resolve_object_url_broker(url)
   probe = session.get(url, headers={**headers, "Accept-Encoding": None}, stream=True,
                       timeout=HTTP_TIMEOUT_S)
   try:
     probe.raise_for_status()
-    # A host that serves the bytes itself still needs the caller's auth on the real GET --
-    # returning {} here sends the download out anonymous and a private host answers 401.
     if int(probe.headers.get("content-length") or 0) >= 1024:
       return url, dict(headers)
     body = probe.content
@@ -187,13 +156,22 @@ def _resolve_object_url(session: requests.Session, url: str, headers: dict) -> t
   return action["href"], action.get("header", {})
 
 
+def _broker_index_url() -> str:
+  if _broker_iqmaps_url is None:
+    return ""
+  return _broker_iqmaps_url(DEFAULT_TILE_BUNDLE_BASE_URL + "/index.json")
+
+
 def fetch_index(base_url: str, session: requests.Session) -> dict:
-  index_url = f"{base_url}/index.json"
-  headers = request_headers(index_url)
-  # requests' auth= rewrites the Authorization header, so only fall back to it when the
-  # closed-source bundle gave us nothing.
-  response = session.get(index_url, timeout=HTTP_TIMEOUT_S, headers=headers,
-                         auth=None if headers else request_auth())
+  if _is_broker(base_url):
+    index_url = _broker_index_url()
+    if not index_url:
+      raise ValueError("broker iqmaps URL unavailable")
+    headers = request_headers(base_url)
+  else:
+    index_url = f"{base_url}/index.json"
+    headers = request_headers(index_url)
+  response = session.get(index_url, timeout=HTTP_TIMEOUT_S, headers=headers)
   response.raise_for_status()
   index = response.json()
   regions = index.get("regions")
@@ -213,6 +191,10 @@ def region_bundle_path(selector: str) -> Path:
 def region_valhalla_path(selector: str) -> Path:
   # valhalla mmaps this tar in place, so it stays uncompressed on disk
   return region_bundle_dir(selector) / "valhalla" / "tiles.tar"
+
+
+def region_roads_path(selector: str) -> Path:
+  return region_bundle_dir(selector) / "tiles" / "roads.mbtiles"
 
 
 def region_valhalla_installed(selector: str) -> bool:
@@ -279,6 +261,11 @@ def _write_manifest(selector: str, entry: dict) -> None:
       "bytes": entry.get("valhalla_bytes"),
       "sha256": entry.get("valhalla_sha256", ""),
     }
+  if entry.get("roads_path") and region_roads_path(selector).exists():
+    manifest["roads"] = {
+      "bytes": entry.get("roads_bytes"),
+      "sha256": entry.get("roads_sha256", ""),
+    }
   manifest_path = region_bundle_dir(selector) / "manifest.json"
   manifest_path.parent.mkdir(parents=True, exist_ok=True)
   manifest_path.write_text(json.dumps(manifest, indent=2))
@@ -332,6 +319,7 @@ class TileBundleDownloader:
         progress_offset, progress_total, 1, entry.get("valhalla_objects"),
       )
       if ok:
+        self._download_roads(selector, entry, base_url, progress_offset + int(entry.get("valhalla_bytes", 0)), progress_total)
         _write_manifest(selector, entry)
       return ok
     night_path = region_bundle_path(selector)
@@ -368,9 +356,28 @@ class TileBundleDownloader:
         cloudlog.warning(f"iq_maps: routing extract errored for {selector}: {exc}")
       if not nav_ok:
         cloudlog.warning(f"iq_maps: routing extract failed for {selector}; map tiles installed")
+    self._download_roads(selector, entry, base_url, progress_offset + int(entry.get("bytes", 0)) + int(entry.get("day_bytes", 0))
+                         + int(entry.get("valhalla_bytes", 0)), progress_total)
     _write_manifest(selector, entry)
     cloudlog.info(f"iq_maps: installed tile bundle {selector}")
     return True
+
+  def _download_roads(self, selector: str, entry: dict, base_url: str, progress_offset: int, progress_total: int) -> bool:
+    if not entry.get("roads_path"):
+      return False
+    # roads are additive like routing: a missing or corrupt archive must never cost the region its map
+    try:
+      ok = self._download_file(
+        selector, base_url, entry["roads_path"], int(entry.get("roads_bytes", 0)),
+        str(entry.get("roads_sha256", "")).strip().lower(), region_roads_path(selector),
+        progress_offset, progress_total, 1, entry.get("roads_objects"),
+      )
+    except Exception as exc:
+      ok = False
+      cloudlog.warning(f"iq_maps: roads archive errored for {selector}: {exc}")
+    if not ok:
+      cloudlog.warning(f"iq_maps: roads archive failed for {selector}")
+    return ok
 
   def _download_file(self, selector: str, base_url: str, remote_path: str, expected_bytes: int,
                      expected_sha: str, final_path: Path,
@@ -379,12 +386,15 @@ class TileBundleDownloader:
     # Bundles are published as <name>.pNN because Cloudflare caps proxied bodies at ~100MB.
     # They stream back-to-back into ONE .part file: concatenating afterwards would need
     # double the free space, which devices do not have.
-    base = f"{base_url}/{remote_path.lstrip('/')}"
+    if _is_broker(base_url) and _broker_iqmaps_url is not None:
+      broker_raw = _broker_iqmaps_url(DEFAULT_TILE_BUNDLE_BASE_URL + "/" + remote_path.lstrip('/'))
+      base = broker_raw or f"{base_url}/{remote_path.lstrip('/')}"
+    else:
+      base = f"{base_url}/{remote_path.lstrip('/')}"
     count = len(objects) if objects else parts
     if objects and not _is_hf(base_url):
-      urls = [None] * count          # gitea: resolved per-attempt from the oid
+      urls = [None] * count
     else:
-      # HF (and plain mirrors) serve the same chunks as ordinary .pNN files
       urls = [base] if count <= 1 else [f"{base}.p{i:02d}" for i in range(count)]
     part_path = final_path.with_name(final_path.name + ".part")
     part_path.parent.mkdir(parents=True, exist_ok=True)
@@ -417,22 +427,19 @@ class TileBundleDownloader:
           for index in range(first_part, len(urls)):
             if objects and not _is_hf(base_url):
               url_headers = request_headers(base_url)
-              auth = None if url_headers else request_auth()
               object_url, object_headers = _resolve_oid_url(
                 self.session, base_url, objects[index]["oid"], int(objects[index]["size"]),
                 url_headers)
             else:
               url = urls[index]
-              url_headers = request_headers(url)
-              auth = None if url_headers else request_auth()
-              # Re-resolve per part: a pre-signed LFS object URL can expire mid-download.
+              url_headers = request_headers(base_url) if _is_broker(base_url) else request_headers(url)
               object_url, object_headers = _resolve_object_url(self.session, url, url_headers)
             headers = dict(object_headers)
             offset = skip_in_part if index == first_part else 0
             if offset:
               headers["Range"] = f"bytes={offset}-"
             with self.session.get(object_url, headers=headers, stream=True,
-                                  timeout=HTTP_TIMEOUT_S, auth=auth) as response:
+                                  timeout=HTTP_TIMEOUT_S) as response:
               if offset and response.status_code != 206:
                 # server ignored the range: restart this whole file cleanly
                 f.close()
@@ -486,19 +493,23 @@ class TileBundleDownloader:
         return False
 
       wanted: list[tuple[str, dict]] = []
+      roads_only: list[tuple[str, dict]] = []
       for selector in selectors:
         entry = regions.get(selector)
         if entry is None:
           cloudlog.warning(f"iq_maps: no tile bundle published for {selector}")
           ok = False
           continue
-        if self.include_display and region_bundle_installed(selector) and self._installed_matches(selector, entry):
-          continue
-        if not self.include_display and self._routing_matches(selector, entry):
+        current = ((self.include_display and region_bundle_installed(selector) and self._installed_matches(selector, entry))
+                   or (not self.include_display and self._routing_matches(selector, entry)))
+        if current:
+          if not self._roads_matches(selector, entry):
+            roads_only.append((selector, entry))
           continue
         wanted.append((selector, entry))
 
-      progress_total = sum(self._download_bytes(entry) for _, entry in wanted)
+      progress_total = (sum(self._download_bytes(entry) for _, entry in wanted)
+                        + sum(int(entry.get("roads_bytes", 0)) for _, entry in roads_only))
       progress_offset = 0
       for selector, entry in wanted:
         if self._should_abort():
@@ -510,6 +521,12 @@ class TileBundleDownloader:
           cloudlog.exception(f"iq_maps: tile bundle download failed for {selector}")
           ok = False
         progress_offset += self._download_bytes(entry)
+      for selector, entry in roads_only:
+        if self._should_abort():
+          return False
+        if self._download_roads(selector, entry, base_url, progress_offset, progress_total):
+          _write_manifest(selector, entry)
+        progress_offset += int(entry.get("roads_bytes", 0))
       return ok
     finally:
       self._publish_progress("", 0, 0, active=False)
@@ -531,9 +548,22 @@ class TileBundleDownloader:
     except (OSError, ValueError):
       return False
 
+  @staticmethod
+  def _roads_matches(selector: str, entry: dict) -> bool:
+    if not entry.get("roads_path"):
+      return True
+    try:
+      path = region_roads_path(selector)
+      expected = str(entry.get("roads_sha256", "")).strip().lower()
+      if not expected or path.stat().st_size != int(entry.get("roads_bytes", 0)):
+        return False
+      return _hash_existing(path)[0].hexdigest() == expected
+    except (OSError, ValueError):
+      return False
+
   def _download_bytes(self, entry: dict) -> int:
     display_bytes = int(entry.get("bytes", 0)) + int(entry.get("day_bytes", 0)) if self.include_display else 0
-    return display_bytes + int(entry.get("valhalla_bytes", 0))
+    return display_bytes + int(entry.get("valhalla_bytes", 0)) + int(entry.get("roads_bytes", 0))
 
   @staticmethod
   def _installed_matches(selector: str, entry: dict) -> bool:

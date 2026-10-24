@@ -18,7 +18,8 @@ function agnos_version_allowed {
 
   IFS=',' read -r -a compat_versions <<< "${AGNOS_COMPAT_VERSIONS:-}"
   for compat_version in "${compat_versions[@]}"; do
-    compat_version="${compat_version// /}"
+    compat_version="${compat_version#"${compat_version%%[![:space:]]*}"}"
+    compat_version="${compat_version%"${compat_version##*[![:space:]]}"}"
     if [ -n "$compat_version" ] && [ "$current_version" = "$compat_version" ]; then
       return 0
     fi
@@ -71,24 +72,23 @@ IQFN
 }
 
 function agnos_init {
-  # TODO: move this to agnos
-  sudo rm -f /data/etc/NetworkManager/system-connections/*.nmmeta
+  # On IQ.OS 4.9.9.2+ the root iqpilot-boot-prepare oneshot performs this setup (no owner sudo, verity-safe rootfs); its done flag means skip.
+  if [ ! -f /run/iqpilot-boot-prepare.done ]; then
+    # TODO: move this to agnos
+    sudo -n rm -f /data/etc/NetworkManager/system-connections/*.nmmeta 2>/dev/null || true
 
-  # set success flag for current boot slot
-  sudo abctl --set_success
+    sudo -n abctl --set_success 2>/dev/null || true
 
-  # TODO: do this without udev in AGNOS
-  # udev does this, but sometimes we startup faster
-  sudo chgrp gpu /dev/adsprpc-smd /dev/ion /dev/kgsl-3d0
-  sudo chmod 660 /dev/adsprpc-smd /dev/ion /dev/kgsl-3d0
+    sudo -n chgrp gpu /dev/adsprpc-smd /dev/ion /dev/kgsl-3d0 2>/dev/null || true
+    sudo -n chmod 660 /dev/adsprpc-smd /dev/ion /dev/kgsl-3d0 2>/dev/null || true
 
-  # iptables-nft fails on this kernel (no nf_tables module), breaking NM hotspot NAT rules
-  if [ "$(readlink /etc/alternatives/iptables)" != "/usr/sbin/iptables-legacy" ]; then
-    sudo mount -o remount,rw /
-    sudo ln -sf /usr/sbin/iptables-legacy /etc/alternatives/iptables
-    sudo ln -sf /usr/sbin/iptables-legacy-restore /etc/alternatives/iptables-restore
-    sudo ln -sf /usr/sbin/iptables-legacy-save /etc/alternatives/iptables-save
-    sudo mount -o remount,ro /
+    if [ "$(readlink /etc/alternatives/iptables)" != "/usr/sbin/iptables-legacy" ]; then
+      sudo -n mount -o remount,rw / 2>/dev/null || true
+      sudo -n ln -sf /usr/sbin/iptables-legacy /etc/alternatives/iptables 2>/dev/null || true
+      sudo -n ln -sf /usr/sbin/iptables-legacy-restore /etc/alternatives/iptables-restore 2>/dev/null || true
+      sudo -n ln -sf /usr/sbin/iptables-legacy-save /etc/alternatives/iptables-save 2>/dev/null || true
+      sudo -n mount -o remount,ro / 2>/dev/null || true
+    fi
   fi
 
   # Check if AGNOS update is required
@@ -108,7 +108,7 @@ function agnos_init {
       esac
     fi
     if $AGNOS_PY --verify $MANIFEST; then
-      sudo reboot
+      sudo -n reboot
     fi
     # On stock AGNOS the updater picks updater_weston (weston is up), a compiled display binary that
     # can't get a compositor surface on a first boot, so the IQ.OS flash silently wedges on the comma
@@ -117,7 +117,7 @@ function agnos_init {
     # progress prompt fine, so fall through and keep it. This mirrors the updater's own weston check.
     if systemctl is-active --quiet weston-ready; then
       if $AGNOS_PY --swap $MANIFEST; then
-        sudo reboot
+        sudo -n reboot
       fi
     fi
     $DIR/iqpilot/system/hardware/tici/updater $AGNOS_PY $MANIFEST
@@ -201,56 +201,67 @@ function launch {
   # Install independent systemd services BEFORE build so they run even
   # when openpilot fails to compile — SSH/BLE/hephaestusd must always
   # be reachable for device recovery.
+  # On IQ.OS 4.9.9.2+ the root boot-prepare oneshot already installed+started these; skip the owner-sudo path.
+  # Exception: if boot-prepare ran before the checkout existed (first boot after flash), the services weren't started.
+  if [ ! -f /run/iqpilot-boot-prepare.done ] || ! systemctl is-active --quiet hephaestusd.service; then
   for service_name in hephaestusd ble-transportd flockd; do
     service_src="$DIR/iqpilot/system/${service_name}.service"
     service_dst="/etc/systemd/system/${service_name}.service"
     service_lib="/lib/systemd/system/${service_name}.service"
     service_dropin="/run/systemd/system/${service_name}.service.d"
     service_exec="$(grep '^ExecStart=' "$service_src")"
-    sudo mkdir -p "$service_dropin"
-    printf '[Service]\nWorkingDirectory=%s\nEnvironment="IQPILOT_SOURCE_ROOT=%s/iqpilot"\nEnvironment="IQPILOT_PROPRIETARY_ROOT=%s/artifacts"\nEnvironment="PYTHONPATH=%s"\nExecStart=\n%s\n' "$RUNTIME_COMPAT_ROOT" "$DIR" "$DIR" "$PYTHONPATH" "$service_exec" | sudo tee "$service_dropin/iqpilot-packages.conf" >/dev/null
-    sudo systemctl daemon-reload
+    sudo -n mkdir -p "$service_dropin" 2>/dev/null || mkdir -p "$service_dropin" 2>/dev/null || true
+    printf '[Service]\nWorkingDirectory=%s\nEnvironment="IQPILOT_SOURCE_ROOT=%s/iqpilot"\nEnvironment="IQPILOT_PROPRIETARY_ROOT=%s/artifacts"\nEnvironment="PYTHONPATH=%s"\nExecStart=\n%s\n' "$RUNTIME_COMPAT_ROOT" "$DIR" "$DIR" "$PYTHONPATH" "$service_exec" | sudo -n tee "$service_dropin/iqpilot-packages.conf" >/dev/null 2>&1 || true
+    sudo -n systemctl daemon-reload 2>/dev/null || true
     if [ -f "$service_lib" ] && grep -q "/usr/libexec/iqpilot/iqpilot_bundle_runner" "$service_lib"; then
       if [ -f "$service_dst" ]; then
-        sudo mount -o remount,rw /
-        sudo rm -f "$service_dst"
-        sudo systemctl daemon-reload
-        sudo mount -o remount,ro /
+        sudo -n mount -o remount,rw / 2>/dev/null || true
+        sudo -n rm -f "$service_dst" 2>/dev/null || true
+        sudo -n systemctl daemon-reload 2>/dev/null || true
+        sudo -n mount -o remount,ro / 2>/dev/null || true
       fi
-      sudo systemctl enable "${service_name}.service"
+      sudo -n systemctl enable "${service_name}.service" 2>/dev/null || true
       # --no-block: these units ExecStartPre-wait for the verified runtime. Blocking here
       # made a missing runner stall the whole install for the unit's 600s timeout (x3 units).
       if systemctl is-active --quiet "${service_name}.service"; then
-        sudo systemctl restart --no-block "${service_name}.service"
+        sudo -n systemctl restart --no-block "${service_name}.service" 2>/dev/null || true
       else
-        sudo systemctl start --no-block "${service_name}.service"
+        sudo -n systemctl start --no-block "${service_name}.service" 2>/dev/null || true
       fi
     elif [ -f "$service_src" ]; then
       if [ ! -f "$service_dst" ] || ! cmp -s "$service_src" "$service_dst"; then
-        sudo mount -o remount,rw /
-        sudo cp "$service_src" "$service_dst"
-        sudo systemctl daemon-reload
-        sudo systemctl enable "${service_name}.service"
-        sudo mount -o remount,ro /
-        sudo systemctl restart --no-block "${service_name}.service"
+        sudo -n mount -o remount,rw / 2>/dev/null || true
+        sudo -n cp "$service_src" "$service_dst" 2>/dev/null || true
+        sudo -n systemctl daemon-reload 2>/dev/null || true
+        sudo -n systemctl enable "${service_name}.service" 2>/dev/null || true
+        sudo -n mount -o remount,ro / 2>/dev/null || true
+        sudo -n systemctl restart --no-block "${service_name}.service" 2>/dev/null || true
       elif ! systemctl is-active --quiet "${service_name}.service"; then
-        sudo systemctl start --no-block "${service_name}.service"
+        sudo -n systemctl start --no-block "${service_name}.service" 2>/dev/null || true
       fi
     fi
   done
+  fi
 
   # detect mr.one C3 Lite hardware
   set_lite_hw
 
   # hardware specific init
   if [ -f /AGNOS ]; then
+    if ! id -nG 2>/dev/null | grep -qw otaflash; then
+      sudo -n usermod -aG otaflash "$(whoami)" 2>/dev/null || true
+    fi
     agnos_init
 
-    sudo "$DIR/iqpilot/system/hardware/tici/zram_setup.sh" || true
+    # IQ.OS 4.9.9.2+ sets up zram via the baked iqos-zram.service; only the legacy owner-sudo path runs it here.
+    if [ ! -f /run/iqpilot-boot-prepare.done ]; then
+      sudo -n "$DIR/iqpilot/system/hardware/tici/zram_setup.sh" 2>/dev/null || true
+    fi
   fi
 
-  if [ -f "$DIR/artifacts/runtime/apply_boot_branding.py" ]; then
-    sudo python3 "$DIR/artifacts/runtime/apply_boot_branding.py" || true
+  # IQ.OS 4.9.9.2+ bakes branding (bg.jpg, splash, passwd/shadow) into the image; applying from /data as root is an escalation path, so skip it there.
+  if [ ! -f /run/iqpilot-boot-prepare.done ] && [ -f "$DIR/artifacts/runtime/apply_boot_branding.py" ]; then
+    sudo -n python3 "$DIR/artifacts/runtime/apply_boot_branding.py" 2>/dev/null || true
   fi
 
   # /home is an ephemeral overlay (resets each boot); re-inject the source line. best-effort
@@ -270,7 +281,7 @@ function launch {
     if pkill -f /tmp/installer 2>/dev/null; then sleep 1; fi
     "$MANAGER_PYTHON" ./build.py
     for service_name in hephaestusd ble-transportd flockd; do
-      sudo systemctl restart --no-block "${service_name}.service"
+      sudo -n systemctl restart --no-block "${service_name}.service" 2>/dev/null || true
     done
   else
     MANAGER_PYTHON="/usr/local/venv/bin/python3"

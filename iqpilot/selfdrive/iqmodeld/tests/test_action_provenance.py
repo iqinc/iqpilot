@@ -108,3 +108,53 @@ def test_previous_action_permission_is_not_inherited_by_next_frame():
     assert action.desiredCurvature == previous.desiredCurvature
     assert action.lateralActionSource == "nativeAction"
     assert action.legacyLookahead.contract == "unsupported"
+
+
+@pytest.mark.parametrize("producer", ["local", "offload"])
+@pytest.mark.parametrize("kind", ["nativeAction", "nativeCurvature", "plan", "planplus", "synthetic"])
+@pytest.mark.parametrize("speed", [0.0, 0.2, 20.0])
+@pytest.mark.parametrize("lat_active", [False, True])
+def test_curvature_seed_tracks_vehicle_only_while_lateral_is_inactive(producer, kind, speed, lat_active):
+  previous = log.ModelDataV2.Action(desiredCurvature=0.004, desiredAcceleration=0.1)
+  expected_previous = log.ModelDataV2.Action(
+    desiredCurvature=0.004 if lat_active else -0.012, desiredAcceleration=0.1,
+  )
+  outputs = outputs_for(kind)
+  if producer == "local":
+    state = runtime()
+    expected = NeuralEngineState.get_action_from_model(state, outputs, expected_previous, 0.45, 0.4, speed)
+    action = NeuralEngineState.get_action_from_model(
+      state, outputs, previous, 0.45, 0.4, speed, lat_active=lat_active, current_curvature=-0.012,
+    )
+  else:
+    expected = get_action_from_model(outputs, expected_previous, speed, 0.45, 0.4, 0.1)
+    action = get_action_from_model(
+      outputs, previous, speed, 0.45, 0.4, 0.1, lat_active=lat_active, current_curvature=-0.012,
+    )
+  for field in ("desiredCurvature", "desiredAcceleration", "shouldStop", "lateralActionSource"):
+    assert getattr(action, field) == getattr(expected, field)
+  if speed <= 0.3:
+    assert action.desiredCurvature == expected_previous.desiredCurvature
+
+
+@pytest.mark.parametrize("producer", ["local", "offload"])
+def test_engagement_keeps_curvature_history_from_last_inactive_frame(producer):
+  previous = log.ModelDataV2.Action(desiredCurvature=0.03, desiredAcceleration=0.1)
+  outputs = outputs_for("nativeAction")
+  if producer == "local":
+    state = runtime()
+    inactive = NeuralEngineState.get_action_from_model(
+      state, outputs, previous, 0.45, 0.4, 0.2, lat_active=False, current_curvature=-0.012,
+    )
+    active = NeuralEngineState.get_action_from_model(
+      state, outputs, inactive, 0.45, 0.4, 20.0, lat_active=True, current_curvature=0.02,
+    )
+  else:
+    inactive = get_action_from_model(
+      outputs, previous, 0.2, 0.45, 0.4, 0.1, lat_active=False, current_curvature=-0.012,
+    )
+    active = get_action_from_model(
+      outputs, inactive, 20.0, 0.45, 0.4, 0.1, lat_active=True, current_curvature=0.02,
+    )
+  assert inactive.desiredCurvature == pytest.approx(-0.012)
+  assert active.desiredCurvature == pytest.approx(smooth_value(-0.8 / 20.0 ** 2, -0.012, 0.1))

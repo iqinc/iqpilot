@@ -42,6 +42,7 @@ from iqpilot.selfdrive.ui.layouts.settings.developer import DeveloperLayout
 from iqpilot.selfdrive.ui.layouts.settings.device import DeviceLayout
 from iqpilot.selfdrive.ui.layouts.settings.software import SoftwareLayout
 from iqpilot.selfdrive.ui.layouts.settings.toggles import TogglesLayout
+from iqpilot.selfdrive.ui.lib.nnff_settings import nnff_availability
 from iqpilot.selfdrive.ui.ui_state import device, ui_state
 from iqpilot.system.hardware import HARDWARE
 from iqpilot.system.hardware.hw import Paths
@@ -1636,8 +1637,18 @@ class VehicleLayout(Widget):
                                     callback=self._platform_selector._on_clicked)
     self._legend_widget = LegendWidget(self._platform_selector)
     self._refresh_vehicle_row()
+    self._nnff_available = False
+    self._nnff_status = ""
+    self._nnff_vehicle_key = None
+    self._nnff = toggle_item(
+      title=lambda: tr("NNFF Steering"),
+      description=lambda: tr("Use a vehicle-specific neural network for steering feedforward.") + "<br><br>" + self._nnff_status,
+      initial_state=ui_state.params.get_bool("NeuralNetworkFeedForward"),
+      callback=self._on_nnff,
+    )
+    self._refresh_nnff(force=True)
 
-    self.items = [self._vehicle_item, self._legend_widget]
+    self.items = [self._vehicle_item, self._legend_widget, self._nnff]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
 
   @staticmethod
@@ -1663,12 +1674,41 @@ class VehicleLayout(Widget):
     self._current_brand = brand
     self._brand_settings = brand_settings_for(brand)
     brand_rows = self._brand_settings.items if self._brand_settings else []
-    self.items = [self._vehicle_item, self._legend_widget, *brand_rows]
+    self.items = [self._vehicle_item, self._legend_widget, self._nnff, *brand_rows]
     self._scroller = Scroller(self.items, line_separator=True, spacing=0)
+
+  def _refresh_nnff(self, force=False):
+    cp = ui_state.CP
+    key = (id(cp), cp.carFingerprint if cp else None, cp.brand if cp else None, cp.steerControlType if cp else None,
+           cp.lateralTuning.which() if cp else None, cp.flags if cp else None,
+           ui_state.params.get("CarPlatformBundle"))
+    if force or key != self._nnff_vehicle_key:
+      self._nnff_vehicle_key = key
+      self._nnff_available, self._nnff_status = nnff_availability(cp, ui_state.params)
+    self._sync_nnff_state()
+
+  def _sync_nnff_state(self):
+    saved = ui_state.params.get_bool("NeuralNetworkFeedForward")
+    self._nnff.action_item.set_state(saved)
+    self._nnff.action_item.set_enabled(ui_state.is_offroad() and (self._nnff_available or saved))
+
+  def _on_nnff(self, enabled):
+    if not ui_state.is_offroad():
+      self._sync_nnff_state()
+      return
+    if enabled:
+      self._refresh_nnff(force=True)
+      if not self._nnff_available:
+        return
+      ui_state.params.put_bool("IQHkgReducedTorqueFeedback", False)
+    ui_state.params.put_bool("NeuralNetworkFeedForward", enabled)
+    ui_state.params.put_bool("OnroadCycleRequested", True)
+    self._sync_nnff_state()
 
   def _on_vehicle_changed(self):
     self._refresh_vehicle_row()
     self._sync_brand_panel()
+    self._refresh_nnff()
 
   def _update_state(self):
     self._on_vehicle_changed()
@@ -1680,4 +1720,5 @@ class VehicleLayout(Widget):
     self._scroller.render(rect)
 
   def show_event(self):
+    self._refresh_nnff(force=True)
     self._scroller.show_event()

@@ -1,6 +1,11 @@
 """
 Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 """
+import ctypes
+import os
+import struct
+import subprocess
+import sys
 import types
 
 import pytest
@@ -34,6 +39,105 @@ class TestTelemetryContract:
     telemetry.send()
     assert sent and sent[0][0] == "egpuDockState"
     assert sent[0][1].valid is False
+
+
+class _Metrics(ctypes.Structure):
+  _fields_ = [("AvgTemperature", ctypes.c_uint16 * 4), ("AverageSocketPower", ctypes.c_uint16),
+              ("AverageGfxActivity", ctypes.c_uint16), ("AverageGfxclkFrequencyPostDs", ctypes.c_uint16), ("AvgFanRpm", ctypes.c_uint16)]
+
+
+class _MetricsExternal(ctypes.Structure):
+  _fields_ = [("SmuMetrics", _Metrics)]
+
+
+def _fake_dock(table: bytes, calls: list):
+  smu_mod = types.SimpleNamespace(SmuMetricsExternal_t=_MetricsExternal, TABLE_SMU_METRICS=7, PPSMC_MSG_TransferTableSmu2Dram=0x13,
+                                  PPSMC_MSG_GetPptLimit=0x5d, TEMP_HOTSPOT=1, TEMP_MEM=2)
+
+  def send_msg(msg, arg, read_back_arg=False, timeout=None):
+    calls.append(msg)
+    return 100 if read_back_arg else None
+
+  def vram_view(paddr, size):
+    calls.append(("vram", paddr, size))
+    return memoryview(table[:size])
+
+  def read_table(*args):
+    raise AssertionError("read_table repeats the SMU table transfer")
+
+  adev = types.SimpleNamespace(vram=types.SimpleNamespace(view=vram_view))
+  smu = types.SimpleNamespace(smu_mod=smu_mod, adev=adev, driver_table_paddr=0x4000, _send_msg=send_msg, read_table=read_table)
+  usb = types.SimpleNamespace(usb=types.SimpleNamespace(control_read=lambda req, n: struct.pack("<Hh?", 5100, 900, False)),
+                              read=lambda addr, n: bytes([0x78]))
+  return types.SimpleNamespace(iface=types.SimpleNamespace(dev_impl=types.SimpleNamespace(smu=smu), pci_dev=types.SimpleNamespace(usb=usb)))
+
+
+class TestTelemetrySmuRead:
+  def test_metrics_refresh_transfers_the_table_once(self):
+    from iqpilot.selfdrive.iqmodeld import egpu_telemetry
+    metrics = _MetricsExternal()
+    metrics.SmuMetrics.AvgTemperature[1], metrics.SmuMetrics.AvgTemperature[2] = 61, 55
+    metrics.SmuMetrics.AverageSocketPower, metrics.SmuMetrics.AverageGfxActivity = 42, 7
+    calls: list = []
+    amd = _fake_dock(bytes(metrics) + bytes(64), calls)
+
+    class Device:
+      _opened_devices = {"AMD"}
+
+      def __class_getitem__(cls, key):
+        return amd
+
+    sent = []
+    telemetry = egpu_telemetry.EgpuDockTelemetry(types.SimpleNamespace(send=lambda n, m: sent.append((n, m))), big=True)
+    telemetry._device = lambda: Device
+    telemetry.send()
+
+    assert calls.count(0x13) == 1
+    assert ("vram", 0x4000, ctypes.sizeof(_MetricsExternal)) in calls
+    state = sent[0][1].egpuDockState
+    assert sent[0][1].valid
+    assert (state.tempC, state.memoryTempC, state.powerDrawW, state.gpuUsagePercent) == (61, 55, 42, 7)
+    assert state.supplyVoltage == 5100 and state.pcieLtssm == 0x78
+
+
+class TestDockPowerLimit:
+  def test_limit_matches_stock(self):
+    from iqpilot.selfdrive.iqmodeld.egpu_helpers import EGPU_POWER_LIMIT_W
+    assert EGPU_POWER_LIMIT_W == 100
+
+  def test_default_and_override(self, monkeypatch):
+    from iqpilot.selfdrive.iqmodeld import egpu_helpers
+    monkeypatch.setenv("AM_POWER_LIMIT", "")
+    monkeypatch.delenv("AM_POWER_LIMIT")
+    egpu_helpers.apply_dock_power_limit()
+    assert os.environ["AM_POWER_LIMIT"] == str(egpu_helpers.EGPU_POWER_LIMIT_W)
+    monkeypatch.setenv("AM_POWER_LIMIT", "150")
+    egpu_helpers.apply_dock_power_limit()
+    assert os.environ["AM_POWER_LIMIT"] == "150"
+
+  def test_worker_sets_it_before_opening_the_dock(self):
+    env = {k: v for k, v in os.environ.items() if k != "AM_POWER_LIMIT"}
+    code = "import os, sys, iqpilot.selfdrive.iqmodeld.iqegpumodeld; assert 'tinygrad.runtime.ops_amd' not in sys.modules; print(os.environ['AM_POWER_LIMIT'])"
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip().splitlines()[-1] == "100"
+
+  def test_prefetch_sets_it_before_opening_the_dock(self, monkeypatch):
+    from iqpilot.selfdrive.iqmodeld import egpu_prefetch
+    monkeypatch.setenv("AM_POWER_LIMIT", "")
+    monkeypatch.delenv("AM_POWER_LIMIT")
+    seen = {}
+
+    class FakeDevice:
+      def __class_getitem__(cls, key):
+        seen[key] = os.environ.get("AM_POWER_LIMIT")
+
+    monkeypatch.setenv("DEV", "USB+AMD:LLVM")
+    monkeypatch.setenv("GMMU", "0")
+    monkeypatch.setattr(egpu_prefetch, "patch_tinygrad_fetch_fw", lambda: None)
+    monkeypatch.setitem(sys.modules, "tinygrad.device", types.SimpleNamespace(Device=FakeDevice))
+    egpu_prefetch._open_dock_once()
+    assert seen == {"AMD": "100"}
 
 
 class TestBigFrameFlag:

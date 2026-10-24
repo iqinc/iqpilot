@@ -1,6 +1,6 @@
 import copy
 from iqdbc.can import CANDefine, CANParser
-from iqdbc.car import Bus, structs
+from iqdbc.car import Bus, create_button_events, structs
 from iqdbc.car.common.conversions import Conversions as CV
 from iqdbc.car.interfaces import CarStateBase
 from iqdbc.car.tesla import TESLA_BLINKERS
@@ -10,6 +10,9 @@ from iqdbc.car.tesla.values import (DBC, CANBUS, CAR, GEAR_MAP, LEGACY_CARS, LEG
 from iqdbc.lvbs.car.tesla.iq_carstate import IQCarState
 from iqdbc.lvbs.car.tesla.values import TeslaFlagsIQ, TeslaSafetyFlagsIQ
 from iqpilot.common.params import Params
+
+ButtonType = structs.CarState.ButtonEvent.Type
+ACC_CANCEL_GENERIC_SILENT = 13
 
 
 def stock_autosteer_invalid(CP, CP_IQ, autopilot_state: int, autosteer_enabled: int = 0) -> bool:
@@ -35,6 +38,7 @@ class CarState(CarStateBase, IQCarState):
     self.cruise_enabled_prev = False
 
     self.hands_on_level = 0
+    self.prev_cancel_request = False
     self.das_control = None
     self.das_body_controls_dat = b""
     self.cruise_override = False
@@ -48,10 +52,13 @@ class CarState(CarStateBase, IQCarState):
       self.shifter_values = self.can_defines["DI_torque2"]["DI_gear"]
       self._odometer_store = None
     else:
-      from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
-      iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
       self.shifter_values = self.can_define.dv["DI_systemStatus"]["DI_gear"]
-      self._odometer_store = iq_lvbs_alc.create_vehicle_odometer_store(CP, Params())
+      try:
+        from iqpilot.system.proprietary_runtime._verified_import import import_verified_module
+        iq_lvbs_alc = import_verified_module("iqpilot_alc_private", "iqpilot_private.konn3kt.iqlvbs.alc")
+        self._odometer_store = iq_lvbs_alc.create_vehicle_odometer_store(CP, Params())
+      except Exception:
+        self._odometer_store = None
 
   def update_summon_state(self, summon_state: str, cruise_enabled: bool):
     summon_now = summon_state in ("ACTIVE", "COMPLETE", "SELFPARK_STARTED")
@@ -243,6 +250,11 @@ class CarState(CarStateBase, IQCarState):
     # AEB
     ret.stockAeb = cp_ap_party.vl["DAS_control"]["DAS_aebEvent"] == 1
 
+    # stalkless cars route the steering wheel cancel request through the AP computer
+    cancel_request = int(cp_ap_party.vl["DAS_control"]["DAS_accState"]) == ACC_CANCEL_GENERIC_SILENT
+    ret.buttonEvents = create_button_events(cancel_request, self.prev_cancel_request, {True: ButtonType.cancel}, unpressed_btn=False)
+    self.prev_cancel_request = cancel_request
+
     # LKAS
     steer_control_type = int(cp_ap_party.vl["DAS_steeringControl"]["DAS_steeringControlType"])
     if self.CP.flags & TeslaFlags.LEGACY_DAS_STEERING:
@@ -271,7 +283,7 @@ class CarState(CarStateBase, IQCarState):
       self.das_body_controls_dat = bytes(can_parsers[Bus.cam].dat.get(0x3E9, b""))
 
     IQCarState.update(self, ret, ret_iq, can_parsers)
-    if ret.odometer > 0.0:
+    if ret.odometer > 0.0 and self._odometer_store is not None:
       ret.odometer = self._odometer_store.record(ret.odometer) or 0.0
 
     return ret, ret_iq

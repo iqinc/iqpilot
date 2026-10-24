@@ -3,6 +3,7 @@ Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed 
 """
 from __future__ import annotations
 
+import ctypes
 import struct
 
 from iqpilot.cereal import messaging
@@ -89,8 +90,10 @@ class EgpuDockTelemetry:
     if self.big and "AMD" in Device._opened_devices and self.sends % METRICS_REFRESH_EVERY == 1:
       try:
         smu = Device["AMD"].iface.dev_impl.smu
+        metrics_t = smu.smu_mod.SmuMetricsExternal_t
         smu._send_msg(smu.smu_mod.PPSMC_MSG_TransferTableSmu2Dram, smu.smu_mod.TABLE_SMU_METRICS, timeout=100)
-        metrics = smu.read_table(smu.smu_mod.SmuMetricsExternal_t, smu.smu_mod.TABLE_SMU_METRICS).SmuMetrics
+        metrics_buf = bytearray(smu.adev.vram.view(smu.driver_table_paddr, ctypes.sizeof(metrics_t))[:])
+        metrics = metrics_t.from_buffer(metrics_buf).SmuMetrics
         self.metrics = {"tempC": metrics.AvgTemperature[smu.smu_mod.TEMP_HOTSPOT],
                         "memoryTempC": metrics.AvgTemperature[smu.smu_mod.TEMP_MEM],
                         "powerDrawW": metrics.AverageSocketPower,

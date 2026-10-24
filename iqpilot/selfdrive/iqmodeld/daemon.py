@@ -371,7 +371,10 @@ class NeuralEngineState(InferenceStateBase):
 
   def get_action_from_model(self, outputs: dict[str, np.ndarray], previous_action: log.ModelDataV2.Action,
                             lat_action_t: float, long_action_t: float, vehicle_speed: float,
-                            lat_smooth_seconds: float | None = None) -> log.ModelDataV2.Action:
+                            lat_smooth_seconds: float | None = None, *,
+                            lat_active: bool = True, current_curvature: float = 0.0) -> log.ModelDataV2.Action:
+    if not lat_active:
+      previous_action.desiredCurvature = current_curvature
     if lat_smooth_seconds is None:
       lat_smooth_seconds = self.LAT_SMOOTH_SECONDS
 
@@ -585,7 +588,7 @@ class InferenceDaemon:
     self._pub = PubMaster(pub_services)
     self._sub = SubMaster([
       "deviceState", "carState", "roadCameraState", "extrinsicsCalibration",
-      "driverMonitoringState", "carControl", "lateralDelay", "iqNavState", "navInstruction", "radarState",
+      "driverMonitoringState", "carControl", "controlsState", "lateralDelay", "iqNavState", "navInstruction", "radarState",
     ] + self._feature_inputs.services)
     self._message_memory = DrivePacketMemory()
     self._params = Params()
@@ -681,7 +684,8 @@ class InferenceDaemon:
     )
     lat_smooth_total_sec = min(self._runtime.LAT_SMOOTH_SECONDS + self._lat_smooth_extra_sec, MODEL_SMOOTHING_MAX_TOTAL_SEC)
     action = self._runtime.get_action_from_model(
-      outputs, self._previous_action, lat_horizon, long_horizon, vehicle_speed, lat_smooth_total_sec
+      outputs, self._previous_action, lat_horizon, long_horizon, vehicle_speed, lat_smooth_total_sec,
+      lat_active=self._sub["carControl"].latActive, current_curvature=self._sub["controlsState"].curvature,
     )
     self._previous_action = action
 

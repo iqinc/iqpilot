@@ -162,7 +162,7 @@ void open_external_url(std::string_view url) {
   }
 }
 
-// IQ.Pilot patch: iqpilot routes live on konn3kt, not comma connect. konn3kt has no
+// IQ.Pilot patch: iqpilot routes live on konn3kt. konn3kt has no
 // useradmin equivalent, so that link is gone; the share link keeps connect's
 // <dongle_id>/<log_id> path shape (see tools/lib/logreader.py parse_indirect).
 std::string route_konn3kt_url(const RouteIdentifier &route_id) {

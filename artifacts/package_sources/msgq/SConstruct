@@ -54,8 +54,8 @@ elif GetOption('asan'):
 
 env = Environment(
   ENV=os.environ,
-  CC='clang',
-  CXX='clang++',
+  CC=os.environ.get('CC', 'clang'),
+  CXX=os.environ.get('CXX', 'clang++'),
   CCFLAGS=[
     "-g",
     "-fPIC",
@@ -76,6 +76,9 @@ env = Environment(
   CYTHONCFILESUFFIX=".cpp",
   tools=["default", "cython"]
 )
+
+if 'clang' not in env['CXX']:
+  env['CCFLAGS'] = [f for f in env['CCFLAGS'] if f not in ('-Wshadow', '-Wno-vla-cxx-extension', '-Wno-unknown-warning-option')] + ['-Wshadow=local']
 
 Export('env', 'arch', 'common')
 

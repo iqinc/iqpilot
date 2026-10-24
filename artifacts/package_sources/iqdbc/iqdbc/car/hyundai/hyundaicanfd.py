@@ -4,7 +4,7 @@ import numpy as np
 from iqdbc.car import CanBusBase
 from iqdbc.car.carlog import carlog
 from iqdbc.car.crc import CRC16_XMODEM
-from iqdbc.car.hyundai.values import HyundaiFlags, HyundaiExtFlags
+from iqdbc.car.hyundai.values import Buttons, HyundaiFlags, HyundaiExtFlags
 from iqpilot.common.params import Params
 from iqdbc.car.common.conversions import Conversions as CV
 from iqpilot.cereal import log
@@ -767,6 +767,9 @@ def create_ccnc_messages(CP, packer, CAN, frame, CC, CS, hud_control,
         values = copy.copy(CS.cruise_buttons_msg)
         # Keep the physical long press on ECAN for CarState, but don't forward it to CAM.
         values["NORMAL_CRUISE_MAIN_BTN"] = 0
+        # the camera's own SCC cancels when SET- is held ~2 s; openpilot sets speed from the ECAN copy
+        if CC.enabled and values["CRUISE_BUTTONS"] in (Buttons.RES_ACCEL, Buttons.SET_DECEL):
+          values["CRUISE_BUTTONS"] = Buttons.NONE
 
         if  HDA_LFA_SymSta == 0 and 0 < frame % 200 < 12:
           values["LFA_BTN"] = 1

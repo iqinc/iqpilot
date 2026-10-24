@@ -53,6 +53,11 @@ TurnDirection = custom.IQTurnSignalDirection
 
 IGNORED_SAFETY_MODES = (SafetyModel.silent, SafetyModel.noOutput)
 
+
+def rx_checks_failed_while_powered(panda_state) -> bool:
+  # a car powering off stops its bus, which fails the rx checks a moment after its ignition line falls
+  return bool(panda_state.safetyRxChecksInvalid and (panda_state.ignitionLine or panda_state.ignitionCan))
+
 NON_BLOCKING_PROCESSES = {'mapd', 'iqmapd', 'navd', 'navincidentd', 'navrenderd', 'iqsentryd', 'k3wgd', 'webrtcd', 'stream_encoderd'}
 
 
@@ -177,6 +182,8 @@ class SelfdriveD(GapButtonActions):
     if not car_recognized:
       self.events.add(EventName.carUnrecognized, static=True)
       set_offroad_alert("Offroad_CarUnrecognized", True)
+    elif self.CP.passive and self.CP.brand == "tesla" and self.params.get_bool("TeslaStockAutosteerActive"):
+      self.events.add(EventName.invalidLkasSetting, static=True)
     elif self.CP.passive:
       self.events.add(EventName.dashcamMode, static=True)
 
@@ -439,7 +446,7 @@ class SelfdriveD(GapButtonActions):
 
       # safety mismatch allows some time for pandad to set the safety mode and publish it back from panda
       if (safety_mismatch and self.sm.frame*DT_CTRL > 10.) or \
-         pandaState.safetyRxChecksInvalid or \
+         rx_checks_failed_while_powered(pandaState) or \
          self.mismatch_counter >= 200:
         self.events.add(EventName.controlsMismatch)
 

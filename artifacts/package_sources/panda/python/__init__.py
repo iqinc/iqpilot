@@ -14,7 +14,7 @@ from iqdbc.car.structs import CarParams
 from .base import BaseHandle
 from .constants import FW_PATH, McuType
 from .dfu import PandaDFU
-from .spi import PandaSpiHandle, PandaSpiException, PandaProtocolMismatch
+from .spi import LegacyPandaSpiHandle, PandaSpiHandle, PandaSpiException, PandaProtocolMismatch
 from .usb import PandaUsbHandle
 from .utils import logger
 
@@ -259,7 +259,11 @@ class Panda:
   def spi_connect(cls, serial, ignore_version=False):
     try:
       handle = PandaSpiHandle()
-      dat = handle.get_protocol_version()
+      try:
+        dat = handle.get_info()
+      except PandaSpiException:
+        handle = LegacyPandaSpiHandle()
+        dat = handle.get_protocol_version()
     except PandaSpiException:
       return None, None, None, False, None
 
@@ -268,14 +272,14 @@ class Panda:
     if pid not in (0xcc, 0xee):
       raise PandaProtocolMismatch(f"invalid bootstub status ({pid=}). reflash panda")
     bootstub = pid == 0xee
-    spi_version = dat[14]
+    spi_version = dat[14] if isinstance(handle, LegacyPandaSpiHandle) else None
 
     # did we get the right panda?
     if serial is not None and spi_serial != serial:
       return None, None, None, False, None
 
     # ensure our protocol version matches the panda
-    if (not ignore_version) and spi_version != handle.PROTOCOL_VERSION:
+    if (not ignore_version) and spi_version is not None and spi_version != handle.PROTOCOL_VERSION:
       raise PandaProtocolMismatch(f"panda protocol mismatch: expected {handle.PROTOCOL_VERSION}, got {spi_version}. reflash panda")
 
     # got a device and all good

@@ -17,7 +17,8 @@ _OVERRIDE_KEYS = (
   "combinedSplitArtifact",
   "iqCombinedArtifact",
 )
-_SPLIT_ROLE_PATTERN = re.compile(r"^driving_(vision|policy|off_policy|on_policy)_(.+)_tinygrad\.pkl$")
+_SPLIT_ROLE_PATTERN = re.compile(r"^driving_(vision|policy|off_policy|on_policy)_(.+)_tinygrad\.pkl(?:\.iqc)?$")
+_IQC_SUFFIX = ".iqc"
 
 
 def _bundle_models(bundle) -> list:
@@ -91,8 +92,9 @@ def combined_split_artifact_candidates(bundle) -> list[Path]:
 
 def resolve_combined_split_artifact(bundle) -> Path | None:
   for candidate in combined_split_artifact_candidates(bundle):
-    if candidate.is_file():
-      return candidate
+    for path in (candidate, candidate.with_name(candidate.name + _IQC_SUFFIX)):
+      if path.is_file():
+        return path
   return None
 
 

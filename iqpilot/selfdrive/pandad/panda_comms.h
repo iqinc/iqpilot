@@ -14,7 +14,7 @@
 
 
 #define TIMEOUT 0
-#define SPI_BUF_SIZE 2048
+#define SPI_BUF_SIZE 4096
 
 
 // comms base class
@@ -57,10 +57,16 @@ private:
 
 #ifndef __APPLE__
 struct __attribute__((packed)) spi_header {
-  uint8_t sync;
   uint8_t endpoint;
+  uint32_t id;
   uint16_t tx_len;
-  uint16_t max_rx_len;
+  uint16_t rx_len;
+};
+
+struct __attribute__((packed)) spi_resp_header {
+  uint8_t status;
+  uint32_t id;
+  uint16_t len;
 };
 
 class PandaSpiHandle : public PandaCommsHandle {
@@ -81,9 +87,7 @@ private:
   uint8_t rx_buf[SPI_BUF_SIZE];
   inline static std::recursive_mutex hw_lock;
 
-  int wait_for_ack(uint8_t ack, uint8_t tx, unsigned int timeout, unsigned int length);
-  int bulk_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data, uint16_t rx_len, unsigned int timeout);
-  int spi_transfer(uint8_t endpoint, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data, uint16_t max_rx_len, unsigned int timeout);
+  int spi_transfer(uint8_t endpoint, uint32_t id, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data, uint16_t max_rx_len, double deadline);
   int spi_transfer_retry(uint8_t endpoint, uint8_t *tx_data, uint16_t tx_len, uint8_t *rx_data, uint16_t max_rx_len, unsigned int timeout);
   int lltransfer(spi_ioc_transfer &t);
 

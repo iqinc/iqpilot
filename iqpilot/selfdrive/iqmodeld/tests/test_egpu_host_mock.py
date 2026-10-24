@@ -23,6 +23,9 @@ assert type(dev.iface).__name__ == "MOCKUSBIface", type(dev.iface).__name__
 run = TinyJit(lambda x: (x * 2 + 1).sum(axis=1).realize())
 for i in range(3):
   run(Tensor.ones(64, 64, device="AMD") * i)
+import numpy as np
+w = np.random.default_rng(0).integers(0, 256, (3 << 20) + 5, dtype=np.uint8)
+assert (Tensor(w, device="AMD").realize().numpy() == w).all()
 print("MOCK_OK")
 """
 

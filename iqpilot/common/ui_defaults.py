@@ -3,7 +3,6 @@
 
 def apply_ui_defaults(params) -> None:
   for key, value in {
-    "DashcamEnabled": True,
     "IQAutoUnits": True,
     "IQDynamicMode": False,
     "IQExpandedStatus": True,
@@ -36,7 +35,6 @@ def apply_ui_defaults(params) -> None:
   }.items():
     if params.get(key, return_default=True) != value:
       params.put(key, value)
-  params.remove("NeuralNetworkFeedForward")
   timer = int(params.get("IQLaneChangeTimer", return_default=True))
   if timer not in (0, 1):
     params.put("IQLaneChangeTimer", int(timer > 0))

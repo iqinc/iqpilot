@@ -142,15 +142,15 @@ class TestAlerts:
       assert "a"*i == written_alert['extra']
       assert alert["text"] == written_alert['text']
 
-  def test_invalid_lkas_setting_alert_tesla_dashcam_mode(self):
+  def test_invalid_lkas_setting_alert_tesla_stock_autosteer_active(self):
     self.CP.brand = "tesla"
     alert = invalid_lkas_setting_alert(self.CP, self.CS, self.sm, metric=False, soft_disable_time=100, personality=log.LongitudinalPersonality.standard)
     no_entry = invalid_lkas_setting_no_entry_alert(self.CP, self.CS, self.sm, metric=False, soft_disable_time=100, personality=log.LongitudinalPersonality.standard)
 
-    assert alert.alert_text_1 == "Dashcam Mode"
-    assert alert.alert_text_2 == "FSD / Autosteer is active"
-    assert no_entry.alert_text_1 == "Dashcam Mode"
-    assert no_entry.alert_text_2 == "FSD / Autosteer is active"
+    assert alert.alert_text_1 == "Autosteer / FSD Active"
+    assert alert.alert_text_2 == "IQ.Pilot is standing by"
+    assert no_entry.alert_text_1 == "Autosteer / FSD Active"
+    assert no_entry.alert_text_2 == "IQ.Pilot is standing by"
 
   def test_invalid_lkas_setting_alert_non_tesla_unchanged(self):
     self.CP.brand = "mazda"

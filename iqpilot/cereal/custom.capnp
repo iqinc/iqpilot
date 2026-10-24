@@ -3,9 +3,7 @@ $Cxx.namespace("cereal");
 
 @0xb526ba661d550a59;
 
-# Copyright © IQ.Lvbs, apart of Project Teal Lvbs, All Rights Reserved, licensed under https://konn3kt.com/tos/
 
-# custom.capnp: a home for reserved structs used by IQ-specific extensions.
 
 struct AlwaysOnLateral {
   state @0 :AlwaysOnLateralState;
@@ -22,7 +20,6 @@ struct AlwaysOnLateral {
   }
 }
 
-# Same struct as Log.RadarState.LeadData
 struct LeadData {
   dRel @0 :Float32;
   yRel @1 :Float32;
@@ -60,7 +57,6 @@ struct IQState @0xfb0932cf1bde8c5a {
     promptRepeat @7;
     promptDistracted @8;
 
-    # unused, these are reserved for upstream events so we don't collide
     reserved9 @9;
     reserved10 @10;
     reserved11 @11;
@@ -268,7 +264,6 @@ struct IQOnroadEvent @0xf4621d3ee9233bc9 {
   struct Event {
     name @0 :EventName;
 
-    # event types
     enable @1 :Bool;
     noEntry @2 :Bool;
     warning @3 :Bool;   # alerts presented only when  enabled or soft disabling
@@ -281,10 +276,7 @@ struct IQOnroadEvent @0xf4621d3ee9233bc9 {
     overrideLongitudinal @9 :Bool;
   }
 
-  # Grouped by IQ.Pilot subsystem. Ordinals are IQ-native and are not stable
-  # across schema revisions; all consumers reference members by name.
   enum EventName {
-    # lateral / LKAS engagement core
     alcEngaged @0;
     alcDisengaged @1;
     alcEngagedSilent @2;
@@ -294,7 +286,6 @@ struct IQOnroadEvent @0xf4621d3ee9233bc9 {
     latMismatch @6;
     steeringOverrideReengageAlc @7;
 
-    # silent pause conditions (gear / door / belt / brake)
     gearNotDriveSilent @8;
     reverseSilent @9;
     doorAjarSilent @10;
@@ -302,39 +293,31 @@ struct IQOnroadEvent @0xf4621d3ee9233bc9 {
     parkBrakeSilent @12;
     brakeHoldSilent @13;
 
-    # alert-only notices
     carModeMismatchNotice @14;
     pedalHeldNotice @15;
 
-    # lane-turn desires
     modelTurnLeft @16;
     modelTurnRight @17;
 
-    # navigation maneuvers
     navTurnLeft @18;
     navTurnRight @19;
     navExitLeft @20;
     navExitRight @21;
 
-    # speed limit / speed camera
     speedLimitPreActive @22;
     speedLimitActive @23;
     speedLimitChanged @24;
     speedLimitPending @25;
     speedCameraAhead @26;
 
-    # miscellaneous
     hyundaiRadarTracksConfirmed @27;
     experimentalToggled @28;
     e2eChime @29;
 
-    # construction zone assist
     constructionZoneDetected @30;
 
-    # model management
     modelUpdating @31;
 
-    # camera hardware
     wideCamFaulty @32;
 
     lateralEdgeBlocked @33;
@@ -343,9 +326,6 @@ struct IQOnroadEvent @0xf4621d3ee9233bc9 {
 }
 
 struct IQCarParams @0xd4189b5c8aca9f78 {
-  # Ordinals are IQ-native; all consumers access by name. Live copies self-heal
-  # via CLEAR_ON_MANAGER_START on the "IQCarParams" param; the persistent cache
-  # is versioned separately (see IQCarParamsPersistentV2).
   iqSafetyFlags @0 :Int16;        # iqpilot custom safety flags (read in C++ panda_safety)
   flags @1 :UInt32;           # car-specific iqpilot quirks
   pcmCruiseSpeed @2 :Bool;
@@ -400,10 +380,6 @@ struct IQCarControl @0xdc6c97009c7ba28f {
   }
 }
 
-# IQ.Pilot device backup/restore state. Ordinals are IQ-native and were
-# renumbered/reordered from earlier revisions; persisted BackupInfo blobs are
-# not backward compatible across this change and reset on first run. Every
-# consumer accesses fields by name.
 struct IQBackupManager @0x9f371a75483cf0a3 {
   saveProgress @0 :Float32;
   loadProgress @1 :Float32;
@@ -420,8 +396,6 @@ struct IQBackupManager @0x9f371a75483cf0a3 {
     failed @3;
   }
 
-  # nested struct names diverge from any upstream schema; field names below are the
-  # cloud backup JSON contract (to_dict keys) and MUST stay stable for restore.
   struct BuildStamp {
     build @0 :UInt16;
     major @1 :UInt16;
@@ -454,7 +428,6 @@ struct IQCarState @0xb1c39318bb6bc2b3 {
   decelPressed @2 :Bool;
   alcOverrideAlert @3 :Bool;
 
-  # VW PQ stock ACC radar feedback for the IQ.Dynamics radar_manager (Blend feature)
   accRadarStaAdr @4 :UInt8;   # ACC_System.ACS_Sta_ADR (0 not-active, 1 active, 2 passive, 3 irrev_Fehler)
   accRadarFehler @5 :Bool;    # ACC_System.ACS_Fehler (stored fault -> radar dead for the drive)
   slcSetSpeedRequestId @6 :UInt32;
@@ -553,17 +526,14 @@ enum NavDirection {
 }
 
 struct IQNavState @0xaae9afb364368cd9 {
-  # Navigation state and guidance information
   active @0 :Bool;                          # Whether navigation is currently active
   destinationValid @1 :Bool;                # Whether we have a valid destination
 
-  # Current position and route info
   distanceRemaining @2 :Float32;            # Total distance remaining to destination (m)
   timeRemaining @3 :Float32;                # Estimated time remaining to destination (s)
   currentSegmentIndex @4 :UInt32;           # Index of current route segment
   totalSegments @5 :UInt32;                 # Total number of segments in route
 
-  # Next maneuver information
   nextManeuverValid @6 :Bool;               # Whether next maneuver data is valid
   nextManeuverDistance @7 :Float32;         # Distance to next maneuver (m)
   nextManeuverType @8 :ManeuverType;        # Type of next maneuver
@@ -571,37 +541,29 @@ struct IQNavState @0xaae9afb364368cd9 {
   nextManeuverDescription @10 :Text;        # Human-readable maneuver description
   nextManeuverAngle @21 :Float32;           # Turn angle in degrees (for angle-adaptive enforcement)
 
-  # Turn desire control for lateral planning
   shouldSendTurnDesire @11 :Bool;           # Whether to send turn desires to model
   turnDesireDirection @12 :IQTurnSignalDirection;   # Direction for turn desire
 
-  # Lane change desire control for highway exits/ramps (>45 mph)
   shouldSendLaneChangeDesire @22 :Bool;     # Whether to send lane change desires for high-speed exits
   laneChangeDesireDirection @23 :IQTurnSignalDirection;  # Direction for lane change desire
 
-  # Speed guidance for longitudinal planning
   targetSpeed @13 :Float32;                 # Target speed for upcoming maneuver (m/s)
   targetSpeedValid @14 :Bool;               # Whether target speed is valid
 
-  # Destination info
   destinationLatitude @15 :Float64;
   destinationLongitude @16 :Float64;
   destinationName @17 :Text;
 
-  # Lane positioning guidance for exits/turns
   shouldSendLanePositioning @18 :Bool;      # Whether to send lane positioning desires (keepLeft/keepRight)
   lanePositioningDirection @19 :IQTurnSignalDirection;  # Direction for lane positioning
 
-  # Lane tracking debug info (model vs GPS comparison for testing)
   laneDebugInfo @20 :LaneDebugInfo;
 
-  # Navigation-specific UI event fields (separate from model/desire system)
   navTurnDesireDirection @24 :NavDirection;           # For "Navigation: Turning Left/Right" UI alerts
   navLaneChangeDesireDirection @25 :NavDirection;     # For "Navigation: Initiating Lane Change" UI alerts
   navLanePositioningDirection @26 :NavDirection;      # For future lane positioning UI alerts
   navSpeedTargetActive @27 :Bool;                     # For "Navigation: Reducing Speed" UI alert
 
-  # Second next maneuver information (for "Then" section in navigation banner UI)
   secondNextManeuverValid @28 :Bool;                  # Whether second next maneuver data is valid
   secondNextManeuverType @29 :ManeuverType;           # Type of second next maneuver
   secondNextManeuverDirection @30 :NavDirection;      # Direction for second next maneuver
@@ -831,7 +793,6 @@ struct IQVehicleTracks @0xb877ef4b20a4ae22 {
   wide @5 :Bool;
 
   struct Track {
-    # box corners normalized [0,1] in the road-camera frame
     x1 @0 :Float32;
     y1 @1 :Float32;
     x2 @2 :Float32;
@@ -890,7 +851,6 @@ struct CustomReserved15 @0xdb8042111e62cc87 {
 struct CustomReserved16 @0xf59900ccf47b651a {
 }
 
-# pfeiferj/mapd v2 output schema (struct ids must match the mapd binary exactly).
 struct MapdDownloadLocationDetails @0xff889853e7b0987f {
   location @0 :Text;
   totalFiles @1 :UInt32;

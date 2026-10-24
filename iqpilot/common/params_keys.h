@@ -135,6 +135,8 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"RecordAudio", {PERSISTENT, BOOL}},
     {"RecordAudioFeedback", {PERSISTENT, BOOL, "0"}},
     {"DashcamEnabled", {PERSISTENT, BOOL, "1"}},
+    {"DashcamMode", {PERSISTENT, BOOL, "0"}},
+    {"TeslaStockAutosteerActive", {CLEAR_ON_MANAGER_START | CLEAR_ON_IGNITION_ON, BOOL, "0"}},
     {"RecordFront", {PERSISTENT, BOOL}},
     {"RecordFrontLock", {PERSISTENT, BOOL}},  // for the internal fleet
     {"SecOCKey", {PERSISTENT | DONT_LOG, STRING}},
@@ -153,6 +155,7 @@ inline static std::unordered_map<std::string, ParamKeyAttributes> keys = {
     {"UpdaterCurrentDescription", {CLEAR_ON_MANAGER_START, STRING}},
     {"UpdaterCurrentReleaseNotes", {CLEAR_ON_MANAGER_START, BYTES}},
     {"UpdaterFetchAvailable", {CLEAR_ON_MANAGER_START, BOOL}},
+    {"UpdaterManualRequest", {CLEAR_ON_MANAGER_START, STRING}},
     {"UpdaterNewDescription", {CLEAR_ON_MANAGER_START, STRING}},
     {"UpdaterNewReleaseNotes", {CLEAR_ON_MANAGER_START, BYTES}},
     {"UpdaterState", {CLEAR_ON_MANAGER_START, STRING}},

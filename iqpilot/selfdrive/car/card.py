@@ -150,7 +150,9 @@ class Car:
     # IQ.Dynamic control mode
     self.iq_dynamic_mode = self.params.get_bool("IQDynamicMode")
 
-    openpilot_enabled_toggle = self.params.get_bool("OpenpilotEnabledToggle")
+    self.stock_autosteer_standby = self.CP.brand == "tesla" and self.params.get_bool("TeslaStockAutosteerActive")
+    openpilot_enabled_toggle = (self.params.get_bool("OpenpilotEnabledToggle") and not self.params.get_bool("DashcamMode") and
+                                not self.stock_autosteer_standby)
     run_optional_pre_init(self.CI, self.CP, self.CP_IQ, self.can_callbacks)
     controller_available = self.CI.CC is not None and openpilot_enabled_toggle and not self.CP.dashcamOnly
     self.CP.passive = not controller_available or self.CP.dashcamOnly
@@ -462,11 +464,20 @@ class Car:
         min_interval_s=0.25,
       )
 
+  def _yield_to_stock_autosteer(self, CS: car.CarState) -> None:
+    if self.CP.brand != "tesla" or self.CP.passive or self.stock_autosteer_standby:
+      return
+    if CS.invalidLkasSetting and not self.sm['carControl'].enabled:
+      self.stock_autosteer_standby = True
+      self.params.put_bool("TeslaStockAutosteerActive", True)
+      self.params.put_bool("OnroadCycleRequested", True)
+
   def step(self):
     started_ns = time.monotonic_ns()
     checkpoint_ns = started_ns
 
     CS, CS_IQ, RD = self.state_update()
+    self._yield_to_stock_autosteer(CS)
     state_update_us = (time.monotonic_ns() - checkpoint_ns) // 1000
     checkpoint_ns = time.monotonic_ns()
 

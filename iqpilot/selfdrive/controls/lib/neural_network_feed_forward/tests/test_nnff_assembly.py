@@ -78,10 +78,7 @@ class TestControllerWiring:
   def test_mock_model_reports_absent(self):
     nnff = _make_controller("MOCK.json")
     assert nnff.has_nn_model is False
-    if "MOCK.json" in _NAMES:
-      assert nnff.model.input_size >= 2
-    else:
-      assert nnff.model is None
+    assert nnff.model is None
 
   def test_update_returns_finite_torque(self):
     nnff = _make_controller(_REAL_MODEL)
@@ -101,3 +98,11 @@ class TestControllerWiring:
     nnff = _make_controller(_REAL_MODEL)
     nnff.model_valid = False
     assert nnff._nnff_enabled is False
+
+  def test_invalid_model_falls_back(self, tmp_path):
+    bad_model = tmp_path / "malformed.json"
+    bad_model.write_text("{}")
+    nnff = _make_controller(str(bad_model))
+    assert not nnff.has_nn_model
+    assert nnff.model is None
+    assert not nnff._nnff_enabled

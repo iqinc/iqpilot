@@ -34,6 +34,7 @@ def _model(rng):
   m = log.ModelDataV2.new_message()
   m.acceleration.y = (slope * np.arange(n) * 0.1).tolist()
   m.orientation.x = [0.0] * n
+  m.orientation.y = [0.0] * n
   return m
 
 

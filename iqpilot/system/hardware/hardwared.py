@@ -298,7 +298,7 @@ def hw_state_thread(end_event, hw_queue):
           if (modem_missing_count % 4) == 0:
             modem_restart_count += 1
             cloudlog.event("restarting ModemManager")
-            os.system("sudo systemctl restart --no-block ModemManager")
+            subprocess.run(["sudo", "-n", "systemctl", "restart", "--no-block", "ModemManager"], timeout=5, capture_output=True, check=False)
 
         tx, rx = HARDWARE.get_modem_data_usage()
 

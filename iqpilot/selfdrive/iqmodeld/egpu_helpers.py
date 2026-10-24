@@ -26,6 +26,7 @@ COMMA_LFS_BATCH_URL = "https://gitlab.com/commaai/openpilot-lfs.git/info/lfs/obj
 
 DOWNLOAD_CHUNK = 4 * 1024 * 1024
 USB_SIGNAL_POLL_S = int(os.getenv("IQ_EGPU_SIGNAL_POLL_US", "500")) / 1e6
+EGPU_POWER_LIMIT_W = 100
 # tinygrad's USB+AMD path holds an exclusive flock on <tmp>/am_usb:<bus>.lock for the life of the opener
 DOCK_LOCK_GLOB = "am_usb*.lock"
 DOCK_LOCK_OURS = ("egpu_prefetch", "compile_egpu_model")
@@ -79,6 +80,11 @@ def free_dock_lock(timeout_s: float = DOCK_LOCK_FREE_TIMEOUT_S, proc_root: str =
     if clock() >= deadline:
       return holders
     sleep(0.25)
+
+
+def apply_dock_power_limit() -> None:
+  # tinygrad caches getenv, so this must run before the first AMD device open in the process
+  os.environ.setdefault("AM_POWER_LIMIT", str(EGPU_POWER_LIMIT_W))
 
 
 def die_with_parent() -> None:
@@ -139,7 +145,18 @@ def egpu_oob_pkl_path(meta: dict) -> str:
 
 def egpu_model_oob_pkl_path(meta: dict) -> str:
   from iqpilot.system.hardware.hw import Paths
-  return os.path.join(Paths.model_root(), f"egpu_{meta['key']}_{meta['sha256'][:8]}_amd_model_oob.pkl")
+  return os.path.join(Paths.model_root(), f"egpu_{meta['key']}_{meta['sha256'][:8]}_amd_model_oob2.pkl")
+
+
+def drop_frozen_model_oob(meta: dict) -> None:
+  from iqpilot.system.hardware.hw import Paths
+  # warp-on-dock bundles saved under the old name were built before the prune fix and replay capture-time feeds
+  stale = os.path.join(Paths.model_root(), f"egpu_{meta['key']}_{meta['sha256'][:8]}_amd_model_oob.pkl")
+  try:
+    os.remove(stale)
+    cloudlog.warning(f"removed frozen-feed warp-on-dock artifact {stale}")
+  except OSError:
+    pass
 
 
 def onnx_cache_path(meta: dict) -> str:
@@ -286,6 +303,28 @@ def patch_tinygrad_fetch_fw() -> None:
 
   fetch_fw._iq_patched = True
   helpers.fetch_fw = fetch_fw
+
+
+def patch_tinygrad_prune_views() -> None:
+  from tinygrad.engine import jit
+  from tinygrad.uop.ops import Ops
+  if getattr(jit.prune_linear, "_iq_patched", False):
+    return
+
+  # upstream prune only sees bare BUFFER args, so a kernel reading an input through a SLICE view ran once at capture and froze that input
+  def prune_linear(linear, needed):
+    kept, onetime = [], []
+    for si in linear.src:
+      si_bufs = {b for src in si.src[1:] for b in src.toposort() if b.op is Ops.BUFFER}
+      if not si_bufs.isdisjoint(needed):
+        kept.append(si)
+        needed |= si_bufs
+      else:
+        onetime.append(si)
+    return linear.replace(src=tuple(kept)), linear.replace(src=tuple(onetime))
+
+  prune_linear._iq_patched = True
+  jit.prune_linear = prune_linear
 
 
 def patch_usb_signal_wait() -> None:

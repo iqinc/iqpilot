@@ -62,11 +62,23 @@ def test_fingerprint_plus_eps_fw_prefers_specific_file(model_dir):
   assert exact is False
 
 
-def test_fuzzy_match_flags_non_exact(model_dir):
-  # close but not identical to a shipped fingerprint
+def test_unmapped_fingerprint_does_not_select_similar_vehicle(model_dir):
   path, name, exact = locator.get_nn_model_path(make_cp("TOYOTA_RAV4_TSS2_XYZ"))
-  assert name == "TOYOTA_RAV4_TSS2"
+  assert name == "MOCK"
+  assert path == locator.MOCK_MODEL_PATH
   assert exact is False
+
+
+@pytest.mark.parametrize("fingerprint", ["UNKNOWN", "HONDA", "HONDA_CIVIC_OTHER", "TOYOTA_RAV4"])
+def test_unmatched_vehicle_uses_mock(model_dir, fingerprint):
+  path, name, exact = locator.get_nn_model_path(make_cp(fingerprint))
+  assert (path, name, exact) == (locator.MOCK_MODEL_PATH, "MOCK", False)
+
+
+def test_missing_substitute_does_not_select_unrelated_vehicle(model_dir):
+  (model_dir / "TOYOTA_RAV4_TSS2.json").unlink()
+  path, name, exact = locator.get_nn_model_path(make_cp("CHEVROLET_XX"))
+  assert (path, name, exact) == (locator.MOCK_MODEL_PATH, "MOCK", False)
 
 
 def test_substitute_fallback(model_dir):

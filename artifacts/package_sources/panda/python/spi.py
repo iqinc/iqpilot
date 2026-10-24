@@ -16,7 +16,7 @@ from .utils import logger
 SYNC = 0x5A
 HACK = 0x79
 DACK = 0x85
-NACK = 0x1F
+LEGACY_NACK = 0x1F
 CHECKSUM_START = 0xAB
 
 MIN_ACK_TIMEOUT_MS = 100
@@ -24,6 +24,22 @@ MAX_XFER_RETRY_COUNT = 5
 
 SPI_BUF_SIZE = 4096  # from panda/board/drivers/spi.h
 XFER_SIZE = SPI_BUF_SIZE - 0x40 # give some room for SPI protocol overhead
+
+SLAVE_READY = 0x3C
+ACK = 0xC3
+NACK = 0x5A
+INFO_ENDPOINT = 0xF0
+
+REQ_HEADER = struct.Struct("<BIHH")
+RESP_HEADER = struct.Struct("<BIH")
+CRC = struct.Struct("<I")
+RESP_OVERHEAD = RESP_HEADER.size + CRC.size
+POLL = 0xFF
+
+MIN_TIMEOUT_MS = 100
+SILENT_TIMEOUT = 1.0
+FIRST_READ_SIZE = 1024 - RESP_OVERHEAD
+
 
 DEV_PATH = "/dev/spidev0.0"
 
@@ -165,6 +181,121 @@ class PandaSpiHandle(BaseHandle):
   A class that mimics a libusb1 handle for panda SPI communications.
   """
 
+
+  def __init__(self) -> None:
+    self.dev = SpiDevice()
+
+  def _transfer_spidev(self, spi, endpoint: int, req_id: int, data, deadline: float, max_rx_len: int, expect_disconnect: bool) -> bytes | None:
+
+    rx_len = max_rx_len + RESP_OVERHEAD
+    packet = REQ_HEADER.pack(endpoint, req_id, len(data), rx_len) + bytes(data)
+    packet += CRC.pack(binascii.crc32(packet))
+    poll = bytes([POLL, ]) * rx_len
+
+
+    alive = time.monotonic()
+    while True:
+
+      if spi.xfer2(packet)[0] == SLAVE_READY:
+        alive = time.monotonic()
+        if expect_disconnect:
+          return b""
+
+
+        while True:
+          dat = spi.xfer(poll)
+          if dat[0] == SLAVE_READY:
+            alive = time.monotonic()
+            break
+
+
+          status, resp_id, response_len = RESP_HEADER.unpack_from(dat)
+          end = RESP_HEADER.size + response_len
+          if status in (ACK, NACK) and response_len <= max_rx_len and CRC.unpack_from(dat, end)[0] == binascii.crc32(dat[:end]):
+
+            if resp_id == req_id:
+              if status == NACK:
+                raise PandaSpiNackResponse
+              return dat[RESP_HEADER.size:end]
+            alive = time.monotonic()
+            break
+
+          if time.monotonic() > min(deadline, alive + SILENT_TIMEOUT):
+            break
+
+      if time.monotonic() > deadline:
+        raise PandaSpiMissingAck
+      if time.monotonic() > alive + SILENT_TIMEOUT:
+        return None
+
+  def _transfer(self, endpoint: int, data, timeout: int, max_rx_len: int = 0, expect_disconnect: bool = False) -> bytes:
+    logger.debug("transfer: endpoint=%d, max_rx_len=%d", endpoint, max_rx_len)
+
+
+    deadline = time.monotonic() + (max(MIN_TIMEOUT_MS, timeout) * 1e-3 if timeout != 0 else math.inf)
+    nack = None
+    nack_count = 0
+
+
+    req_id = int.from_bytes(os.urandom(4), "little")
+    while True:
+      try:
+        with self.dev.acquire() as spi:
+          dat = self._transfer_spidev(spi, endpoint, req_id, data, deadline, max_rx_len, expect_disconnect)
+        if dat is not None:
+          return dat
+
+        logger.warning("SPI: panda isn't responding")
+        time.sleep(0.01)
+      except PandaSpiNackResponse as e:
+
+        if time.monotonic() > deadline:
+          raise
+
+        req_id = int.from_bytes(os.urandom(4), "little")
+        nack = e
+        nack_count += 1
+        if nack_count > 3:
+          time.sleep(min(max(nack_count * 10, 200), 2000) * 1e-6)
+      except PandaSpiMissingAck:
+
+        if nack is not None:
+          raise nack from None
+        raise
+
+  def get_info(self) -> bytes:
+
+    return self._transfer(INFO_ENDPOINT, b"", MIN_TIMEOUT_MS, max_rx_len=14)
+
+
+  def close(self):
+    self.dev.close()
+
+  def controlWrite(self, request_type: int, request: int, value: int, index: int, data, timeout: int = TIMEOUT, expect_disconnect: bool = False):
+    return self._transfer(0, struct.pack("<BHHH", request, value, index, 0), timeout, expect_disconnect=expect_disconnect)
+
+  def controlRead(self, request_type: int, request: int, value: int, index: int, length: int, timeout: int = TIMEOUT):
+    return self._transfer(0, struct.pack("<BHHH", request, value, index, length), timeout, max_rx_len=length)
+
+  def bulkWrite(self, endpoint: int, data: bytes, timeout: int = TIMEOUT) -> int:
+    mv = memoryview(data)
+    for x in range(0, len(data), XFER_SIZE):
+      self._transfer(endpoint, mv[x:x+XFER_SIZE], timeout)
+    return len(data)
+
+  def bulkRead(self, endpoint: int, length: int, timeout: int = TIMEOUT) -> bytes:
+    ret = b""
+    while len(ret) < length:
+      to_read = min(XFER_SIZE if len(ret) else FIRST_READ_SIZE, length - len(ret))
+      d = self._transfer(endpoint, b"", timeout, max_rx_len=to_read)
+      ret += d
+      if len(d) < to_read:
+        break
+    return ret
+
+
+class LegacyPandaSpiHandle(PandaSpiHandle):
+
   PROTOCOL_VERSION = 2
   HEADER = struct.Struct("<BBHH")
 
@@ -187,7 +318,7 @@ class PandaSpiHandle(BaseHandle):
       dat = spi.xfer2([tx, ] * length)
       if dat[0] == ack_val:
         return bytes(dat)
-      elif dat[0] == NACK:
+      elif dat[0] == LEGACY_NACK:
         raise PandaSpiNackResponse
 
     raise PandaSpiMissingAck
@@ -257,7 +388,7 @@ class PandaSpiHandle(BaseHandle):
           while (nack_cnt <= 3) and (attempts > 0):
             attempts -= 1
             try:
-              self._wait_for_ack(spi, NACK, MIN_ACK_TIMEOUT_MS, 0x11, length=XFER_SIZE//2)
+              self._wait_for_ack(spi, LEGACY_NACK, MIN_ACK_TIMEOUT_MS, 0x11, length=XFER_SIZE//2)
               nack_cnt += 1
             except PandaSpiException:
               nack_cnt = 0

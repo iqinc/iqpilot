@@ -1,9 +1,9 @@
-import iqpilot.common.api.comma_connect
+import iqpilot.common.api.konn3kt
 
 
 class Api:
   def __init__(self, dongle_id):
-    self.service = iqpilot.common.api.comma_connect.CommaConnectApi(dongle_id)
+    self.service = iqpilot.common.api.konn3kt.Konn3ktApi(dongle_id)
 
   def request(self, method, endpoint, **params):
     return self.service.request(method, endpoint, **params)
@@ -19,8 +19,8 @@ class Api:
 
 
 def api_get(endpoint, method='GET', timeout=None, access_token=None, session=None, **params):
-  return iqpilot.common.api.comma_connect.CommaConnectApi(None).api_get(endpoint, method, timeout, access_token, session, **params)
+  return iqpilot.common.api.konn3kt.Konn3ktApi(None).api_get(endpoint, method, timeout, access_token, session, **params)
 
 
 def get_key_pair() -> tuple[str, str, str] | tuple[None, None, None]:
-  return iqpilot.common.api.comma_connect.CommaConnectApi(None).get_key_pair()
+  return iqpilot.common.api.konn3kt.Konn3ktApi(None).get_key_pair()

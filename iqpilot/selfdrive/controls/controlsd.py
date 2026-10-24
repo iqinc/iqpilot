@@ -184,7 +184,10 @@ class Controls(IQControlsLayer):
     self.curvature = -self.VM.calc_curvature(steer_angle_without_offset, CS.vEgo, lp.roll)
     self.roll_compensation = -self.VM.roll_compensation(lp.roll, CS.vEgo)
 
-    lac_ext = getattr(self.LaC, "extension", None)
+    nnff_assist = getattr(self.LaC, "nnff_assist", None)
+    if nnff_assist is not None:
+      nnff_assist.update_model_v2(self.sm['modelV2'] if self.sm.all_checks(['modelV2']) else None)
+
     if self.CP.lateralTuning.which() == 'torque' and hasattr(self.LaC, "update_live_torque_params"):
       torque_params = self.sm['lateralTorqueParameters']
       if self.sm.all_checks(['lateralTorqueParameters']) and torque_params.useParams:
@@ -192,15 +195,6 @@ class Controls(IQControlsLayer):
           self.LaC.set_live_torque_valid(torque_params.valid)
         self.LaC.update_live_torque_params(torque_params.latAccelFactorFiltered, torque_params.latAccelOffsetFiltered,
                                            torque_params.frictionCoefficientFiltered)
-
-        if lac_ext is not None:
-          lac_ext.update_limits()
-
-      if lac_ext is not None:
-        lac_ext.update_model_v2(self.sm['modelV2'])
-
-      if lac_ext is not None:
-        lac_ext.update_lateral_lag(self.CP.steerActuatorDelay)
 
     long_plan = self.sm['longitudinalPlan']
     model_v2 = self.sm['modelV2']
@@ -271,6 +265,8 @@ class Controls(IQControlsLayer):
     lat_accel_override = bool(CS.gasPressed) or bool(self.sm['iqState'].aol.active)
     self.desired_curvature, curvature_limited = clip_curvature(CS.vEgo, self.desired_curvature, new_desired_curvature, lp.roll, lat_accel_override)
     lat_delay = lateral_action_delay(self.params, self.CP, self.sm["lateralDelay"].lateralDelay) + LAT_SMOOTH_SECONDS
+    if nnff_assist is not None:
+      nnff_assist.update_lateral_lag(lat_delay)
 
     actuators.curvature = self.desired_curvature
     steer, steeringAngleDeg, lac_log = self.LaC.update(CC.latActive, CS, self.VM, lp,
@@ -432,8 +428,8 @@ class Controls(IQControlsLayer):
       severity = "warning"
 
     detail = (
-      f"update_us={update_us} state_control_us={state_control_us} publish_us={publish_us} "
-      f"tail_work_us={tail_work_us} rk_remaining_us={rk_remaining_us}"
+        f"update_us={update_us} state_control_us={state_control_us} publish_us={publish_us} " +
+        f"tail_work_us={tail_work_us} rk_remaining_us={rk_remaining_us}"
     )
     self._perf.emit(
       "controlsd_slow_loop",

@@ -23,6 +23,9 @@ def tinygrad_tree() -> str:
 def activate(arch: str = DEFAULT_ARCH, execute: bool = False) -> None:
   assert "tinygrad" not in sys.modules, "egpu_host_mock.activate must run before tinygrad is imported"
   os.environ["DEV"] = f"{MOCK_DEV}:{arch}"
+  if not execute:
+    # the wait passthrough below lets a pipelined copyin's SDMA copy run before its USB data lands, so weights read back wrong
+    os.environ["AMD_USB_PIPELINED_COPYIN"] = "0"
   tree = tinygrad_tree()
   if tree not in sys.path:
     sys.path.insert(0, tree)
