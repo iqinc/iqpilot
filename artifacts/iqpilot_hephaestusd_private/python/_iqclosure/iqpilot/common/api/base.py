@@ -95,7 +95,7 @@ class BaseApi:
     if payload_extra is not None:
       payload.update(payload_extra)
     if self.private_key is _CUSTODIAN_KEY:
-      serializable = {k: v.isoformat() if isinstance(v, datetime) else v for k, v in payload.items()}
+      serializable = {k: int(v.timestamp()) if isinstance(v, datetime) else v for k, v in payload.items()}
       return _custodian_sign_jwt(self.dongle_id, serializable, self.jwt_algorithm)
     key = load_signing_key(self.private_key) if self.private_key else self.private_key
     token = jwt.encode(payload, key, algorithm=self.jwt_algorithm)
